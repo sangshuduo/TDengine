@@ -104,6 +104,10 @@ script:
         ;;
     esac
 
+script:
+  - cmake .. 
+  - cmake --build .
+
 #
 # Build Matrix
 #
