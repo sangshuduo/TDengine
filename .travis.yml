@@ -29,12 +29,12 @@ addons:
     # GitHub project metadata
     # ** specific to your project **
     project:
-      name: TDengine
+      name: sangshuduo/TDengine
       version: 2.x
       description: TDengine
 
     # Where email notification of build analysis results will be sent
-    notification_email: sdsang@taosdata.com
+    notification_email: sangshuduo@gmail.com
 
     # Commands to prepare for build_command
     # ** likely specific to your build **
