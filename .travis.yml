@@ -6,14 +6,6 @@ git:
 
 language: c
 
-compiler:
-  - clang
-  - gcc
-
-os:
-  - linux
-  - osx
-
 addons:
   coverity_scan:
 
@@ -52,15 +44,28 @@ script:
 # Build Matrix
 #
 matrix:
-  - os: linux
-    addons:
-      apt:
-        packages:
-          - build-essential
-          - cmake
+  include:
+    - dist: trusty
+      compiler: gcc
+      os: linux
+      addons:
+        apt:
+          packages:
+            - build-essential
+            - cmake
 
-  - os: osx
-    addons:
-      homebrew:
-        - cmake
+    - dist: bionic
+      compiler: gcc
+      os: linux
+      addons:
+        apt:
+          packages:
+            - build-essential
+            - cmake
+
+    - os: osx
+      compiler: clang
+      addons:
+        homebrew:
+          - cmake
 
