@@ -183,7 +183,7 @@ extern char gitinfo[];
 extern char gitinfoOfInternal[];
 extern char buildinfo[];
 
-extern char tsTimezone[64];
+extern char tsTimezone[128];
 extern char tsLocale[64];
 extern char tsCharset[64];  // default encode string
 

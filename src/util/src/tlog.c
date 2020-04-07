@@ -136,7 +136,7 @@ void taosUnLockFile(int fd) {
 }
 
 void *taosThreadToOpenNewFile(void *param) {
-  char name[LOG_FILE_NAME_LEN];
+  char name[LOG_FILE_NAME_LEN * 2];
 
   taosLogFlag ^= 1;
   taosLogLines = 0;
@@ -180,7 +180,7 @@ int taosOpenNewLogFile() {
 }
 
 void taosResetLogFile() {
-  char lastName[LOG_FILE_NAME_LEN];
+  char lastName[LOG_FILE_NAME_LEN * 2];
   sprintf(lastName, "%s.%d", taosLogName, taosLogFlag);
 
   // force create a new log file
@@ -245,7 +245,7 @@ int taosOpenLogFileWithMaxLines(char *fn, int maxLines, int maxFileNum) {
   maxFileNum = 1;
 #endif
 
-  char        name[LOG_FILE_NAME_LEN] = "\0";
+  char        name[LOG_FILE_NAME_LEN * 2] = "\0";
   struct stat logstat0, logstat1;
   int         size;
 

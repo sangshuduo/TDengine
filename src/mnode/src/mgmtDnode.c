@@ -152,7 +152,6 @@ void mgmtProcessCfgDnodeMsg(SQueuedMsg *pMsg) {
   if (pCmCfgDnode->ip[0] == 0) {
     strcpy(pCmCfgDnode->ip, tsPrivateIp);
   } else {
-    strcpy(pCmCfgDnode->ip, pCmCfgDnode->ip);
   }
   uint32_t dnodeIp = inet_addr(pCmCfgDnode->ip);
 
