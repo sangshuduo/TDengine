@@ -15,6 +15,9 @@
 # -*- coding: utf-8 -*-
 import sys
 import getopt
+import subprocess
+from distutils.log import warn as printf
+
 from util.log import *
 from util.dnodes import *
 from util.cases import *
@@ -29,8 +32,10 @@ if __name__ == "__main__":
     deployPath = ""
     masterIp = ""
     testCluster = False
-    opts, args = getopt.getopt(sys.argv[1:], 'f:p:m:sch', [
-                               'file=', 'path=', 'master', 'stop', 'cluster', 'help'])
+    valgrind = 0
+    stop = 0
+    opts, args = getopt.gnu_getopt(sys.argv[1:], 'f:p:m:scgh', [
+                               'file=', 'path=', 'master', 'stop', 'cluster', 'valgrind', 'help'])
     for key, value in opts:
         if key in ['-h', '--help']:
             tdLog.printNoPrefix(
@@ -41,21 +46,53 @@ if __name__ == "__main__":
             tdLog.printNoPrefix('-c Test Cluster Flag')
             tdLog.printNoPrefix('-s stop All dnodes')
             sys.exit(0)
+
         if key in ['-f', '--file']:
             fileName = value
+
         if key in ['-p', '--path']:
             deployPath = value
+
         if key in ['-m', '--master']:
             masterIp = value
+
         if key in ['-c', '--cluster']:
             testCluster = True
+
+        if key in ['-g', '--valgrind']:
+            valgrind = 1
+
         if key in ['-s', '--stop']:
-            cmd = "ps -ef|grep -w taosd | grep 'taosd' | grep -v grep | awk '{print $2}' && pkill -9 taosd"
-            os.system(cmd)
-            tdLog.exit('stop All dnodes')
+            stop = 1
+
+    if (stop != 0):
+        if (valgrind == 0):
+            to_be_killed = "taosd"
+        else:
+            to_be_killed = "valgrind"
+
+        kill_cmd = "ps -ef|grep -w %s| grep -v grep | awk '{print $2}' | xargs kill -HUP " % to_be_killed
+        os.system(kill_cmd)
+        time.sleep(1)
+
+        ps_cmd = "ps -ef|grep -w %s| grep -v grep | awk '{print $2}'" % to_be_killed
+        process_id = subprocess.check_output(ps_cmd, shell=True)
+
+        while( process_id ):
+            os.system(kill_cmd)
+            time.sleep(1)
+            process_id = subprocess.check_output(ps_cmd, shell=True)
+
+        if (valgrind == 1):
+            cmd = "tail -1 valgrind-out.txt"
+            tdLog.notice("%s" % subprocess.check_output(cmd, shell=True))
+
+        tdLog.exit('stop All dnodes')
 
     if masterIp == "":
         tdDnodes.init(deployPath)
+        tdDnodes.setValgrind(valgrind)
+
         if testCluster:
             tdLog.notice("Procedures for testing cluster")
             if fileName == "all":
