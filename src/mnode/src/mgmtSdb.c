@@ -18,11 +18,13 @@
 #include "taoserror.h"
 #include "tlog.h"
 #include "trpc.h"
+#include "treplica.h"
 #include "tqueue.h"
 #include "twal.h"
 #include "hashint.h"
 #include "hashstr.h"
-#include "mpeer.h"
+#include "mgmtLog.h"
+#include "mgmtMnode.h"
 #include "mgmtSdb.h"
 
 typedef struct _SSdbTable {
@@ -67,9 +69,15 @@ static void *(*sdbGetIndexFp[])(void *handle, void *key) = {sdbGetStrHashData, s
 static void  (*sdbCleanUpIndexFp[])(void *handle) = {sdbCloseStrHash, sdbCloseIntHash, sdbCloseIntHash};
 static void *(*sdbFetchRowFp[])(void *handle, void *ptr, void **ppRow) = {sdbFetchStrHashData, sdbFetchIntHashData, sdbFetchIntHashData};
 
-uint64_t sdbGetVersion() { return tsSdbObj->version; }
 int32_t  sdbGetId(void *handle) { return ((SSdbTable *)handle)->autoIndex; }
 int64_t  sdbGetNumOfRows(void *handle) { return ((SSdbTable *)handle)->numOfRows; }
+
+uint64_t sdbGetVersion() {
+  if (tsSdbObj)
+    return tsSdbObj->version;
+  else
+    return 0;
+}
 
 static char *sdbGetActionStr(int32_t action) {
   switch (action) {
@@ -131,7 +139,7 @@ int32_t sdbInit() {
 
   sdbTrace("sdb is initialized, version:%d totalRows:%d numOfTables:%d", tsSdbObj->version, totalRows, numOfTables);
   
-  mpeerUpdateSync();
+  replicaNotify();
 
   return TSDB_CODE_SUCCESS;
 }
@@ -143,10 +151,6 @@ void sdbCleanUp() {
     free(tsSdbObj);
     tsSdbObj = NULL;
   }
-}
-
-SSdbObject *sdbGetObj() {
-  return tsSdbObj;
 }
 
 void sdbIncRef(void *handle, void *pRow) {
@@ -264,7 +268,7 @@ static int32_t sdbProcessWriteFromApp(SSdbTable *pTable, SWalHead *pHead, int32_
   tsSdbObj->version++;
   pHead->version = tsSdbObj->version;
 
-  code = mpeerForwardReqToPeer(pHead);
+  code = replicaForwardReqToPeer(pHead);
   if (code != TSDB_CODE_SUCCESS) {
     pthread_mutex_unlock(&tsSdbObj->mutex);
     sdbError("table:%s, failed to forward %s record:%s from file, version:%" PRId64 ", reason:%s", pTable->tableName,
@@ -335,25 +339,19 @@ static int32_t sdbProcessWriteFromWal(SSdbTable *pTable, SWalHead *pHead, int32_
     SRowMeta *rowMeta = sdbGetRowMeta(pTable, pHead->cont);
     assert(rowMeta != NULL && rowMeta->row != NULL);
 
-    SSdbOperDesc oper1 = {
-        .table = pTable,
-        .pObj = rowMeta->row,
-    };
-    sdbDeleteLocal(pTable, &oper1);
-
-    SSdbOperDesc oper2 = {
+    SSdbOperDesc oper = {
         .rowSize = pHead->len,
         .rowData = pHead->cont,
         .table = pTable,
     };
-    code = (*pTable->decodeFp)(&oper2);
+    code = (*pTable->decodeFp)(&oper);
     if (code < 0) {
       sdbTrace("table:%s, failed to decode %s record:%s from file, version:%" PRId64, pTable->tableName,
                sdbGetActionStr(action), sdbGetkeyStr(pTable, pHead->cont), pHead->version);
       pthread_mutex_unlock(&tsSdbObj->mutex);
       return code;
     }
-    code = sdbInsertLocal(pTable, &oper2);
+    code = sdbUpdateLocal(pTable, &oper);
   }
 
   pthread_mutex_unlock(&tsSdbObj->mutex);
