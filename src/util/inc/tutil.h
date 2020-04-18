@@ -139,6 +139,7 @@ int32_t taosFileRename(char *fullPath, char *suffix, char delimiter, char **dstP
 void getTmpfilePath(const char *fileNamePattern, char *dstPath);
 
 int32_t taosInitTimer(void (*callback)(int), int32_t ms);
+void taosUninitTimer();
 
 bool taosMbsToUcs4(char *mbs, int32_t mbs_len, char *ucs4, int32_t ucs4_max_len);
 
@@ -169,14 +170,6 @@ uint32_t ip2uint(const char *const ip_addr);
 #define TAOS_ALLOC_MODE_DETECT_LEAK 2
 void taosSetAllocMode(int mode, const char* path, bool autoDump);
 void taosDumpMemoryLeak();
-
-#define TD_EQ 0x1
-#define TD_GT 0x2
-#define TD_LT 0x4
-#define TD_GE (TD_EQ | TD_GT)
-#define TD_LE (TD_EQ | TD_LT)
-void *taosbsearch(const void *key, const void *base, size_t nmemb, size_t size,
-                  int (*compar)(const void *, const void *), int flags);
 
 #ifdef TAOS_MEM_CHECK
 

@@ -12,6 +12,7 @@ matrix:
       - depth: 1
 
     compiler: gcc
+    env: DESC="linux/gcc build and test"
 
     addons:
       apt:
@@ -23,6 +24,10 @@ matrix:
           - python-setuptools
           - python3-pip
           - python3-setuptools
+
+    before_install:
+      - sudo apt update -y -qq
+      - sudo apt install -y net-tools python-pip python-setuptools python3-pip python3-setuptools
 
     before_script:
       - cd ${TRAVIS_BUILD_DIR}
@@ -39,14 +44,14 @@ matrix:
           linux)
           cd ${TRAVIS_BUILD_DIR}/debug
           sudo make install || exit $?
-  
-          pip install --user ../../src/connector/python/linux/python2/ 
-          pip3 install --user ../../src/connector/python/linux/python3/ 
-  
-          cd tests
+
+          pip install --user ${TRAVIS_BUILD_DIR}/src/connector/python/linux/python2/
+          pip3 install --user ${TRAVIS_BUILD_DIR}/src/connector/python/linux/python3/
+
+          cd ${TRAVIS_BUILD_DIR}/tests
           bash ./test-all.sh
 
-          if [ "$?" -ne "0"]; then
+          if [ "$?" -ne "0" ]; then
             exit $?
           fi
 
@@ -65,7 +70,6 @@ matrix:
 
     addons:
       coverity_scan:
-    
         # GitHub project metadata
         # ** specific to your project **
         project:
@@ -82,7 +86,7 @@ matrix:
     
         # The command that will be added as an argument to "cov-build" to compile your project for analysis,
         # ** likely specific to your build **
-        build_command: cmake --build .
+        build_command: make
     
         # Pattern to match selecting branches that will run analysis. We recommend leaving this set to 'coverity_scan'.
         # Take care in resource usage, and consider the build frequency allowances per
@@ -109,6 +113,10 @@ matrix:
           - python3-setuptools
           - lcov
 
+    before_install:
+      - sudo apt update -y -qq
+      - sudo apt install -y net-tools python-pip python-setuptools python3-pip python3-setuptools lcov
+
     before_script:
       - cd ${TRAVIS_BUILD_DIR}
       - mkdir debug
@@ -118,9 +126,60 @@ matrix:
       - cmake -DCOVER=true ..
       - make
 
+    after_success:
+      - |-
+        case $TRAVIS_OS_NAME in
+          linux)
+          cd ${TRAVIS_BUILD_DIR}/debug
+          sudo make install || exit $?
+
+          pip install --user ${TRAVIS_BUILD_DIR}/src/connector/python/linux/python2/
+          pip3 install --user ${TRAVIS_BUILD_DIR}/src/connector/python/linux/python3/
+
+          cd ${TRAVIS_BUILD_DIR}/tests
+
+          bash ./test-all.sh
+
+          if [ "$?" -ne "0" ]; then
+            exit $?
+          fi
+
+          cd ${TRAVIS_BUILD_DIR}
+          lcov -d . --capture -o coverage.info
+          lcov -l coverage.info || exit $?
+
+          gem install coveralls-lcov
+
+          # Color setting
+          RED='\033[0;31m'
+          GREEN='\033[1;32m'
+          GREEN_DARK='\033[0;32m'
+          GREEN_UNDERLINE='\033[4;32m'
+          NC='\033[0m'
+
+          coveralls-lcov coverage.info
+          if [ "$?" -eq "0" ]; then
+            echo -e "${GREEN} ## Uploaded to Coveralls.io! ## ${NC}"
+          else
+            echo -e "${RED} ## Coveralls.io not collect coverage report! ## ${NC} "
+            exit $?
+          fi
+
+          bash <(curl -s https://codecov.io/bash) -f coverage.info
+          if [ "$?" -eq "0" ]; then
+            echo -e "${GREEN} ## Uploaded to Codecov! ## ${NC} "
+          else
+            echo -e "${RED} ## Codecov did not collect coverage report! ## ${NC} "
+            exit $?
+          fi
+
+          ;;
+        esac
+
   - os: linux
     language: c
     compiler: clang
+    env: DESC="linux/clang build"
     git:
       - depth: 1
 
@@ -142,6 +201,7 @@ matrix:
         #  - os: osx
         #    language: c
         #    compiler: clang
+        #    env: DESC="mac/clang build"
         #    git:
         #      - depth: 1
         #    addons:

@@ -129,6 +129,8 @@ STscObj *taosConnectImpl(const char *ip, const char *user, const char *pass, con
 
   pSql->pTscObj = pObj;
   pSql->signature = pSql;
+  pSql->maxRetry = TSDB_REPLICA_MAX_NUM;
+  
   tsem_init(&pSql->rspSem, 0, 0);
   
   pObj->pSql = pSql;
@@ -852,10 +854,9 @@ void taos_free_result_imp(TAOS_RES *res, int keepCmd) {
     }
   } else {
     // if no free resource msg is sent to vnode, we free this object immediately.
-    bool free = tscShouldFreeAsyncSqlObj(pSql);
-    if (free) {
-      assert(pRes->numOfRows == 0 || (pCmd->command > TSDB_SQL_LOCAL));
-  
+    STscObj* pTscObj = pSql->pTscObj;
+    
+    if (pTscObj->pSql != pSql) {
       tscFreeSqlObj(pSql);
       tscTrace("%p sql result is freed by app", pSql);
     } else {

@@ -28,17 +28,19 @@ extern "C" {
 #include "taos.h"
 #include "taosdef.h"
 #include "taosmsg.h"
+#include "tarray.h"
 #include "tglobalcfg.h"
 #include "tlog.h"
 #include "trpc.h"
 #include "tsqlfunction.h"
 #include "tutil.h"
-#include "tarray.h"
 
 #define TSC_GET_RESPTR_BASE(res, _queryinfo, col) (res->data + ((_queryinfo)->fieldsInfo.pSqlExpr[col]->offset) * res->numOfRows)
 
 // forward declaration
 struct SSqlInfo;
+
+typedef SCMSTableVgroupRspMsg SVgroupsInfo;
 
 typedef struct SSqlGroupbyExpr {
   int16_t     tableIndex;
@@ -59,10 +61,8 @@ typedef struct STableMeta {
   //super table if it is created according to super table, otherwise, tableInfo is used
   union { struct STableMeta* pSTable; STableComInfo tableInfo; };
   uint8_t    tableType;
-  int8_t     numOfVpeers;
   int16_t    sversion;
-  SVnodeDesc vpeerDesc[TSDB_VNODES_SUPPORT];
-  int32_t    vgId;     // virtual group id, which current table belongs to
+  SCMVgroupInfo vgroupInfo;
   int32_t    sid;      // the index of one table in a virtual node
   uint64_t   uid;      // unique id of a table
   SSchema    schema[]; // if the table is TSDB_CHILD_TABLE, schema is acquired by super table meta info
@@ -70,14 +70,12 @@ typedef struct STableMeta {
 
 typedef struct STableMetaInfo {
   STableMeta * pTableMeta;       // table meta, cached in client side and acquried by name
-//  SSuperTableMeta *pMetricMeta;  // metricmeta
-  SArray* vgroupIdList;
-  
+  SVgroupsInfo* vgroupList;
   /*
    * 1. keep the vnode index during the multi-vnode super table projection query
    * 2. keep the vnode index for multi-vnode insertion
    */
-  int32_t vnodeIndex;
+  int32_t vgroupIndex;
   char    name[TSDB_TABLE_ID_LEN];        // (super) table name
   int16_t numOfTags;                      // total required tags in query, including groupby tags
   int16_t tagColumnIndex[TSDB_MAX_TAGS];  // clause + tag projection
@@ -210,7 +208,6 @@ typedef struct STableDataBlocks {
 } STableDataBlocks;
 
 typedef struct SDataBlockList {
-  int32_t            idx;
   uint32_t           nSize;
   uint32_t           nAlloc;
   STableDataBlocks **pData;
@@ -257,7 +254,6 @@ typedef struct {
 
   union {
     bool   existsCheck;     // check if the table exists or not
-    bool   inStream;        // denote if current sql is executed in stream or not
     bool   autoCreated;  // if the table is missing, on-the-fly create it. during getmeterMeta
     int8_t dataSourceType;  // load data from file or not
   };

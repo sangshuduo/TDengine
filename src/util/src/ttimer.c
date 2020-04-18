@@ -558,4 +558,32 @@ void taosTmrCleanUp(void* handle) {
   numOfTmrCtrl--;
   unusedTmrCtrl = ctrl;
   pthread_mutex_unlock(&tmrCtrlMutex);
+
+  if (numOfTmrCtrl <=0) {
+    taosUninitTimer();
+    
+    taosCleanUpScheduler(tmrQhandle);
+
+    for (int i = 0; i < tListLen(wheels); i++) {
+      time_wheel_t* wheel = wheels + i;
+      pthread_mutex_destroy(&wheel->mutex); 
+      free(wheel->slots);
+    }
+
+    pthread_mutex_destroy(&tmrCtrlMutex);
+
+    for (size_t i = 0; i < timerMap.size; i++) {
+      timer_list_t* list = timerMap.slots + i;
+      tmr_obj_t* t = list->timers;
+      while (t != NULL) {
+        tmr_obj_t* next = t->mnext;
+        free(t);
+        t = next;
+      }
+    }
+    free(timerMap.slots);
+    free(tmrCtrls);
+
+    tmrTrace("timer module is cleaned up");
+  }
 }
