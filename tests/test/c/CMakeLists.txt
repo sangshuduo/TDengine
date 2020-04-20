@@ -3,6 +3,7 @@ PROJECT(TDengine)
 
 INCLUDE_DIRECTORIES(${TD_COMMUNITY_DIR}/src/inc)
 INCLUDE_DIRECTORIES(${TD_COMMUNITY_DIR}/src/util/inc)
+INCLUDE_DIRECTORIES(${TD_COMMUNITY_DIR}/src/common/inc)
 INCLUDE_DIRECTORIES(${TD_OS_DIR}/inc)
 
 IF ((TD_LINUX_64) OR (TD_LINUX_32 AND TD_ARM))
@@ -14,4 +15,7 @@ IF ((TD_LINUX_64) OR (TD_LINUX_32 AND TD_ARM))
 
   add_executable(importOneRow importOneRow.c)
   target_link_libraries(importOneRow taos_static pthread)
+
+  add_executable(importPerTabe importPerTabe.c)
+  target_link_libraries(importPerTabe taos_static pthread)
 ENDIF()

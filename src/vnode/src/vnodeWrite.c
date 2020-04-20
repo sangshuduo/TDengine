@@ -17,15 +17,15 @@
 #include "os.h"
 #include "taosmsg.h"
 #include "taoserror.h"
-#include "tlog.h"
 #include "tqueue.h"
 #include "trpc.h"
+#include "tutil.h"
 #include "tsdb.h"
 #include "twal.h"
-#include "dataformat.h"
+#include "tdataformat.h"
 #include "vnode.h"
 #include "vnodeInt.h"
-#include "tutil.h"
+#include "vnodeLog.h"
 
 static int32_t (*vnodeProcessWriteMsgFp[TSDB_MSG_TYPE_MAX])(SVnodeObj *, void *, SRspRet *);
 static int32_t  vnodeProcessSubmitMsg(SVnodeObj *pVnode, void *pMsg, SRspRet *);
@@ -126,6 +126,7 @@ static int32_t vnodeProcessCreateTableMsg(SVnodeObj *pVnode, void *pCont, SRspRe
     tdSchemaAppendCol(pDestSchema, pSchema[i].type, htons(pSchema[i].colId), htons(pSchema[i].bytes));
   }
   tsdbTableSetSchema(&tCfg, pDestSchema, false);
+  tsdbTableSetName(&tCfg, pTable->tableId, false);
 
   if (numOfTags != 0) {
     STSchema *pDestTagSchema = tdNewSchema(numOfTags);
@@ -133,6 +134,7 @@ static int32_t vnodeProcessCreateTableMsg(SVnodeObj *pVnode, void *pCont, SRspRe
       tdSchemaAppendCol(pDestTagSchema, pSchema[i].type, htons(pSchema[i].colId), htons(pSchema[i].bytes));
     }
     tsdbTableSetTagSchema(&tCfg, pDestTagSchema, false);
+    tsdbTableSetSName(&tCfg, pTable->superTableId, false);
 
     char *pTagData = pTable->data + totalCols * sizeof(SSchema);
     int accumBytes = 0;
@@ -145,8 +147,7 @@ static int32_t vnodeProcessCreateTableMsg(SVnodeObj *pVnode, void *pCont, SRspRe
     tsdbTableSetTagValue(&tCfg, dataRow, false);
   }
 
-  void *pTsdb = vnodeGetTsdb(pVnode);
-  code = tsdbCreateTable(pTsdb, &tCfg);
+  code = tsdbCreateTable(pVnode->tsdb, &tCfg);
 
   tfree(pDestSchema);
 
@@ -209,8 +210,7 @@ static int32_t vnodeProcessAlterTableMsg(SVnodeObj *pVnode, void *pCont, SRspRet
     tsdbTableSetTagValue(&tCfg, dataRow, false);
   }
 
-  void *pTsdb = vnodeGetTsdb(pVnode);
-  code = tsdbAlterTable(pTsdb, &tCfg);
+  code = tsdbAlterTable(pVnode->tsdb, &tCfg);
 
   tfree(pDestSchema);
 

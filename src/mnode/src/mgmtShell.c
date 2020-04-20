@@ -17,18 +17,18 @@
 #include "os.h"
 #include "taosmsg.h"
 #include "taoserror.h"
-#include "tlog.h"
 #include "trpc.h"
 #include "tsched.h"
 #include "tutil.h"
 #include "ttimer.h"
+#include "tgrant.h"
+#include "tglobal.h"
 #include "dnode.h"
 #include "mgmtDef.h"
 #include "mgmtLog.h"
 #include "mgmtAcct.h"
 #include "mgmtDb.h"
 #include "mgmtDnode.h"
-#include "tgrant.h"
 #include "mgmtMnode.h"
 #include "mgmtProfile.h"
 #include "mgmtSdb.h"
@@ -144,7 +144,7 @@ static void mgmtProcessMsgFromShell(SRpcMsg *rpcMsg) {
     return;
   }
 
-  if (!mgmtIsMaster()) {
+  if (!sdbIsMaster()) {
     // rpcSendRedirectRsp(rpcMsg->handle, mgmtGetMnodeIpListForRedirect());
     mgmtSendSimpleResp(rpcMsg->handle, TSDB_CODE_NO_MASTER);
     rpcFreeCont(rpcMsg->pCont);

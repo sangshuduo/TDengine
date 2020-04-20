@@ -30,8 +30,6 @@ extern "C" {
 
 struct tExprNode;
 struct SSchema;
-struct tSkipList;
-struct tSkipListNode;
 
 enum {
   TSQL_NODE_EXPR  = 0x1,
@@ -47,7 +45,6 @@ typedef void (*__do_filter_suppl_fn_t)(void *, void *);
  *
  */
 typedef struct tQueryInfo {
-  int32_t       offset;   // offset value in tags
   int32_t       colIndex; // index of column in schema
   uint8_t       optr;     // expression operator
   SSchema       sch;      // schema of tags

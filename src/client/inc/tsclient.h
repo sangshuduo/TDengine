@@ -29,8 +29,7 @@ extern "C" {
 #include "taosdef.h"
 #include "taosmsg.h"
 #include "tarray.h"
-#include "tglobalcfg.h"
-#include "tlog.h"
+#include "tglobal.h"
 #include "trpc.h"
 #include "tsqlfunction.h"
 #include "tutil.h"
@@ -71,6 +70,7 @@ typedef struct STableMeta {
 typedef struct STableMetaInfo {
   STableMeta * pTableMeta;       // table meta, cached in client side and acquried by name
   SVgroupsInfo* vgroupList;
+  
   /*
    * 1. keep the vnode index during the multi-vnode super table projection query
    * 2. keep the vnode index for multi-vnode insertion
