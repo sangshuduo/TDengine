@@ -69,7 +69,7 @@ if __name__ == "__main__":
         if (valgrind == 0):
             to_be_killed = "taosd"
         else:
-            to_be_killed = "valgrind"
+            to_be_killed = "valgrind.bin"
 
         kill_cmd = "ps -ef|grep -w %s| grep -v grep | awk '{print $2}' | xargs kill -HUP " % to_be_killed
         os.system(kill_cmd)
@@ -82,10 +82,6 @@ if __name__ == "__main__":
             os.system(kill_cmd)
             time.sleep(1)
             process_id = subprocess.check_output(ps_cmd, shell=True)
-
-        if (valgrind == 1):
-            cmd = "tail -1 valgrind-out.txt"
-            tdLog.notice("%s" % subprocess.check_output(cmd, shell=True))
 
         tdLog.exit('stop All dnodes')
 

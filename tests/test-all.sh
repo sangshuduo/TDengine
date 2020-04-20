@@ -8,7 +8,7 @@ GREEN_UNDERLINE='\033[4;32m'
 NC='\033[0m'
 
 cd script
-sudo ./test.sh -f sim_main_test.sim 2>&1 | grep 'success\|failed\|fault' | tee out.txt
+./test.sh -f basicSuite.sim 2>&1 | grep 'success\|failed\|fault' | tee out.txt
 
 total_success=`grep success out.txt | wc -l`
 
@@ -24,7 +24,7 @@ if [ "$total_failed" -ne "0" ]; then
 fi
 
 cd ../pytest
-sudo ./simpletest.sh 2>&1 | grep 'successfully executed\|failed' | tee pytest-out.txt
+./simpletest.sh 2>&1 | grep 'successfully executed\|failed' | tee pytest-out.txt
 total_py_success=`grep 'successfully executed' pytest-out.txt | wc -l`
 
 if [ "$total_py_success" -gt "0" ]; then
