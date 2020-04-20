@@ -166,7 +166,8 @@ int taosOpenUDClientSocket(char *ip, uint16_t port) {
 
   if (ret != 0) {
     uError("failed to connect UD socket, name:%d, reason: %s", name, strerror(errno));
-    sockFd = -1;
+    close(sockFd);
+    return -1;
   }
 
   return sockFd;

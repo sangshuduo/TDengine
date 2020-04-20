@@ -759,6 +759,9 @@ static void exprTreeTraverseImpl(tExprNode *pExpr, SArray *pResult, SBinaryFilte
   size_t size = taosArrayGetSize(pResult);
   
   SArray* array = taosArrayInit(size, POINTER_BYTES);
+  if (array == NULL)
+    return;
+
   for (int32_t i = 0; i < size; ++i) {
     void *pItem = taosArrayGetP(pResult, i);
 
@@ -768,6 +771,7 @@ static void exprTreeTraverseImpl(tExprNode *pExpr, SArray *pResult, SBinaryFilte
   }
   
   taosArrayCopy(pResult, array);
+  free(array);
 }
 
 static void tSQLBinaryTraverseOnSkipList(tExprNode *pExpr, SArray *pResult, SSkipList *pSkipList,
