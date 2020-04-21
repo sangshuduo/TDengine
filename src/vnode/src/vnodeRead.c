@@ -17,15 +17,15 @@
 #include "os.h"
 #include "taosmsg.h"
 #include "taoserror.h"
-#include "tlog.h"
 #include "tqueue.h"
 #include "trpc.h"
 #include "tsdb.h"
 #include "twal.h"
-#include "dataformat.h"
+#include "tdataformat.h"
 #include "vnode.h"
 #include "vnodeInt.h"
-#include "queryExecutor.h"
+#include "vnodeLog.h"
+#include "query.h"
 
 static int32_t (*vnodeProcessReadMsgFp[TSDB_MSG_TYPE_MAX])(SVnodeObj *, void *pCont, int32_t contLen, SRspRet *pRet);
 static int32_t  vnodeProcessQueryMsg(SVnodeObj *pVnode, void *pCont, int32_t contLen, SRspRet *pRet);
@@ -54,10 +54,9 @@ static int32_t vnodeProcessQueryMsg(SVnodeObj *pVnode, void *pCont, int32_t cont
 
   int32_t code = TSDB_CODE_SUCCESS;
   
-  SQInfo* pQInfo = NULL;
+  qinfo_t pQInfo = NULL;
   if (contLen != 0) {
-    void* tsdb = vnodeGetTsdb(pVnode);
-    pRet->code = qCreateQueryInfo(tsdb, pQueryTableMsg, &pQInfo);
+    pRet->code = qCreateQueryInfo(pVnode->tsdb, pQueryTableMsg, &pQInfo);
   
     SQueryTableRsp *pRsp = (SQueryTableRsp *) rpcMallocCont(sizeof(SQueryTableRsp));
     pRsp->qhandle = htobe64((uint64_t) (pQInfo));

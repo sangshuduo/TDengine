@@ -107,6 +107,11 @@ extern "C" {
 
 #define POW2(x) ((x) * (x))
 
+typedef struct SPair {
+  void* first;
+  void* sec;
+} SPair;
+
 int32_t strdequote(char *src);
 
 void strtrim(char *src);
@@ -170,6 +175,13 @@ uint32_t ip2uint(const char *const ip_addr);
 #define TAOS_ALLOC_MODE_DETECT_LEAK 2
 void taosSetAllocMode(int mode, const char* path, bool autoDump);
 void taosDumpMemoryLeak();
+
+void * tmalloc(size_t size);
+void * tcalloc(size_t nmemb, size_t size);
+size_t tsizeof(void *ptr);
+void   tmemset(void *ptr, int c);
+void * trealloc(void *ptr, size_t size);
+void   tzfree(void *ptr);
 
 #ifdef TAOS_MEM_CHECK
 

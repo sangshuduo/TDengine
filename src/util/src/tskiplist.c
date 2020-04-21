@@ -13,8 +13,7 @@
  * along with this program. If not, see <http://www.gnu.org/licenses/>.
  */
 #include "os.h"
-
-#include "tlog.h"
+#include "tulog.h"
 #include "tskiplist.h"
 #include "tutil.h"
 #include "tcompare.h"
@@ -72,7 +71,8 @@ memset(pNode, 0, SL_NODE_HEADER_SIZE(_l));\
 } while(0)
 
 static void tSkipListDoInsert(SSkipList *pSkipList, SSkipListNode **forward, SSkipListNode *pNode);
-static SSkipListNode* tSkipListDoAppend(SSkipList *pSkipList, SSkipListNode *pNode);
+static SSkipListNode* tSkipListPushBack(SSkipList *pSkipList, SSkipListNode *pNode);
+static SSkipListNode* tSkipListPushFront(SSkipList* pSkipList, SSkipListNode *pNode);
 static SSkipListIterator* doCreateSkipListIterator(SSkipList *pSkipList, int32_t order);
 
 static bool initForwardBackwardPtr(SSkipList* pSkipList) {
@@ -208,10 +208,17 @@ SSkipListNode *tSkipListPut(SSkipList *pSkipList, SSkipListNode *pNode) {
     pthread_rwlock_wrlock(pSkipList->lock);
   }
   
-  // the new key is greater than the last key of skiplist append it at last position
+  // if the new key is greater than the maximum key of skip list, push back this node at the end of skip list
   char *newDatakey = SL_GET_NODE_KEY(pSkipList, pNode);
   if (pSkipList->size == 0 || pSkipList->comparFn(pSkipList->lastKey, newDatakey) < 0) {
-    return tSkipListDoAppend(pSkipList, pNode);
+    return tSkipListPushBack(pSkipList, pNode);
+  }
+  
+  // if the new key is less than the minimum key of skip list, push front this node at the front of skip list
+  assert(pSkipList->size > 0);
+  char* minKey = SL_GET_SL_MIN_KEY(pSkipList);
+  if (pSkipList->comparFn(newDatakey, minKey) < 0) {
+    return tSkipListPushFront(pSkipList, pNode);
   }
   
   // find the appropriated position to insert data
@@ -270,7 +277,17 @@ void tSkipListDoInsert(SSkipList *pSkipList, SSkipListNode **forward, SSkipListN
   }
 }
 
-SSkipListNode* tSkipListDoAppend(SSkipList *pSkipList, SSkipListNode *pNode) {
+SSkipListNode* tSkipListPushFront(SSkipList* pSkipList, SSkipListNode *pNode) {
+  SSkipListNode* forward[MAX_SKIP_LIST_LEVEL] = {0};
+  for(int32_t i = 0; i < pSkipList->level; ++i) {
+    forward[i] = pSkipList->pHead;
+  }
+  
+  tSkipListDoInsert(pSkipList, forward, pNode);
+  return pNode;
+}
+
+SSkipListNode* tSkipListPushBack(SSkipList *pSkipList, SSkipListNode *pNode) {
   // do clear pointer area
   DO_MEMSET_PTR_AREA(pNode);
   
@@ -308,7 +325,7 @@ SArray* tSkipListGet(SSkipList *pSkipList, SSkipListKey pKey, int16_t keyType) {
   pSkipList->state.queryCount++;
 #endif
 
-  __compar_fn_t filterComparFn = getComparFunc(pSkipList->keyInfo.type, keyType);
+  __compar_fn_t filterComparFn = getComparFunc(pSkipList->keyInfo.type, keyType, 0);
   int32_t ret = -1;
   for (int32_t i = sLevel; i >= 0; --i) {
     SSkipListNode *p = SL_GET_FORWARD_POINTER(pNode, i);
@@ -372,7 +389,7 @@ SSkipListIterator *tSkipListCreateIterFromVal(SSkipList* pSkipList, const char* 
     SSkipListNode *forward[MAX_SKIP_LIST_LEVEL] = {0};
   
     int32_t ret = -1;
-    __compar_fn_t filterComparFn = getComparFunc(pSkipList->keyInfo.type, type);
+    __compar_fn_t filterComparFn = getComparFunc(pSkipList->keyInfo.type, type, 0);
     SSkipListNode* pNode = pSkipList->pHead;
     
     for (int32_t i = pSkipList->level - 1; i >= 0; --i) {

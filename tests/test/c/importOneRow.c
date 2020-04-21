@@ -16,9 +16,10 @@
 #define _DEFAULT_SOURCE
 #include "os.h"
 #include "taos.h"
-#include "tlog.h"
+#include "tulog.h"
 #include "ttimer.h"
 #include "tutil.h"
+#include "tglobal.h"
 
 #define MAX_RANDOM_POINTS 20000
 #define GREEN "\033[1;32m"
@@ -65,9 +66,9 @@ void shellParseArgument(int argc, char *argv[]) {
     }
   }
 
-  dPrint("%s rowNum:%d %s", GREEN, rowNum, NC);
-  dPrint("%s threadNum:%d %s", GREEN, threadNum, NC);
-  dPrint("%s replica:%d %s", GREEN, replica, NC);
+  pPrint("%s rowNum:%d %s", GREEN, rowNum, NC);
+  pPrint("%s threadNum:%d %s", GREEN, threadNum, NC);
+  pPrint("%s replica:%d %s", GREEN, replica, NC);
 }
 
 int main(int argc, char *argv[]) {
