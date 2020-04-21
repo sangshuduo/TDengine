@@ -76,18 +76,18 @@ matrix:
           name: sangshuduo/TDengine
           version: 2.x
           description: sangshuduo/TDengine
-    
+
         # Where email notification of build analysis results will be sent
         notification_email: sangshuduo@gmail.com
-    
+
         # Commands to prepare for build_command
         # ** likely specific to your build **
-        build_command_prepend: cmake ..
-    
+        build_command_prepend: cmake .
+
         # The command that will be added as an argument to "cov-build" to compile your project for analysis,
         # ** likely specific to your build **
         build_command: make
-    
+
         # Pattern to match selecting branches that will run analysis. We recommend leaving this set to 'coverity_scan'.
         # Take care in resource usage, and consider the build frequency allowances per
         #   https://scan.coverity.com/faq#frequency
@@ -211,23 +211,9 @@ matrix:
         #      homebrew:
         #        - cmake
         #
-        #    before_script:
-        #      - cd ${TRAVIS_BUILD_DIR}
-        #      - mkdir debug
-        #      - cd debug
-        #  - os: osx
-        #    compiler: clang
-        #    git:
-        #      - depth: 1
-        #    addons:
-        #      homebrew:
-        #        - cmake
-        #
-        #    before_script:
-        #      - cd ${TRAVIS_BUILD_DIR}
-        #      - mkdir debug
-        #      - cd debug
-        #
         #    script:
+        #      - cd ${TRAVIS_BUILD_DIR}
+        #      - mkdir debug
+        #      - cd debug
         #      - cmake ..
         #      - make
