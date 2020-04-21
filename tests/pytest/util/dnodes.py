@@ -177,10 +177,10 @@ class TDDnode:
             cmd = "nohup %staosd -c %s > /dev/null 2>&1 & " % (
                 binPath, self.cfgDir)
         else:
-            valgrind_cmdline = "valgrind --tool=memcheck --leak-check=full --show-reachable=no --track-origins=yes --show-leak-kinds=all -v --workaround-gcc296-bugs=yes"
+            valgrindCmdline = "valgrind --tool=memcheck --leak-check=full --show-reachable=no --track-origins=yes --show-leak-kinds=all -v --workaround-gcc296-bugs=yes"
 
             cmd = "nohup %s %staosd -c %s 2>&1 & " % (
-                valgrind_cmdline, binPath, self.cfgDir)
+                valgrindCmdline, binPath, self.cfgDir)
 
             print(cmd)
 

@@ -67,21 +67,21 @@ if __name__ == "__main__":
 
     if (stop != 0):
         if (valgrind == 0):
-            to_be_killed = "taosd"
+            toBeKilled = "taosd"
         else:
-            to_be_killed = "valgrind.bin"
+            toBeKilled = "valgrind.bin"
 
-        kill_cmd = "ps -ef|grep -w %s| grep -v grep | awk '{print $2}' | xargs kill -HUP " % to_be_killed
-        os.system(kill_cmd)
+        killCmd = "ps -ef|grep -w %s| grep -v grep | awk '{print $2}' | xargs kill -HUP " % toBeKilled
+        os.system(killCmd)
         time.sleep(1)
 
-        ps_cmd = "ps -ef|grep -w %s| grep -v grep | awk '{print $2}'" % to_be_killed
-        process_id = subprocess.check_output(ps_cmd, shell=True)
+        psCmd = "ps -ef|grep -w %s| grep -v grep | awk '{print $2}'" % toBeKilled
+        processID = subprocess.check_output(psCmd, shell=True)
 
-        while( process_id ):
-            os.system(kill_cmd)
+        while( processID ):
+            os.system(killCmd)
             time.sleep(1)
-            process_id = subprocess.check_output(ps_cmd, shell=True)
+            processID = subprocess.check_output(psCmd, shell=True)
 
         tdLog.exit('stop All dnodes')
 

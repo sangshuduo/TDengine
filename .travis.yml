@@ -63,12 +63,12 @@ matrix:
           GREEN_UNDERLINE='\033[4;32m'
           NC='\033[0m'
 
-          mem_error=`grep -m 1 'ERROR SUMMARY' mem-error-out.txt | awk '{print $4}'`
+          memError=`grep -m 1 'ERROR SUMMARY' mem-error-out.txt | awk '{print $4}'`
 
-          if [ -n "$mem_error" ]; then
-            if [ "$mem_error" -gt 20 ]; then
-              echo -e "${RED} ## Memory errors number valgrind reports is $mem_error. More than our threshold! ## ${NC} "
-              travis_terminate $mem_error
+          if [ -n "$memError" ]; then
+            if [ "$memError" -gt 20 ]; then
+              echo -e "${RED} ## Memory errors number valgrind reports is $memError. More than our threshold! ## ${NC} "
+              travis_terminate $memError
             fi
           fi
 
@@ -104,7 +104,7 @@ matrix:
 
         # The command that will be added as an argument to "cov-build" to compile your project for analysis,
         # ** likely specific to your build **
-        build_command: cmake --build .
+        build_command: make 
 
         # Pattern to match selecting branches that will run analysis. We recommend leaving this set to 'coverity_scan'.
         # Take care in resource usage, and consider the build frequency allowances per
