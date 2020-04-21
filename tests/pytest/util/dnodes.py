@@ -14,6 +14,7 @@
 import sys
 import os
 import os.path
+import subprocess
 from util.log import *
 
 
@@ -332,11 +333,14 @@ class TDDnodes:
         for i in range(len(self.dnodes)):
             self.dnodes[i].stop()
 
-        cmd = "sudo systemctl stop taosd"
-        os.system(cmd)
+        psCmd = "ps -ef | grep -w taosd | grep 'root' | grep -v grep | awk '{print $2}'"
+        processID = subprocess.check_output(psCmd, shell=True)
+        if processID:
+            cmd = "sudo systemctl stop taosd"
+            os.system(cmd)
         # if os.system(cmd) != 0 :
         # tdLog.exit(cmd)
-        cmd = "ps -ef | grep -w taosd | grep 'dnode' | grep -v grep | awk '{print $2}' && sudo pkill -sigkill taosd"
+        cmd = "ps -ef | grep -w taosd | grep 'dnode' | grep -v grep | awk '{print $2}' && pkill -sigkill taosd"
         os.system(cmd)
         # if os.system(cmd) != 0 :
         # tdLog.exit(cmd)
