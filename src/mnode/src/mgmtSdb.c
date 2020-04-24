@@ -146,7 +146,7 @@ static int32_t sdbInitWal() {
   }
 
   sdbTrace("open sdb wal for restore");
-  walRestore(tsSdbObj.wal, &tsSdbObj, sdbWrite);
+  walRestore(tsSdbObj.wal, NULL, sdbWrite);
   return 0;
 }
 
@@ -174,12 +174,12 @@ void sdbUpdateMnodeRoles() {
   SNodesRole roles = {0};
   syncGetNodesRole(tsSdbObj.sync, &roles);
 
-  mPrint("update mnodes:%d sync roles", tsSdbObj.cfg.replica);
+  sdbPrint("update mnodes:%d sync roles", tsSdbObj.cfg.replica);
   for (int32_t i = 0; i < tsSdbObj.cfg.replica; ++i) {
     SMnodeObj *pMnode = mgmtGetMnode(roles.nodeId[i]);
     if (pMnode != NULL) {
       pMnode->role = roles.role[i];
-      mPrint("mnode:%d, role:%s", pMnode->mnodeId, mgmtGetMnodeRoleStr(pMnode->role));
+      sdbPrint("mnode:%d, role:%s", pMnode->mnodeId, mgmtGetMnodeRoleStr(pMnode->role));
       mgmtReleaseMnode(pMnode);
     }
   }
@@ -196,7 +196,7 @@ static int sdbGetWalInfo(void *ahandle, char *name, uint32_t *index) {
 }
 
 static void sdbNotifyRole(void *ahandle, int8_t role) {
-  mPrint("mnode role changed from %s to %s", mgmtGetMnodeRoleStr(tsSdbObj.role), mgmtGetMnodeRoleStr(role));
+  sdbPrint("mnode role changed from %s to %s", mgmtGetMnodeRoleStr(tsSdbObj.role), mgmtGetMnodeRoleStr(role));
 
   if (role == TAOS_SYNC_ROLE_MASTER && tsSdbObj.role != TAOS_SYNC_ROLE_MASTER) {
     balanceReset();
@@ -208,8 +208,8 @@ static void sdbNotifyRole(void *ahandle, int8_t role) {
 
 static void sdbConfirmForward(void *ahandle, void *param, int32_t code) {
   tsSdbObj.code = code;
+  sdbTrace("sdb forward request confirmed, result:%s", tstrerror(code));
   sem_post(&tsSdbObj.sem);
-  mPrint("sdb forward request confirmed, result:%s", tstrerror(code));
 }
 
 static int32_t sdbForwardToPeer(void *pHead) {
@@ -227,9 +227,9 @@ void sdbUpdateSync() {
   SSyncCfg syncCfg = {0};
   int32_t index = 0;
 
-  SDMNodeInfos *mnodes = dnodeGetMnodeList();
+  SDMMnodeInfos *mnodes = dnodeGetMnodeInfos();
   for (int32_t i = 0; i < mnodes->nodeNum; ++i) {
-    SDMNodeInfo *node = &mnodes->nodeInfos[i];
+    SDMMnodeInfo *node = &mnodes->nodeInfos[i];
     syncCfg.nodeInfo[i].nodeId = node->nodeId;
     syncCfg.nodeInfo[i].nodeIp = node->nodeIp;
     strcpy(syncCfg.nodeInfo[i].name, node->nodeName);
@@ -271,9 +271,9 @@ void sdbUpdateSync() {
   if (!hasThisDnode) return;
   if (memcmp(&syncCfg, &tsSdbObj.cfg, sizeof(SSyncCfg)) == 0) return;
 
-  mPrint("work as mnode, replica:%d arbitratorIp:%s", syncCfg.replica, taosIpStr(syncCfg.arbitratorIp));
+  sdbPrint("work as mnode, replica:%d arbitratorIp:%s", syncCfg.replica, taosIpStr(syncCfg.arbitratorIp));
   for (int32_t i = 0; i < syncCfg.replica; ++i) {
-    mPrint("mnode:%d, ip:%s name:%s", syncCfg.nodeInfo[i].nodeId, taosIpStr(syncCfg.nodeInfo[i].nodeIp),
+    sdbPrint("mnode:%d, ip:%s name:%s", syncCfg.nodeInfo[i].nodeId, taosIpStr(syncCfg.nodeInfo[i].nodeIp),
            syncCfg.nodeInfo[i].name);
   }
 
@@ -333,7 +333,7 @@ void sdbIncRef(void *handle, void *pRow) {
     SSdbTable *pTable = handle;
     int32_t *  pRefCount = (int32_t *)(pRow + pTable->refCountPos);
     atomic_add_fetch_32(pRefCount, 1);
-    if (0 && strcmp(pTable->tableName, "dnodes") == 0) {
+    if (0 && strcmp(pTable->tableName, "accounts") == 0) {
       sdbTrace("table:%s, add ref to record:%s:%s:%d", pTable->tableName, pTable->tableName, sdbGetkeyStr(pTable, pRow),
                *pRefCount);
     }
@@ -345,7 +345,7 @@ void sdbDecRef(void *handle, void *pRow) {
     SSdbTable *pTable = handle;
     int32_t *  pRefCount = (int32_t *)(pRow + pTable->refCountPos);
     int32_t    refCount = atomic_sub_fetch_32(pRefCount, 1);
-    if (0 && strcmp(pTable->tableName, "dnodes") == 0) {
+    if (0 && strcmp(pTable->tableName, "accounts") == 0) {
       sdbTrace("table:%s, def ref of record:%s:%s:%d", pTable->tableName, pTable->tableName, sdbGetkeyStr(pTable, pRow),
                *pRefCount);
     }
@@ -400,27 +400,30 @@ static int32_t sdbInsertHash(SSdbTable *pTable, SSdbOper *pOper) {
 
   if (pTable->keyType == SDB_KEY_AUTO) {
     pTable->autoIndex = MAX(pTable->autoIndex, *((uint32_t *)pOper->pObj));
+  } else {
+    pTable->autoIndex++;
   }
 
   pthread_mutex_unlock(&pTable->mutex);
 
-  sdbTrace("table:%s, insert record:%s to hash, numOfRows:%d", pTable->tableName, sdbGetkeyStr(pTable, pOper->pObj),
-           pTable->numOfRows);
+  sdbTrace("table:%s, insert record:%s to hash, numOfRows:%d version:%" PRIu64, pTable->tableName,
+           sdbGetkeyStr(pTable, pOper->pObj), pTable->numOfRows, sdbGetVersion());
 
   (*pTable->insertFp)(pOper);
   return TSDB_CODE_SUCCESS;
 }
 
 static int32_t sdbDeleteHash(SSdbTable *pTable, SSdbOper *pOper) {
+  (*pTable->deleteFp)(pOper);
+  
   pthread_mutex_lock(&pTable->mutex);
   (*sdbDeleteIndexFp[pTable->keyType])(pTable->iHandle, pOper->pObj);
   pTable->numOfRows--;
   pthread_mutex_unlock(&pTable->mutex);
 
-  sdbTrace("table:%s, delete record:%s from hash, numOfRows:%d", pTable->tableName, sdbGetkeyStr(pTable, pOper->pObj),
-           pTable->numOfRows);
+  sdbTrace("table:%s, delete record:%s from hash, numOfRows:%d version:%" PRIu64, pTable->tableName,
+           sdbGetkeyStr(pTable, pOper->pObj), pTable->numOfRows, sdbGetVersion());
 
-  (*pTable->deleteFp)(pOper);
   int8_t *updateEnd = pOper->pObj + pTable->refCountPos - 1;
   *updateEnd = 1;
   sdbDecRef(pTable, pOper->pObj);
@@ -429,8 +432,8 @@ static int32_t sdbDeleteHash(SSdbTable *pTable, SSdbOper *pOper) {
 }
 
 static int32_t sdbUpdateHash(SSdbTable *pTable, SSdbOper *pOper) {
-  sdbTrace("table:%s, update record:%s in hash, numOfRows:%d", pTable->tableName, sdbGetkeyStr(pTable, pOper->pObj),
-           pTable->numOfRows);
+  sdbTrace("table:%s, update record:%s in hash, numOfRows:%d version:%" PRIu64, pTable->tableName,
+           sdbGetkeyStr(pTable, pOper->pObj), pTable->numOfRows, sdbGetVersion());
 
   (*pTable->updateFp)(pOper);
   return TSDB_CODE_SUCCESS;
@@ -476,9 +479,13 @@ static int sdbWrite(void *param, void *data, int type) {
   pthread_mutex_unlock(&tsSdbObj.mutex);
 
   // from app, oper is created
-  if (param == NULL) return code;
+  if (param != NULL) return code;
 
-  // from wal, should create oper
+  // from wal or forward msg, should create oper
+  if (tsSdbObj.sync != NULL) {
+    syncConfirmForward(tsSdbObj.sync, pHead->version, code);
+  }
+
   if (action == SDB_ACTION_INSERT) {
     SSdbOper oper = {.rowSize = pHead->len, .rowData = pHead->cont, .table = pTable};
     code = (*pTable->decodeFp)(&oper);
@@ -529,7 +536,7 @@ int32_t sdbInsertRow(SSdbOper *pOper) {
     (*pTable->encodeFp)(pOper);
     pHead->len = pOper->rowSize;
 
-    int32_t code = sdbWrite(NULL, pHead, pHead->msgType);
+    int32_t code = sdbWrite(pOper, pHead, pHead->msgType);
     taosFreeQitem(pHead);
     if (code < 0) return code;
   }
@@ -571,7 +578,7 @@ int32_t sdbDeleteRow(SSdbOper *pOper) {
     pHead->msgType = pTable->tableId * 10 + SDB_ACTION_DELETE;
     memcpy(pHead->cont, pOper->pObj, rowSize);
 
-    int32_t code = sdbWrite(NULL, pHead, pHead->msgType);
+    int32_t code = sdbWrite(pOper, pHead, pHead->msgType);
     taosFreeQitem(pHead);
     if (code < 0) return code;
   }
@@ -602,7 +609,7 @@ int32_t sdbUpdateRow(SSdbOper *pOper) {
     (*pTable->encodeFp)(pOper);
     pHead->len = pOper->rowSize;
 
-    int32_t code = sdbWrite(NULL, pHead, pHead->msgType);
+    int32_t code = sdbWrite(pOper, pHead, pHead->msgType);
     taosFreeQitem(pHead);
     if (code < 0) return code;
   } 

@@ -58,6 +58,7 @@ static int32_t mgmtActionAcctUpdate(SSdbOper *pOper) {
     memcpy(pSaved, pAcct, tsAcctUpdateSize);
     free(pAcct);
   }
+  mgmtDecAcctRef(pSaved);
   return TSDB_CODE_SUCCESS;
 }
 
@@ -81,6 +82,8 @@ static int32_t mgmtActionAcctRestored() {
   if (dnodeIsFirstDeploy()) {
     mgmtCreateRootAcct();
   }
+
+  acctInit();
   return TSDB_CODE_SUCCESS;
 }
 
@@ -106,12 +109,12 @@ int32_t mgmtInitAccts() {
 
   tsAcctSdb = sdbOpenTable(&tableDesc);
   if (tsAcctSdb == NULL) {
-    mError("failed to init acct data");
+    mError("table:%s, failed to create hash", tableDesc.tableName);
     return -1;
   }
 
-  mTrace("table:accounts table is created");
-  return acctInit();
+  mTrace("table:%s, hash is created", tableDesc.tableName);
+  return TSDB_CODE_SUCCESS;
 }
 
 void mgmtCleanUpAccts() {
@@ -121,6 +124,10 @@ void mgmtCleanUpAccts() {
 
 void *mgmtGetAcct(char *name) {
   return sdbGetRow(tsAcctSdb, name);
+}
+
+void *mgmtGetNextAcct(void *pNode, SAcctObj **pAcct) {
+  return sdbFetchRow(tsAcctSdb, pNode, (void **)pAcct); 
 }
 
 void mgmtIncAcctRef(SAcctObj *pAcct) {
