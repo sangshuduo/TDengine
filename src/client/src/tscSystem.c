@@ -42,7 +42,6 @@ void *  tscTmr;
 void *  tscQhandle;
 void *  tscCheckDiskUsageTmr;
 int     tsInsertHeadSize;
-char    tsLastUser[TSDB_USER_LEN + 1];
 
 int tscNumOfThreads;
 
@@ -67,7 +66,6 @@ int32_t tscInitRpc(const char *user, const char *secret) {
     rpcInit.label = "TSC-vnode";
     rpcInit.numOfThreads = tscNumOfThreads;
     rpcInit.cfp = tscProcessMsgFromServer;
-    rpcInit.ufp = tscUpdateIpSet;
     rpcInit.sessions = tsMaxVnodeConnections;
     rpcInit.connType = TAOS_CONN_CLIENT;
     rpcInit.user = (char*)user;
@@ -82,13 +80,6 @@ int32_t tscInitRpc(const char *user, const char *secret) {
     }
   }
 
-  // not stop service, switch users
-  if (strcmp(tsLastUser, user) != 0 && pTscMgmtConn != NULL) {
-    tscTrace("switch user from %s to %s", user, tsLastUser);
-    rpcClose(pTscMgmtConn);
-    pTscMgmtConn = NULL;
-  }
-
   if (pTscMgmtConn == NULL) {
     memset(&rpcInit, 0, sizeof(rpcInit));
     rpcInit.localIp = tsLocalIp;
@@ -96,13 +87,14 @@ int32_t tscInitRpc(const char *user, const char *secret) {
     rpcInit.label = "TSC-mgmt";
     rpcInit.numOfThreads = 1;
     rpcInit.cfp = tscProcessMsgFromServer;
+    rpcInit.ufp = tscUpdateIpSet;
     rpcInit.sessions = tsMaxMgmtConnections;
     rpcInit.connType = TAOS_CONN_CLIENT;
     rpcInit.idleTime = 2000;
     rpcInit.user = (char*)user;
     rpcInit.ckey = "key";
+    rpcInit.spi = 1;
     rpcInit.secret = secretEncrypt;
-    strcpy(tsLastUser, user);
 
     pTscMgmtConn = rpcOpen(&rpcInit);
     if (pTscMgmtConn == NULL) {
