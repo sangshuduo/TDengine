@@ -32,6 +32,9 @@ extern "C" {
 #define TSKEY int64_t
 #endif
 
+// this data type is internally used only in 'in' query to hold the values
+#define TSDB_DATA_TYPE_ARRAY      (TSDB_DATA_TYPE_NCHAR + 1)
+
 // Bytes for each type.
 extern const int32_t TYPE_BYTES[11];
 // TODO: replace and remove code below
@@ -141,16 +144,17 @@ void tsDataSwap(void *pLeft, void *pRight, int32_t type, int32_t size);
 #define TSDB_RELATION_GREATER_EQUAL 5
 #define TSDB_RELATION_NOT_EQUAL   6
 #define TSDB_RELATION_LIKE        7
+#define TSDB_RELATION_IN          8
 
-#define TSDB_RELATION_AND         8
-#define TSDB_RELATION_OR          9
-#define TSDB_RELATION_NOT         10
+#define TSDB_RELATION_AND         9
+#define TSDB_RELATION_OR          10
+#define TSDB_RELATION_NOT         11
 
-#define TSDB_BINARY_OP_ADD        11
-#define TSDB_BINARY_OP_SUBTRACT   12
-#define TSDB_BINARY_OP_MULTIPLY   13
-#define TSDB_BINARY_OP_DIVIDE     14
-#define TSDB_BINARY_OP_REMAINDER  15
+#define TSDB_BINARY_OP_ADD        12
+#define TSDB_BINARY_OP_SUBTRACT   13
+#define TSDB_BINARY_OP_MULTIPLY   14
+#define TSDB_BINARY_OP_DIVIDE     15
+#define TSDB_BINARY_OP_REMAINDER  16
 #define TSDB_USERID_LEN           9
 #define TS_PATH_DELIMITER_LEN     1
 
@@ -218,9 +222,6 @@ void tsDataSwap(void *pLeft, void *pRight, int32_t type, int32_t size);
 #define TSDB_MAX_MGMT_IPS         (TSDB_MAX_MPEERS+1)
 
 #define TSDB_REPLICA_MIN_NUM      1
-/*
- * this is defined in CMakeList.txt
- */
 #define TSDB_REPLICA_MAX_NUM      3
 
 #define TSDB_TBNAME_COLUMN_INDEX       (-1)
@@ -242,8 +243,8 @@ void tsDataSwap(void *pLeft, void *pRight, int32_t type, int32_t size);
 #define TSDB_MIN_ROWS_IN_FILEBLOCK      200
 #define TSDB_MAX_ROWS_IN_FILEBLOCK      500000
 
-#define TSDB_MIN_CACHE_BLOCK_SIZE       100
-#define TSDB_MAX_CACHE_BLOCK_SIZE       104857600
+#define TSDB_MIN_CACHE_BLOCK_SIZE       1
+#define TSDB_MAX_CACHE_BLOCK_SIZE       1000000
 
 #define TSDB_MIN_CACHE_BLOCKS           100
 #define TSDB_MAX_CACHE_BLOCKS           409600
