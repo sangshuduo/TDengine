@@ -143,17 +143,26 @@ if __name__ == "__main__":
                 colAndRow = line.split(' ')[1].replace("$data", "")
                 checkCol = colAndRow[0:1]
                 checkRow = colAndRow[1:2]
-                expectedData = line.split(' ')[3]
-                printf(
-                    "        tdLog.info('tdSql.checkData(%s, %s, %s)')" % \
-                    (checkCol, checkRow, expectedData))
 
-                if (expectedData.lower() == "null"):
-                    printf("        tdSql.checkData(%s, %s, %s)" % \
-                        (checkCol, checkRow, "None"))
-                else:
+                if "@" in line:
+                    expectedData = re.search('@(.*)@', line).group(1)
+                    printf(
+                        '        tdLog.info("tdSql.checkData(%s, %s, %s)")' % \
+                        (checkCol, checkRow, expectedData))
                     printf("        tdSql.checkData(%s, %s, %s)" % \
                         (checkCol, checkRow, expectedData))
+                else:
+                    expectedData = line.split(' ')[3]
+                    printf(
+                        "        tdLog.info('tdSql.checkData(%s, %s, %s)')" % \
+                        (checkCol, checkRow, expectedData))
+
+                    if (expectedData.lower() == "null"):
+                        printf("        tdSql.checkData(%s, %s, %s)" % \
+                            (checkCol, checkRow, "None"))
+                    else:
+                        printf("        tdSql.checkData(%s, %s, %s)" % \
+                            (checkCol, checkRow, expectedData))
 
         fd.close()
         printf("# convert end")
