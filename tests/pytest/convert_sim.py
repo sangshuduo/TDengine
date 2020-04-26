@@ -37,100 +37,113 @@ tdCases.addWindows(__file__, TDTestCase())
 tdCases.addLinux(__file__, TDTestCase())'''
     )
 
-def printCreateTable(line):
-    cmd = line.split(' ', 1)[1].replace("$", "")
-    printf("        tdLog.info('%s')" % cmd)
+
+def printCreateTable(cmd):
+    printf('        tdLog.info("%s")' % cmd)
     if "-x step" in line:
         cmd = re.sub(r' -x step[0-9]?', '', cmd)
         printf("        tdSql.error('%s')" % cmd)
     else:
         printf("        tdSql.execute('%s')" % cmd)
 
-def printInsert(line):
-    cmd = line.split(' ', 1)[1].replace("$", "")
-    printf('        tdLog.info("%s")' % cmd)
-    if "-x step" in line:
-        cmd = re.sub(r' -x step[0-9]?', '', cmd)
-        printf('        tdSql.error("%s")' % cmd)
-    else:
-        printf('        tdSql.execute("%s")' % cmd)
 
-def printSqlError(line):
-    cmd = line.split(' ', 1)[1].replace("$", "")
+def printInsert(cmd):
+    if "-x step" in cmd:
+        cmd = re.sub(r' -x step[0-9]?', '', cmd)
+
+        if "\"" in cmd:
+            printf("        tdLog.info('%s')" % cmd)
+            printf("        tdSql.error('%s')" % cmd)
+        else:
+            printf('        tdLog.info("%s")' % cmd)
+            printf('        tdSql.error("%s")' % cmd)
+    else:
+        if "\"" in cmd:
+            printf("        tdLog.info('%s')" % cmd)
+            printf("        tdSql.execute('%s')" % cmd)
+        else:
+            printf('        tdLog.info("%s")' % cmd)
+            printf('        tdSql.execute("%s")' % cmd)
+
+
+def printSqlError(cmd):
     cmd = re.sub(r' -x step[0-9]?', '', cmd)
     printf('        tdLog.info("%s")' % cmd)
     printf('        tdSql.error("%s")' % cmd)
 
-def printSqlSelect(line):
-    cmd = line.split(' ', 1)[1].replace("$", "")
+
+def printSqlSelect(cmd):
     printf("        tdLog.info('%s')" % cmd)
-    if "-x step" in line:
+    if "-x step" in cmd:
         cmd = re.sub(r' -x step[0-9]?', '', cmd)
         printf("        tdSql.error('%s')" % cmd)
     else:
         printf("        tdSql.query('%s')" % cmd)
 
-def printSqlDrop(line):
-    cmd = line.split(' ', 1)[1].replace("$", "")
+
+def printSqlDrop(cmd):
     printf("        tdLog.info('%s')" % cmd)
-    if "-x step" in line:
+    if "-x step" in cmd:
         cmd = re.sub(r' -x step[0-9]?', '', cmd)
         printf("        tdSql.error('%s')" % cmd)
     else:
         printf("        tdSql.execute('%s')" % cmd)
 
-def printSqlShow(line):
-    cmd = line.split(' ', 1)[1].replace("$", "")
+
+def printSqlShow(cmd):
     printf("        tdLog.info('%s')" % cmd)
-    if "-x step" in line:
+    if "-x step" in cmd:
         cmd = re.sub(r' -x step[0-9]?', '', cmd)
         printf("        tdSql.error('%s')" % cmd)
     else:
         printf("        tdSql.query('%s')" % cmd)
 
-def printSqlDescribe(line):
-    cmd = line.split(' ', 1)[1].replace("$", "")
+
+def printSqlDescribe(cmd):
     printf("        tdLog.info('%s')" % cmd)
-    if "-x step" in line:
+    if "-x step" in cmd:
         cmd = re.sub(r' -x step[0-9]?', '', cmd)
         printf("        tdSql.error('%s')" % cmd)
     else:
         printf("        tdSql.query('%s')" % cmd)
 
-def printIfRows(line):
-    expectedRows = line.split(' ')[3]
+
+def printIfRows(cmd):
+    expectedRows = cmd.split(' ')[3]
     printf(
         "        tdLog.info('tdSql.checkRow(%s)')" %
         expectedRows)
     printf("        tdSql.checkRows(%s)" % expectedRows)
 
-def printIfData(line):
-    colAndRow = line.split(' ')[1].replace("$data", "")
+
+def printIfData(cmd):
+    colAndRow = cmd.split(' ')[1].replace("$data", "")
     checkCol = colAndRow[0:1]
     checkRow = colAndRow[1:2]
 
-    if "@" in line:
-        expectedData = re.search('@(.*)@', line).group(1)
+    if "@" in cmd:
+        expectedData = re.search('@(.*)@', cmd).group(1)
         printf(
-            '        tdLog.info("tdSql.checkData(%s, %s, %s)")' % \
+            '        tdLog.info("tdSql.checkData(%s, %s, %s)")' %
             (checkCol, checkRow, expectedData))
 
-        printf('        expectedData = datetime.datetime.strptime("%s", '\
-            '"%%y-%%m-%%d %%H:%%M:%%S.%%f")'% expectedData)
-        printf("        tdSql.checkData(%s, %s, %s)" % \
-            (checkCol, checkRow, "expectedData"))
+        printf('        expectedData = datetime.datetime.strptime("%s", '
+               '"%%y-%%m-%%d %%H:%%M:%%S.%%f")' % expectedData)
+        printf("        tdSql.checkData(%s, %s, %s)" %
+               (checkCol, checkRow, "expectedData"))
     else:
-        expectedData = line.split(' ')[3]
+        expectedData = cmd.split(' ')[3]
         printf(
-            "        tdLog.info('tdSql.checkData(%s, %s, %s)')" % \
+            "        tdLog.info('tdSql.checkData(%s, %s, %s)')" %
             (checkCol, checkRow, expectedData))
 
         if (expectedData.lower() == "null"):
-            printf("        tdSql.checkData(%s, %s, %s)" % \
-                (checkCol, checkRow, "None"))
+            printf("        tdSql.checkData(%s, %s, %s)" %
+                   (checkCol, checkRow, "None"))
         else:
-            printf("        tdSql.checkData(%s, %s, %s)" % \
-                (checkCol, checkRow, expectedData))
+            printf("        tdSql.checkData(%s, %s, %s)" %
+                   (checkCol, checkRow, expectedData))
+
 
 if __name__ == "__main__":
     origin = False
@@ -164,28 +177,40 @@ if __name__ == "__main__":
             if (origin):
                 printf("        #TSIM: %s" % line)
 
+            if (line.find("$i =") == 0):
+                i = int(line.split()[-1])
+                tb = "tb" + str(i)
+                db = "db" + str(i)
+
             if (line.find("print") == 0):
                 printf("        tdLog.info('%s')" % line.split(' ', 1)[1])
 
             if (line.find("sql create table") == 0):
+                line = line.split(' ', 1)[1].replace("$tb", tb)
                 printCreateTable(line)
 
-            if (line.find("sql insert") == 0):
-                printInsert(line)
-
             if (line.find("sql_error") == 0):
+                line = line.split(' ', 1)[1].replace("$tb", tb)
                 printSqlError(line)
 
+            if ((line.find("sql ") == 0) and (line.find("insert") != -1)):
+                line = line.split(' ', 1)[1].replace("$tb", tb)
+                printInsert(line)
+
             if (line.find("sql select") == 0):
+                line = line.split(' ', 1)[1].replace("$tb", tb)
                 printSqlSelect(line)
 
             if (line.find("sql drop ") == 0):
+                line = line.split(' ', 1)[1].replace("$", "")
                 printSqlDrop(line)
 
             if (line.find("sql show") == 0):
+                line = line.split(' ', 1)[1].replace("$tb", tb)
                 printSqlShow(line)
 
             if (line.find("sql describe") == 0):
+                line = line.split(' ', 1)[1].replace("$tb", tb)
                 printSqlDescribe(line)
 
             if (line.find("if $rows") == 0):
