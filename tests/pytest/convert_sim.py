@@ -74,9 +74,12 @@ if __name__ == "__main__":
 
             if (line.find("sql create table") == 0):
                 cmd = line.split(' ', 1)[1].replace("$", "")
-                cmd = re.sub(r' -x step[0-9]?', '', cmd)
                 printf("        tdLog.info('%s')" % cmd)
-                printf("        tdSql.execute('%s')" % cmd)
+                if "-x step" in line:
+                    cmd = re.sub(r' -x step[0-9]?', '', cmd)
+                    printf("        tdSql.error('%s')" % cmd)
+                else:
+                    printf("        tdSql.execute('%s')" % cmd)
 
             if (line.find("sql insert") == 0):
                 cmd = line.split(' ', 1)[1].replace("$", "")
@@ -102,7 +105,7 @@ if __name__ == "__main__":
                 else:
                     printf("        tdSql.query('%s')" % cmd)
 
-            if (line.find("sql drop database") == 0):
+            if (line.find("sql drop ") == 0):
                 cmd = line.split(' ', 1)[1].replace("$", "")
                 printf("        tdLog.info('%s')" % cmd)
                 if "-x step" in line:
@@ -112,6 +115,15 @@ if __name__ == "__main__":
                     printf("        tdSql.execute('%s')" % cmd)
 
             if (line.find("sql show") == 0):
+                cmd = line.split(' ', 1)[1].replace("$", "")
+                printf("        tdLog.info('%s')" % cmd)
+                if "-x step" in line:
+                    cmd = re.sub(r' -x step[0-9]?', '', cmd)
+                    printf("        tdSql.error('%s')" % cmd)
+                else:
+                    printf("        tdSql.query('%s')" % cmd)
+
+            if (line.find("sql describe") == 0):
                 cmd = line.split(' ', 1)[1].replace("$", "")
                 printf("        tdLog.info('%s')" % cmd)
                 if "-x step" in line:
