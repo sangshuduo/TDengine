@@ -149,8 +149,11 @@ if __name__ == "__main__":
                     printf(
                         '        tdLog.info("tdSql.checkData(%s, %s, %s)")' % \
                         (checkCol, checkRow, expectedData))
+
+                    printf('        expectedData = datetime.datetime.strptime("%s", '\
+                                         '"%%y-%%m-%%d %%H:%%M:%%S.%%f")'% expectedData)
                     printf("        tdSql.checkData(%s, %s, %s)" % \
-                        (checkCol, checkRow, expectedData))
+                        (checkCol, checkRow, "expectedData"))
                 else:
                     expectedData = line.split(' ')[3]
                     printf(
