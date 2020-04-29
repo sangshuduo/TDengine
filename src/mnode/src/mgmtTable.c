@@ -74,6 +74,7 @@ static void mgmtProcessTableCfgMsg(SRpcMsg *rpcMsg);
 static void mgmtProcessTableMetaMsg(SQueuedMsg *queueMsg);
 static void mgmtGetSuperTableMeta(SQueuedMsg *pMsg);
 static void mgmtGetChildTableMeta(SQueuedMsg *pMsg);
+static void mgmtAutoCreateChildTable(SQueuedMsg *pMsg);
 
 static void mgmtProcessAlterTableMsg(SQueuedMsg *queueMsg);
 static void mgmtProcessAlterTableRsp(SRpcMsg *rpcMsg);
@@ -430,8 +431,8 @@ static int32_t mgmtSuperTableActionUpdate(SSdbOper *pOper) {
     void *oldSchema = pTable->schema;
     memcpy(pTable, pNew, pOper->rowSize);
     pTable->schema = pNew->schema;
-    free(pNew);
     free(pNew->vgList);
+    free(pNew);
     free(oldSchema);
   }
 
@@ -612,22 +613,25 @@ static void mgmtExtractTableName(char* tableId, char* name) {
 static void mgmtProcessCreateTableMsg(SQueuedMsg *pMsg) {
   SCMCreateTableMsg *pCreate = pMsg->pCont;
   
-  pMsg->pTable = mgmtGetTable(pCreate->tableId);
+  if (pMsg->pDb == NULL) pMsg->pDb = mgmtGetDb(pCreate->db);
+  if (pMsg->pDb == NULL || pMsg->pDb->status != TSDB_DB_STATUS_READY) {
+    mError("table:%s, failed to create, db not selected", pCreate->tableId);
+    mgmtSendSimpleResp(pMsg->thandle, TSDB_CODE_DB_NOT_SELECTED);
+    return;
+  }
+
+  if (pMsg->pTable == NULL) pMsg->pTable = mgmtGetTable(pCreate->tableId);
   if (pMsg->pTable != NULL && pMsg->retry == 0) {
-    if (pCreate->igExists) {
+    if (pCreate->getMeta) {
+      mTrace("table:%s, continue to get meta", pCreate->tableId);
+      mgmtGetChildTableMeta(pMsg);
+    } else if (pCreate->igExists) {
       mTrace("table:%s, is already exist", pCreate->tableId);
       mgmtSendSimpleResp(pMsg->thandle, TSDB_CODE_SUCCESS);
     } else {
       mError("table:%s, failed to create, table already exist", pCreate->tableId);
       mgmtSendSimpleResp(pMsg->thandle, TSDB_CODE_TABLE_ALREADY_EXIST);
     }
-    return;
-  }
-
-  pMsg->pDb = mgmtGetDb(pCreate->db);
-  if (pMsg->pDb == NULL || pMsg->pDb->status != TSDB_DB_STATUS_READY) {
-    mError("table:%s, failed to create, db not selected", pCreate->tableId);
-    mgmtSendSimpleResp(pMsg->thandle, TSDB_CODE_DB_NOT_SELECTED);
     return;
   }
 
@@ -642,7 +646,7 @@ static void mgmtProcessCreateTableMsg(SQueuedMsg *pMsg) {
 
 static void mgmtProcessDropTableMsg(SQueuedMsg *pMsg) {
   SCMDropTableMsg *pDrop = pMsg->pCont;
-  pMsg->pDb = mgmtGetDbByTableId(pDrop->tableId);
+  if (pMsg->pDb == NULL) pMsg->pDb = mgmtGetDbByTableId(pDrop->tableId);
   if (pMsg->pDb == NULL || pMsg->pDb->status != TSDB_DB_STATUS_READY) {
     mError("table:%s, failed to drop table, db not selected", pDrop->tableId);
     mgmtSendSimpleResp(pMsg->thandle, TSDB_CODE_DB_NOT_SELECTED);
@@ -655,8 +659,8 @@ static void mgmtProcessDropTableMsg(SQueuedMsg *pMsg) {
     return;
   }
 
-  pMsg->pTable = mgmtGetTable(pDrop->tableId);
-  if (pMsg->pTable  == NULL) {
+  if (pMsg->pTable == NULL) pMsg->pTable = mgmtGetTable(pDrop->tableId);
+  if (pMsg->pTable == NULL) {
     if (pDrop->igNotExists) {
       mTrace("table:%s, table is not exist, think drop success", pDrop->tableId);
       mgmtSendSimpleResp(pMsg->thandle, TSDB_CODE_SUCCESS);
@@ -679,17 +683,24 @@ static void mgmtProcessDropTableMsg(SQueuedMsg *pMsg) {
 
 static void mgmtProcessTableMetaMsg(SQueuedMsg *pMsg) {
   SCMTableInfoMsg *pInfo = pMsg->pCont;
-  mTrace("table:%s, table meta msg is received from thandle:%p", pInfo->tableId, pMsg->thandle);
+  pInfo->createFlag = htons(pInfo->createFlag);
+  mTrace("table:%s, table meta msg is received from thandle:%p, createFlag:%d", pInfo->tableId, pMsg->thandle, pInfo->createFlag);
 
-  pMsg->pDb = mgmtGetDbByTableId(pInfo->tableId);
+  if (pMsg->pDb == NULL) pMsg->pDb = mgmtGetDbByTableId(pInfo->tableId);
   if (pMsg->pDb == NULL || pMsg->pDb->status != TSDB_DB_STATUS_READY) {
     mError("table:%s, failed to get table meta, db not selected", pInfo->tableId);
     mgmtSendSimpleResp(pMsg->thandle, TSDB_CODE_DB_NOT_SELECTED);
     return;
   }
 
+  if (pMsg->pTable == NULL) pMsg->pTable = mgmtGetTable(pInfo->tableId);
   if (pMsg->pTable == NULL) {
-    mgmtGetChildTableMeta(pMsg);
+    if (!pInfo->createFlag) {
+      mError("table:%s, failed to get table meta, table not exist", pInfo->tableId);
+      mgmtSendSimpleResp(pMsg->thandle, TSDB_CODE_INVALID_TABLE);
+    } else {
+      mgmtAutoCreateChildTable(pMsg);
+    }
   } else {
     if (pMsg->pTable->type != TSDB_SUPER_TABLE) {
       mgmtGetChildTableMeta(pMsg);
@@ -1230,8 +1241,8 @@ static void mgmtProcessSuperTableVgroupMsg(SQueuedMsg *pMsg) {
       SDnodeObj *pDnode = pVgroup->vnodeGid[vn].pDnode;
       if (pDnode == NULL) break;
 
-      pRsp->vgroups[vg].ipAddr[vn].ip = htonl(pDnode->privateIp);
-      pRsp->vgroups[vg].ipAddr[vn].port = htons(tsDnodeShellPort);
+      strcpy(pRsp->vgroups[vg].ipAddr[vn].fqdn, pDnode->dnodeFqdn);
+      pRsp->vgroups[vg].ipAddr[vn].port = htons(pDnode->dnodePort + TSDB_PORT_DNODESHELL);
       pRsp->vgroups[vg].numOfIps++;
     }
 
@@ -1607,7 +1618,6 @@ static int32_t mgmtSetSchemaFromNormalTable(SSchema *pSchema, SChildTableObj *pT
 static int32_t mgmtDoGetChildTableMeta(SQueuedMsg *pMsg, STableMetaMsg *pMeta) {
   SDbObj *pDb = pMsg->pDb;
   SChildTableObj *pTable = (SChildTableObj *)pMsg->pTable;
-  int8_t usePublicIp = pMsg->usePublicIp;
 
   pMeta->uid       = htobe64(pTable->uid);
   pMeta->sid       = htonl(pTable->sid);
@@ -1637,13 +1647,8 @@ static int32_t mgmtDoGetChildTableMeta(SQueuedMsg *pMsg, STableMetaMsg *pMeta) {
   for (int32_t i = 0; i < pVgroup->numOfVnodes; ++i) {
     SDnodeObj *pDnode = mgmtGetDnode(pVgroup->vnodeGid[i].dnodeId);
     if (pDnode == NULL) break;
-    if (usePublicIp) {
-      pMeta->vgroup.ipAddr[i].ip = htonl(pDnode->publicIp);
-      pMeta->vgroup.ipAddr[i].port = htonl(tsDnodeShellPort);
-    } else {
-      pMeta->vgroup.ipAddr[i].ip = htonl(pDnode->privateIp);
-      pMeta->vgroup.ipAddr[i].port = htonl(tsDnodeShellPort);
-    }
+    strcpy(pMeta->vgroup.ipAddr[i].fqdn, pDnode->dnodeFqdn);
+    pMeta->vgroup.ipAddr[i].port = htons(pDnode->dnodePort + TSDB_PORT_DNODESHELL);
     pMeta->vgroup.numOfIps++;
     mgmtDecDnodeRef(pDnode);
   }
@@ -1654,42 +1659,36 @@ static int32_t mgmtDoGetChildTableMeta(SQueuedMsg *pMsg, STableMetaMsg *pMeta) {
   return TSDB_CODE_SUCCESS;
 }
 
-void mgmtGetChildTableMeta(SQueuedMsg *pMsg) {
-  SChildTableObj *pTable = (SChildTableObj *)pMsg->pTable;
+static void mgmtAutoCreateChildTable(SQueuedMsg *pMsg) {
   SCMTableInfoMsg *pInfo = pMsg->pCont;
-  
-  if (pTable == NULL) {
-    if (htons(pInfo->createFlag) != 1) {
-      mError("table:%s, failed to get table meta, table not exist", pInfo->tableId);
-      mgmtSendSimpleResp(pMsg->thandle, TSDB_CODE_INVALID_TABLE);
-      return;
-    } else {
-      //TODO: on demand create table from super table if table does not exists
-      int32_t contLen = sizeof(SCMCreateTableMsg) + sizeof(STagData);
-      SCMCreateTableMsg *pCreateMsg = rpcMallocCont(contLen);
-      if (pCreateMsg == NULL) {
-        mError("table:%s, failed to create table while get meta info, no enough memory", pInfo->tableId);
-        mgmtSendSimpleResp(pMsg->thandle, TSDB_CODE_SERV_OUT_OF_MEMORY);
-        return;
-      }
-      memcpy(pCreateMsg->schema, pInfo->tags, sizeof(STagData));
-      strncpy(pCreateMsg->tableId, pInfo->tableId, tListLen(pInfo->tableId));
-
-      SQueuedMsg *newMsg = malloc(sizeof(SQueuedMsg));
-      memcpy(newMsg, pMsg, sizeof(SQueuedMsg));
-      pMsg->pCont = NULL;
-
-      newMsg->ahandle = newMsg->pCont;
-      newMsg->pCont = pCreateMsg;
-      mTrace("table:%s, start to create in demand", pInfo->tableId);
-      mgmtAddToShellQueue(newMsg);
-      return;
-    }
+  int32_t contLen = sizeof(SCMCreateTableMsg) + sizeof(STagData);
+  SCMCreateTableMsg *pCreateMsg = rpcMallocCont(contLen);
+  if (pCreateMsg == NULL) {
+    mError("table:%s, failed to create table while get meta info, no enough memory", pInfo->tableId);
+    mgmtSendSimpleResp(pMsg->thandle, TSDB_CODE_SERV_OUT_OF_MEMORY);
+    return;
   }
 
+  strncpy(pCreateMsg->tableId, pInfo->tableId, tListLen(pInfo->tableId));
+  strcpy(pCreateMsg->db, pMsg->pDb->name);
+  pCreateMsg->igExists = 1;
+  pCreateMsg->getMeta = 1;
+  pCreateMsg->contLen = htonl(contLen);
+  memcpy(pCreateMsg->schema, pInfo->tags, sizeof(STagData));
+
+  SQueuedMsg *newMsg = mgmtCloneQueuedMsg(pMsg);
+  pMsg->pCont = newMsg->pCont;
+  newMsg->msgType = TSDB_MSG_TYPE_CM_CREATE_TABLE;
+  newMsg->pCont = pCreateMsg;
+
+  mTrace("table:%s, start to create on demand", pInfo->tableId);
+  mgmtAddToShellQueue(newMsg);
+}
+
+static void mgmtGetChildTableMeta(SQueuedMsg *pMsg) { 
   STableMetaMsg *pMeta = rpcMallocCont(sizeof(STableMetaMsg) + sizeof(SSchema) * TSDB_MAX_COLUMNS);
   if (pMeta == NULL) {
-    mError("table:%s, failed to get table meta, no enough memory", pTable->info.tableId);
+    mError("table:%s, failed to get table meta, no enough memory", pMsg->pTable->tableId);
     mgmtSendSimpleResp(pMsg->thandle, TSDB_CODE_SERV_OUT_OF_MEMORY);
     return;
   }
@@ -1799,8 +1798,8 @@ static void mgmtProcessTableCfgMsg(SRpcMsg *rpcMsg) {
     mgmtDecTableRef(pTable);
     return;
   }
-
-  SRpcIpSet ipSet = mgmtGetIpSetFromIp(pCfg->dnode);
+  SDnodeObj *pDnode = mgmtGetDnode(pCfg->dnode);
+  SRpcIpSet ipSet = mgmtGetIpSetFromIp(pDnode->dnodeEp);
   SRpcMsg rpcRsp = {
       .handle  = NULL,
       .pCont   = pMDCreate,
@@ -1893,9 +1892,10 @@ static void mgmtProcessCreateChildTableRsp(SRpcMsg *rpcMsg) {
   } else {
     mTrace("table:%s, created in dnode, thandle:%p result:%s", pTable->info.tableId, queueMsg->thandle,
            tstrerror(rpcMsg->code));
-
-    if (queueMsg->msgType != TSDB_MSG_TYPE_CM_CREATE_TABLE) {
-      mTrace("table:%s, start to get meta", pTable->info.tableId);
+    SCMCreateTableMsg *pCreate = queueMsg->pCont;
+    if (pCreate->getMeta) {
+      mTrace("table:%s, continue to get meta", pTable->info.tableId);
+      queueMsg->retry = 0;
       mgmtAddToShellQueue(queueMsg);
     } else {
       mgmtSendSimpleResp(queueMsg->thandle, rpcMsg->code);
