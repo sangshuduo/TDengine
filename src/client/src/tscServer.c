@@ -86,8 +86,11 @@ void tscSetMgmtIpListFromEdge() {
 }
 
 void tscUpdateIpSet(void *ahandle, SRpcIpSet *pIpSet) {
-  tscTrace("mgmt IP list is changed for ufp is called");
   tscMgmtIpSet = *pIpSet;
+  tscTrace("mgmt IP list is changed for ufp is called, numOfIps:%d inUse:%d", tscMgmtIpSet.numOfIps, tscMgmtIpSet.inUse);
+  for (int32_t i = 0; i < tscMgmtIpSet.numOfIps; ++i) {
+    tscTrace("index:%d fqdn:%s port:%d", i, tscMgmtIpSet.fqdn[i], tscMgmtIpSet.port[i]);
+  }
 }
 
 void tscSetMgmtIpList(SRpcIpSet *pIpList) {
@@ -138,7 +141,7 @@ void tscProcessHeartBeatRsp(void *param, TAOS_RES *tres, int code) {
       if (pRsp->streamId) tscKillStream(pObj, htonl(pRsp->streamId));
     }
   } else {
-    tscTrace("heart beat failed, code:%d", code);
+    tscTrace("heart beat failed, code:%s", tstrerror(code));
   }
 
   taosTmrReset(tscProcessActivityTimer, tsShellActivityTimer * 500, pObj, tscTmr, &pObj->pTimer);
@@ -228,7 +231,11 @@ int tscSendMsgToServer(SSqlObj *pSql) {
 
 void tscProcessMsgFromServer(SRpcMsg *rpcMsg) {
   SSqlObj *pSql = (SSqlObj *)rpcMsg->handle;
-  if (pSql == NULL || pSql->signature != pSql) {
+  if (pSql == NULL) {
+    tscError("%p sql is already released", pSql->signature);
+    return;
+  }
+  if (pSql->signature != pSql) {
     tscError("%p sql is already released, signature:%p", pSql, pSql->signature);
     return;
   }
@@ -310,7 +317,7 @@ void tscProcessMsgFromServer(SRpcMsg *rpcMsg) {
     pRes->rspType = rpcMsg->msgType;
     pRes->rspLen  = rpcMsg->contLen;
 
-    if (pRes->rspLen > 0) {
+    if (pRes->rspLen > 0 && rpcMsg->pCont) {
       char *tmp = (char *)realloc(pRes->pRsp, pRes->rspLen);
       if (tmp == NULL) {
         pRes->code = TSDB_CODE_CLI_OUT_OF_MEMORY;
