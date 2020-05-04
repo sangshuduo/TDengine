@@ -32,6 +32,13 @@ extern "C" {
 #define TSKEY int64_t
 #endif
 
+// ----------------- For variable data types such as TSDB_DATA_TYPE_BINARY and TSDB_DATA_TYPE_NCHAR
+typedef int32_t VarDataOffsetT;
+typedef int16_t VarDataLenT;
+#define varDataLen(v) ((VarDataLenT *)(v))[0]
+#define varDataTLen(v) (sizeof(VarDataLenT) + varDataLen(v))
+#define varDataVal(v) ((void *)((char *)v + sizeof(VarDataLenT)))
+
 // this data type is internally used only in 'in' query to hold the values
 #define TSDB_DATA_TYPE_ARRAY      (TSDB_DATA_TYPE_NCHAR + 1)
 
@@ -121,6 +128,10 @@ typedef struct tDataTypeDescriptor {
   int16_t nameLen;
   int32_t nSize;
   char *  aName;
+  int (*compFunc)(const char *const input, int inputSize, const int nelements, char *const output, int outputSize,
+                  char algorithm, char *const buffer, int bufferSize);
+  int (*decompFunc)(const char *const input, int compressedSize, const int nelements, char *const output,
+                    int outputSize, char algorithm, char *const buffer, int bufferSize);
 } tDataTypeDescriptor;
 
 extern tDataTypeDescriptor tDataTypeDesc[11];
@@ -323,6 +334,11 @@ void tsDataSwap(void *pLeft, void *pRight, int32_t type, int32_t size);
 #define TSDB_PORT_DNODEMNODE 10
 #define TSDB_PORT_MNODEDNODE 15 
 #define TSDB_PORT_SYNC 20
+
+#define TAOS_QTYPE_RPC      0
+#define TAOS_QTYPE_FWD      1
+#define TAOS_QTYPE_WAL      2 
+#define TAOS_QTYPE_CQ       3
 
 typedef enum {
   TSDB_PRECISION_MILLI,

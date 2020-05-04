@@ -5,6 +5,9 @@
 #include "tsdb.h"
 #include "tsdbMain.h"
 #include "tscompression.h"
+#include "tchecksum.h"
+
+int tsdbDebugFlag = 135;
 
 #define TSDB_DEFAULT_PRECISION TSDB_PRECISION_MILLI  // default precision
 #define IS_VALID_PRECISION(precision) (((precision) >= TSDB_PRECISION_MILLI) && ((precision) <= TSDB_PRECISION_NANO))
@@ -157,7 +160,7 @@ static int tsdbRestoreInfo(STsdbRepo *pRepo) {
   tsdbInitFileGroupIter(pFileH, &iter, TSDB_ORDER_ASC);
   while ((pFGroup = tsdbGetFileGroupNext(&iter)) != NULL) {
     if (tsdbSetAndOpenHelperFile(&rhelper, pFGroup) < 0) goto _err;
-    for (int i = 0; i < pRepo->config.maxTables; i++) {
+    for (int i = 1; i < pRepo->config.maxTables; i++) {
       STable *  pTable = pMeta->tables[i];
       SCompIdx *pIdx = &rhelper.pCompIdx[i];
 
@@ -202,7 +205,7 @@ TsdbRepoT *tsdbOpenRepo(char *tsdbDir, STsdbAppH *pAppH) {
     return NULL;
   }
 
-  pRepo->tsdbCache = tsdbInitCache(-1, -1, (TsdbRepoT *)pRepo);
+  pRepo->tsdbCache = tsdbInitCache(pRepo->config.cacheBlockSize, pRepo->config.totalBlocks, (TsdbRepoT *)pRepo);
   if (pRepo->tsdbCache == NULL) {
     tsdbFreeMeta(pRepo->tsdbMeta);
     free(pRepo->rootDir);
@@ -259,7 +262,7 @@ int32_t tsdbCloseRepo(TsdbRepoT *repo) {
   }
   pRepo->commit = 1;
   // Loop to move pData to iData
-  for (int i = 0; i < pRepo->config.maxTables; i++) {
+  for (int i = 1; i < pRepo->config.maxTables; i++) {
     STable *pTable = pRepo->tsdbMeta->tables[i];
     if (pTable != NULL && pTable->mem != NULL) {
       pTable->imem = pTable->mem;
@@ -312,7 +315,7 @@ int32_t tsdbTriggerCommit(TsdbRepoT *repo) {
   }
   pRepo->commit = 1;
   // Loop to move pData to iData
-  for (int i = 0; i < pRepo->config.maxTables; i++) {
+  for (int i = 1; i < pRepo->config.maxTables; i++) {
     STable *pTable = pRepo->tsdbMeta->tables[i];
     if (pTable != NULL && pTable->mem != NULL) {
       pTable->imem = pTable->mem;
@@ -832,7 +835,7 @@ static int tsdbReadRowsFromCache(SSkipListIterator *pIter, TSKEY maxKey, int max
 static void tsdbDestroyTableIters(SSkipListIterator **iters, int maxTables) {
   if (iters == NULL) return;
 
-  for (int tid = 0; tid < maxTables; tid++) {
+  for (int tid = 1; tid < maxTables; tid++) {
     if (iters[tid] == NULL) continue;
     tSkipListDestroyIter(iters[tid]);
   }
@@ -844,7 +847,7 @@ static SSkipListIterator **tsdbCreateTableIters(STsdbMeta *pMeta, int maxTables)
   SSkipListIterator **iters = (SSkipListIterator **)calloc(maxTables, sizeof(SSkipListIterator *));
   if (iters == NULL) return NULL;
 
-  for (int tid = 0; tid < maxTables; tid++) {
+  for (int tid = 1; tid < maxTables; tid++) {
     STable *pTable = pMeta->tables[tid];
     if (pTable == NULL || pTable->imem == NULL) continue;
 
@@ -911,7 +914,7 @@ _exit:
   free(pCache->imem);
   pCache->imem = NULL;
   pRepo->commit = 0;
-  for (int i = 0; i < pCfg->maxTables; i++) {
+  for (int i = 1; i < pCfg->maxTables; i++) {
     STable *pTable = pMeta->tables[i];
     if (pTable && pTable->imem) {
       tsdbFreeMemTable(pTable->imem);
@@ -945,7 +948,7 @@ static int tsdbCommitToFile(STsdbRepo *pRepo, int fid, SSkipListIterator **iters
   if (tsdbSetAndOpenHelperFile(pHelper, pGroup) < 0) goto _err;
 
   // Loop to commit data in each table
-  for (int tid = 0; tid < pCfg->maxTables; tid++) {
+  for (int tid = 1; tid < pCfg->maxTables; tid++) {
     STable *           pTable = pMeta->tables[tid];
     if (pTable == NULL) continue;
 
@@ -983,7 +986,6 @@ static int tsdbCommitToFile(STsdbRepo *pRepo, int fid, SSkipListIterator **iters
 
     // Write the SCompBlock part
     if (tsdbWriteCompInfo(pHelper) < 0) goto _err;
- 
   }
 
   if (tsdbWriteCompIdx(pHelper) < 0) goto _err;

@@ -20,15 +20,10 @@ system sh/cfg.sh -n dnode2 -c statusInterval -v 1
 system sh/cfg.sh -n dnode3 -c statusInterval -v 1
 system sh/cfg.sh -n dnode4 -c statusInterval -v 1
 
-system sh/cfg.sh -n dnode1 -c balanceMonitorInterval -v 1
-system sh/cfg.sh -n dnode2 -c balanceMonitorInterval -v 1
-system sh/cfg.sh -n dnode3 -c balanceMonitorInterval -v 1
-system sh/cfg.sh -n dnode4 -c balanceMonitorInterval -v 1
-
-system sh/cfg.sh -n dnode1 -c balanceStartInterval -v 10
-system sh/cfg.sh -n dnode2 -c balanceStartInterval -v 10
-system sh/cfg.sh -n dnode3 -c balanceStartInterval -v 10
-system sh/cfg.sh -n dnode4 -c balanceStartInterval -v 10
+system sh/cfg.sh -n dnode1 -c balanceInterval -v 10
+system sh/cfg.sh -n dnode2 -c balanceInterval -v 10
+system sh/cfg.sh -n dnode3 -c balanceInterval -v 10
+system sh/cfg.sh -n dnode4 -c balanceInterval -v 10
 
 system sh/cfg.sh -n dnode1 -c clog -v 1
 system sh/cfg.sh -n dnode2 -c clog -v 1
@@ -173,7 +168,7 @@ if $dnode2Vnodes != null then
 endi
 
 print =============== step4 start dnode2
-sql create dnode 192.168.0.2
+sql create dnode $hostname2
 system sh/exec.sh -n dnode2 -s start
 sleep 8000
 
@@ -202,7 +197,7 @@ system sh/exec.sh -n dnode1 -s stop
 print stop dnode1 and sleep 10000
 sleep 10000
 
-sql drop dnode 192.168.0.1
+sql drop dnode $hostname1
 print drop dnode1 and sleep 9000
 sleep 9000
 

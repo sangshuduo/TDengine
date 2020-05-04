@@ -29,13 +29,14 @@
 int32_t balanceInit() { return TSDB_CODE_SUCCESS; }
 void    balanceCleanUp() {}
 void    balanceNotify() {}
+void    balanceUpdateMgmt() {}
 void    balanceReset() {}
 
 int32_t balanceAllocVnodes(SVgObj *pVgroup) {
   void *     pNode = NULL;
   SDnodeObj *pDnode = NULL;
   SDnodeObj *pSelDnode = NULL;
-  float      vnodeUsage = 1.0;
+  float      vnodeUsage = 1000.0;
 
   while (1) {
     pNode = mgmtGetNextDnode(pNode, &pDnode);

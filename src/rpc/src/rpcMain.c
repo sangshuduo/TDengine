@@ -217,7 +217,7 @@ void *rpcOpen(const SRpcInit *pInit) {
   pRpc->numOfThreads = pInit->numOfThreads>TSDB_MAX_RPC_THREADS ? TSDB_MAX_RPC_THREADS:pInit->numOfThreads;
   pRpc->localPort = pInit->localPort;
   pRpc->afp = pInit->afp;
-  pRpc->sessions = pInit->sessions;
+  pRpc->sessions = pInit->sessions+1;
   if (pInit->user) strcpy(pRpc->user, pInit->user);
   if (pInit->secret) strcpy(pRpc->secret, pInit->secret);
   if (pInit->ckey) strcpy(pRpc->ckey, pInit->ckey);
@@ -245,7 +245,7 @@ void *rpcOpen(const SRpcInit *pInit) {
     return NULL;
   }
 
-  pRpc->idPool = taosInitIdPool(pRpc->sessions);
+  pRpc->idPool = taosInitIdPool(pRpc->sessions-1);
   if (pRpc->idPool == NULL) {
     tError("%s failed to init ID pool", pRpc->label);
     rpcClose(pRpc);
@@ -613,11 +613,13 @@ static SRpcConn *rpcAllocateServerConn(SRpcInfo *pRpc, SRecvInfo *pRecv) {
     pConn->tranId = (uint16_t)(rand() & 0xFFFF);
     pConn->ownId = htonl(pConn->sid);
     pConn->linkUid = pHead->linkUid;
-    if (pRpc->afp && (*pRpc->afp)(pConn->user, &pConn->spi, &pConn->encrypt, pConn->secret, pConn->ckey) < 0) {
-      tWarn("%s %p, user not there", pRpc->label, pConn);
-      taosFreeId(pRpc->idPool, sid);   // sid shall be released
-      terrno = TSDB_CODE_INVALID_USER;
-      pConn = NULL;
+    if (pRpc->afp) {
+      terrno = (*pRpc->afp)(pConn->user, &pConn->spi, &pConn->encrypt, pConn->secret, pConn->ckey);
+      if (terrno != 0) {
+        tWarn("%s %p, user not there or server not ready", pRpc->label, pConn);
+        taosFreeId(pRpc->idPool, sid);   // sid shall be released
+        pConn = NULL;
+      }
     }
   }      
 
@@ -643,9 +645,16 @@ static SRpcConn *rpcGetConnObj(SRpcInfo *pRpc, int sid, SRecvInfo *pRecv) {
 
   if (sid) {
     pConn = pRpc->connList + sid;
-  } else {
-    pConn = rpcAllocateServerConn(pRpc, pRecv);
+    if (pConn->user[0] == 0) pConn = NULL;
   } 
+
+  if (pConn == NULL) { 
+    if (pRpc->connType == TAOS_CONN_SERVER) {
+      pConn = rpcAllocateServerConn(pRpc, pRecv);
+    } else {
+      terrno = TSDB_CODE_UNEXPECTED_RESPONSE;
+    }
+  }
 
   if (pConn) {
     if (pConn->linkUid != pHead->linkUid) {
@@ -784,14 +793,7 @@ static SRpcConn *rpcProcessMsgHead(SRpcInfo *pRpc, SRecvInfo *pRecv) {
   sid = pConn->sid;
 
   pConn->chandle = pRecv->chandle;
-  if (pConn->peerIp != pRecv->ip) {
-    pConn->peerIp = pRecv->ip;
-    char ipstr[20] = {0};
-    tinet_ntoa(ipstr, pRecv->ip);
-    strcpy(pConn->peerFqdn, ipstr);
-  }
-  
-  if (pRecv->port) pConn->peerPort = pRecv->port;
+  if (pConn->peerPort == 0) pConn->peerPort = pRecv->port;
   if (pHead->port) pConn->peerPort = htons(pHead->port); 
 
   terrno = rpcCheckAuthentication(pConn, (char *)pHead, pRecv->msgLen);
@@ -1137,7 +1139,7 @@ static void rpcProcessRetryTimer(void *param, void *tmrId) {
     pConn->retry++;
 
     if (pConn->retry < 4) {
-      tTrace("%s %p, re-send msg:%s to %s:%hud", pRpc->label, pConn, 
+      tTrace("%s %p, re-send msg:%s to %s:%hu", pRpc->label, pConn, 
              taosMsg[pConn->outType], pConn->peerFqdn, pConn->peerPort);
       rpcSendMsgToPeer(pConn, pConn->pReqMsg, pConn->reqMsgLen);      
       taosTmrReset(rpcProcessRetryTimer, tsRpcTimer, pConn, pRpc->tmrCtrl, &pConn->pTimer);
@@ -1333,7 +1335,8 @@ static int rpcCheckAuthentication(SRpcConn *pConn, char *msg, int msgLen) {
   if ( !rpcIsReq(pHead->msgType) ) {
     // for response, if code is auth failure, it shall bypass the auth process
     code = htonl(pHead->code);
-    if (code==TSDB_CODE_INVALID_TIME_STAMP || code==TSDB_CODE_AUTH_FAILURE || code==TSDB_CODE_INVALID_USER) {
+    if (code==TSDB_CODE_INVALID_TIME_STAMP || code==TSDB_CODE_AUTH_FAILURE || 
+        code==TSDB_CODE_INVALID_USER || code == TSDB_CODE_NOT_READY) {
       pHead->msgLen = (int32_t)htonl((uint32_t)pHead->msgLen);
       return 0;
     } 
