@@ -7,6 +7,8 @@
 #include "tscompression.h"
 #include "tchecksum.h"
 
+int tsdbDebugFlag = 135;
+
 #define TSDB_DEFAULT_PRECISION TSDB_PRECISION_MILLI  // default precision
 #define IS_VALID_PRECISION(precision) (((precision) >= TSDB_PRECISION_MILLI) && ((precision) <= TSDB_PRECISION_NANO))
 #define TSDB_DEFAULT_COMPRESSION TWO_STAGE_COMP
@@ -610,10 +612,6 @@ static int32_t tsdbCheckAndSetDefaultCfg(STsdbCfg *pCfg) {
   } else {
     if (pCfg->maxTables < TSDB_MIN_TABLES || pCfg->maxTables > TSDB_MAX_TABLES) return -1;
   }
-
-  // Since tableId starts from 1, we increase maxTables by 1
-  // TODO: take a fancier way to do this
-  pCfg->maxTables++;
 
   // Check daysPerFile
   if (pCfg->daysPerFile == -1) {
