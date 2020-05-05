@@ -47,6 +47,7 @@ matrix:
 
           cd ${TRAVIS_BUILD_DIR}/tests
           ./test-all.sh $TRAVIS_EVENT_TYPE || travis_terminate $?
+          rm -rf ${TRAVIS_BUILD_DIR}/sim
 
           cd ${TRAVIS_BUILD_DIR}/tests/pytest
           ./smoketest.sh -g 2>&1 | tee mem-error-out.txt
