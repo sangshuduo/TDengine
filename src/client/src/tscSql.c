@@ -65,8 +65,9 @@ STscObj *taosConnectImpl(const char *ip, const char *user, const char *pass, con
     terrno = TSDB_CODE_INVALID_PASS;
     return NULL;
   }
-
-  if (tscInitRpc(user, pass) != 0) {
+  
+  void *pDnodeConn = NULL;
+  if (tscInitRpc(user, pass, &pDnodeConn) != 0) {
     terrno = TSDB_CODE_NETWORK_UNAVAIL;
     return NULL;
   }
@@ -93,6 +94,7 @@ STscObj *taosConnectImpl(const char *ip, const char *user, const char *pass, con
   STscObj *pObj = (STscObj *)calloc(1, sizeof(STscObj));
   if (NULL == pObj) {
     terrno = TSDB_CODE_CLI_OUT_OF_MEMORY;
+    rpcClose(pDnodeConn);
     return NULL;
   }
 
@@ -106,8 +108,9 @@ STscObj *taosConnectImpl(const char *ip, const char *user, const char *pass, con
     int32_t len = strlen(db);
     /* db name is too long */
     if (len > TSDB_DB_NAME_LEN) {
-      free(pObj);
       terrno = TSDB_CODE_INVALID_DB;
+      rpcClose(pDnodeConn);
+      free(pObj);
       return NULL;
     }
 
@@ -123,6 +126,7 @@ STscObj *taosConnectImpl(const char *ip, const char *user, const char *pass, con
   SSqlObj *pSql = (SSqlObj *)calloc(1, sizeof(SSqlObj));
   if (NULL == pSql) {
     terrno = TSDB_CODE_CLI_OUT_OF_MEMORY;
+    rpcClose(pDnodeConn);
     free(pObj);
     return NULL;
   }
@@ -134,6 +138,8 @@ STscObj *taosConnectImpl(const char *ip, const char *user, const char *pass, con
   tsem_init(&pSql->rspSem, 0, 0);
   
   pObj->pSql = pSql;
+  pObj->pDnodeConn = pDnodeConn;
+  
   pSql->fp = fp;
   pSql->param = param;
   if (taos != NULL) {
@@ -143,6 +149,7 @@ STscObj *taosConnectImpl(const char *ip, const char *user, const char *pass, con
   pSql->cmd.command = TSDB_SQL_CONNECT;
   if (TSDB_CODE_SUCCESS != tscAllocPayload(&pSql->cmd, TSDB_DEFAULT_PAYLOAD_SIZE)) {
     terrno = TSDB_CODE_CLI_OUT_OF_MEMORY;
+    rpcClose(pDnodeConn);
     free(pSql);
     free(pObj);
     return NULL;
@@ -592,42 +599,18 @@ void taos_free_result_imp(TAOS_RES *res, int keepCmd) {
 
     tscTrace("%p code:%d, numOfRows:%d, command:%d", pSql, pRes->code, pRes->numOfRows, pCmd->command);
 
-    void *fp = pSql->fp;
-    if (fp != NULL) {
-      pSql->freed = 1;
-    }
-
+    pSql->freed = 1;
     tscProcessSql(pSql);
 
     /*
      *  If release connection msg is sent to vnode, the corresponding SqlObj for async query can not be freed instantly,
      *  since its free operation is delegated to callback function, which is tscProcessMsgFromServer.
      */
-    if (fp == NULL) {
-      /*
-       * fp may be released here, so we cannot use the pSql->fp
-       *
-       * In case of handle sync model query, the main SqlObj cannot be freed.
-       * So, we only free part attributes, including allocated resources and references on metermeta/metricmeta
-       * data in cache.
-       *
-       * Then this object will be reused and no free operation is required.
-       */
-      if (keepCmd) {
-        tscFreeSqlResult(pSql);
-        tscTrace("%p sql result is freed by app while sql command is kept", pSql);
-      } else {
-        tscPartiallyFreeSqlObj(pSql);
-        tscTrace("%p sql result is freed by app", pSql);
-      }
-    } else {  // for async release, remove its link
-      STscObj* pObj = pSql->pTscObj;
-      if (pObj->pSql == pSql) {
-        pObj->pSql = NULL;
-      }
+    STscObj* pObj = pSql->pTscObj;
+    if (pObj->pSql == pSql) {
+      pObj->pSql = NULL;
     }
-  } else {
-    // if no free resource msg is sent to vnode, we free this object immediately.
+  } else { // if no free resource msg is sent to vnode, we free this object immediately.
     STscObj* pTscObj = pSql->pTscObj;
     
     if (pTscObj->pSql != pSql) {

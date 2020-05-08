@@ -191,6 +191,7 @@ void tscProcessActivityTimer(void *handle, void *tmrId) {
 }
 
 int tscSendMsgToServer(SSqlObj *pSql) {
+  STscObj* pObj = pSql->pTscObj;
   SSqlCmd* pCmd = &pSql->cmd;
   
   char *pMsg = rpcMallocCont(pCmd->payloadLen);
@@ -215,7 +216,7 @@ int tscSendMsgToServer(SSqlObj *pSql) {
       .handle  = pSql,
       .code    = 0
   };
-  rpcSendRequest(pDnodeConn, &pSql->ipList, &rpcMsg);
+  rpcSendRequest(pObj->pDnodeConn, &pSql->ipList, &rpcMsg);
 
   return TSDB_CODE_SUCCESS;
 }
@@ -571,14 +572,14 @@ static char *doSerializeTableInfo(SQueryTableMsg* pQueryMsg, SSqlObj *pSql, char
   if (UTIL_TABLE_IS_NOMRAL_TABLE(pTableMetaInfo) || pTableMetaInfo->pVgroupTables == NULL) {
     
     SCMVgroupInfo* pVgroupInfo = NULL;
-    if (UTIL_TABLE_IS_NOMRAL_TABLE(pTableMetaInfo)) {
-      pVgroupInfo = &pTableMeta->vgroupInfo;
-    } else {
+    if (UTIL_TABLE_IS_SUPERTABLE(pTableMetaInfo)) {
       int32_t index = pTableMetaInfo->vgroupIndex;
       assert(index >= 0);
-      
+  
       pVgroupInfo = &pTableMetaInfo->vgroupList->vgroups[index];
       tscTrace("%p query on stable, vgIndex:%d, numOfVgroups:%d", pSql, index, pTableMetaInfo->vgroupList->numOfVgroups);
+    } else {
+      pVgroupInfo = &pTableMeta->vgroupInfo;
     }
     
     tscSetDnodeIpList(pSql, pVgroupInfo);
@@ -2410,7 +2411,7 @@ static int32_t getTableMetaFromMgmt(SSqlObj *pSql, STableMetaInfo *pTableMetaInf
 
   strncpy(pNewMeterMetaInfo->name, pTableMetaInfo->name, tListLen(pNewMeterMetaInfo->name));
   memcpy(pNew->cmd.payload, pSql->cmd.payload, TSDB_DEFAULT_PAYLOAD_SIZE);  // tag information if table does not exists.
-  tscTrace("%p new pSqlObj:%p to get tableMeta", pSql, pNew);
+  tscTrace("%p new pSqlObj:%p to get tableMeta, auto create:%d", pSql, pNew, pNew->cmd.autoCreated);
 
   pNew->fp = tscTableMetaCallBack;
   pNew->param = pSql;

@@ -357,6 +357,7 @@ void tscResetSqlCmdObj(SSqlCmd* pCmd) {
   pCmd->curSql    = NULL;
   pCmd->msgType   = 0;
   pCmd->parseFinished = 0;
+  pCmd->autoCreated = 0;
   
   taosHashCleanup(pCmd->pTableList);
   pCmd->pTableList = NULL;
@@ -760,6 +761,10 @@ void tscCloseTscObj(STscObj* pObj) {
   }
   
   pthread_mutex_destroy(&pObj->mutex);
+  
+  if (pObj->pDnodeConn != NULL) {
+    rpcClose(pObj->pDnodeConn);
+  }
   
   tscTrace("%p DB connection is closed", pObj);
   tfree(pObj);
