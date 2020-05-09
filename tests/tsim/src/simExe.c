@@ -584,7 +584,7 @@ bool simCreateNativeConnect(SScript *script, char *user, char *pass) {
   void *taos = NULL;
   taosMsleep(2000);
   for (int attempt = 0; attempt < 10; ++attempt) {
-    taos = taos_connect(NULL, user, pass, NULL, tsMnodeShellPort);
+    taos = taos_connect(NULL, user, pass, NULL, tsDnodeShellPort);
     if (taos == NULL) {
       simTrace("script:%s, user:%s connect taosd failed:%s, attempt:%d", script->fileName, user, taos_errstr(NULL), attempt);
       taosMsleep(1000);
@@ -688,7 +688,7 @@ bool simExecuteNativeSqlCommand(SScript *script, char *rest, bool isSlow) {
           }
 
           if (row[i] == 0) {
-            strcpy(value, "null");
+            strcpy(value, TSDB_DATA_NULL_STR);
             continue;
           }
 
