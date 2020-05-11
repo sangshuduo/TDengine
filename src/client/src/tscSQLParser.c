@@ -2255,14 +2255,14 @@ int32_t setKillInfo(SSqlObj* pSql, struct SSqlInfo* pInfo) {
   char* portStr = strtok(NULL, &delim);
 
   if (!validateIpAddress(ipStr, strlen(ipStr))) {
-    memset(pCmd->payload, 0, tListLen(pCmd->payload));
+    memset(pCmd->payload, 0, strlen(pCmd->payload));
 
     return invalidSqlErrMsg(tscGetErrorMsgPayload(pCmd), msg1);
   }
 
   uint16_t port = (uint16_t)strtol(portStr, NULL, 10);
   if (port <= 0 || port > 65535) {
-    memset(pCmd->payload, 0, tListLen(pCmd->payload));
+    memset(pCmd->payload, 0, strlen(pCmd->payload));
     return invalidSqlErrMsg(tscGetErrorMsgPayload(pCmd), msg2);
   }
 
@@ -5563,8 +5563,8 @@ int32_t doCheckForCreateFromStable(SSqlObj* pSql, SSqlInfo* pInfo) {
         return invalidSqlErrMsg(tscGetErrorMsgPayload(pCmd), msg3);
       }
       
-      *(VarDataLenT*)tagVal = pList->a[i].pVar.nLen;
-      ret = tVariantDump(&(pList->a[i].pVar), tagVal + VARSTR_HEADER_SIZE, pTagSchema[i].type);
+      ret = tVariantDump(&(pList->a[i].pVar), varDataVal(tagVal), pTagSchema[i].type);
+      varDataSetLen(tagVal, pList->a[i].pVar.nLen);
     } else {
       ret = tVariantDump(&(pList->a[i].pVar), tagVal, pTagSchema[i].type);
     }
@@ -5911,7 +5911,7 @@ int32_t exprTreeFromSqlExpr(tExprNode **pExpr, const tSQLExpr* pSqlExpr, SArray*
   }
   
   if (pSqlExpr->pLeft == NULL) {
-    if (pSqlExpr->nSQLOptr >= TK_TINYINT && pSqlExpr->nSQLOptr <= TK_DOUBLE) {
+    if (pSqlExpr->nSQLOptr >= TK_BOOL && pSqlExpr->nSQLOptr <= TK_STRING) {
       *pExpr = calloc(1, sizeof(tExprNode));
       (*pExpr)->nodeType = TSQL_NODE_VALUE;
       (*pExpr)->pVal = calloc(1, sizeof(tVariant));

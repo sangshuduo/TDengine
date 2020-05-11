@@ -766,7 +766,7 @@ void tscCloseTscObj(STscObj* pObj) {
     rpcClose(pObj->pDnodeConn);
   }
   
-  tscTrace("%p DB connection is closed", pObj);
+  tscTrace("%p DB connection is closed, dnodeConn:%p", pObj, pObj->pDnodeConn);
   tfree(pObj);
 }
 
@@ -1675,10 +1675,7 @@ STableMetaInfo* tscAddTableMetaInfo(SQueryInfo* pQueryInfo, const char* name, ST
   pTableMetaInfo->pTableMeta = pTableMeta;
   
   if (vgroupList != NULL) {
-    assert(vgroupList->numOfVgroups == 1);  // todo fix me
-    
     size_t size = sizeof(SVgroupsInfo) + sizeof(SCMVgroupInfo) * vgroupList->numOfVgroups;
-    
     pTableMetaInfo->vgroupList = malloc(size);
     memcpy(pTableMetaInfo->vgroupList, vgroupList, size);
   }
