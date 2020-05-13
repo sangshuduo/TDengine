@@ -494,7 +494,7 @@ static void doBuildVgroupTableInfo(SArray* res, STableMetaInfo* pTableMetaInfo) 
     STidTags* t1 = taosArrayGet(res, k);
     if (prevVgId != t1->vgId) {
       
-      SVgroupTableInfo info = {0};
+      SVgroupTableInfo info; memset(&info, 0, sizeof(info));
       
       SVgroupsInfo* pvg = pTableMetaInfo->vgroupList;
       for(int32_t m = 0; m < pvg->numOfVgroups; ++m) {
@@ -518,7 +518,7 @@ static void doBuildVgroupTableInfo(SArray* res, STableMetaInfo* pTableMetaInfo) 
   }
   
   if (taosArrayGetSize(vgTableIdItem) > 0) {
-    SVgroupTableInfo info = {0};
+    SVgroupTableInfo info; memset(&info, 0, sizeof(info));
     SVgroupsInfo* pvg = pTableMetaInfo->vgroupList;
     
     for(int32_t m = 0; m < pvg->numOfVgroups; ++m) {
