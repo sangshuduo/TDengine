@@ -44,7 +44,7 @@ class Test:
 
         tdLog.info("insert data to table")
         insertRows = 10
-        tdLog.info("insert %d rows" % (insertRows))
+        tdLog.info("insert %d rows to %s" % (insertRows, self.last_tb))
         for i in range(0, insertRows):
             ret = tdSql.execute(
                 'insert into %s values (now + %dm, %d)' %
@@ -93,7 +93,17 @@ class Test:
     def reset_query_cache(self):
         tdLog.info("reset query cache")
         tdSql.execute("reset query cache")
-        sleep(1)
+        tdLog.sleep(1)
+
+    def reset_database(self):
+        tdLog.info("reset database")
+        tdDnodes.forcestop(1)
+        tdDnodes.deploy(1)
+        self.current_tb = ""
+        self.last_tb = ""
+        self.written = 0
+        tdDnodes.start(1)
+        tdSql.prepare()
 
 class TDTestCase:
     def init(self, conn):
@@ -114,10 +124,11 @@ class TDTestCase:
             6: test.force_restart,
             7: test.drop_table,
             8: test.reset_query_cache,
+            9: test.reset_database,
         }
 
         for x in range(1, 100):
-            r = random.randint(1, 8)
+            r = random.randint(1, 9)
             tdLog.notice("iteration %d run func %d" % (x, r))
             switch.get(r, lambda : "ERROR")()
 
