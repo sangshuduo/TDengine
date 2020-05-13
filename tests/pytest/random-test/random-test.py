@@ -90,6 +90,11 @@ class Test:
             self.last_tb = ""
             self.written = 0
 
+    def reset_query_cache(self):
+        tdLog.info("reset query cache")
+        tdSql.execute("reset query cache")
+        sleep(1)
+
 class TDTestCase:
     def init(self, conn):
         tdLog.debug("start to execute %s" % __file__)
@@ -108,10 +113,11 @@ class TDTestCase:
             5: test.restart_database,
             6: test.force_restart,
             7: test.drop_table,
+            8: test.reset_query_cache,
         }
 
         for x in range(1, 100):
-            r = random.randint(1, 7)
+            r = random.randint(1, 8)
             tdLog.notice("iteration %d run func %d" % (x, r))
             switch.get(r, lambda : "ERROR")()
 
