@@ -27,10 +27,11 @@ typedef struct {
 } STaosError;
  
 
+#include "os.h"
 #include "taoserror.h"
 
 
-static __thread int32_t tsErrno;
+static threadlocal int32_t tsErrno;
 int32_t* taosGetErrno() {
   return &tsErrno;
 }

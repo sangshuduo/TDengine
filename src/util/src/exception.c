@@ -1,7 +1,8 @@
+#include "os.h"
 #include "exception.h"
 
 
-static __thread SExceptionNode* expList;
+static threadlocal SExceptionNode* expList;
 
 void exceptionPushNode( SExceptionNode* node ) {
     node->prev = expList;
