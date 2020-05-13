@@ -414,6 +414,7 @@ static void    filterDataInDataBlock(STsdbQueryHandle* pQueryHandle, STableCheck
 static int32_t binarySearchForKey(char* pValue, int num, TSKEY key, int order);
 
 static bool doLoadFileDataBlock(STsdbQueryHandle* pQueryHandle, SCompBlock* pBlock, STableCheckInfo* pCheckInfo) {
+  STsdbRepo *pRepo = pQueryHandle->pTsdb;
   SCompData* data = calloc(1, sizeof(SCompData) + sizeof(SCompCol) * pBlock->numOfCols);
 
   data->numOfCols = pBlock->numOfCols;
@@ -423,7 +424,7 @@ static bool doLoadFileDataBlock(STsdbQueryHandle* pQueryHandle, SCompBlock* pBlo
   SArray* sa = getDefaultLoadColumns(pQueryHandle, true);
 
   if (pCheckInfo->pDataCols == NULL) {
-    pCheckInfo->pDataCols = tdNewDataCols(1000, 100, 4096);  //todo fix me
+    pCheckInfo->pDataCols = tdNewDataCols(pRepo->tsdbMeta->maxRowBytes, pRepo->tsdbMeta->maxCols, pRepo->config.maxRowsPerFileBlock);
   }
 
   tdInitDataCols(pCheckInfo->pDataCols, tsdbGetTableSchema(tsdbGetMeta(pQueryHandle->pTsdb), pCheckInfo->pTableObj));
@@ -1432,7 +1433,7 @@ SArray* createTableGroup(SArray* pTableList, STSchema* pTagSchema, SColIndex* pC
   return pTableGroup;
 }
 
-bool tSkipListNodeFilterCallback(const void* pNode, void* param) {
+bool indexedNodeFilterFp(const void* pNode, void* param) {
   tQueryInfo* pInfo = (tQueryInfo*) param;
   
   STableIndexElem* elem = (STableIndexElem*)(SL_GET_NODE_DATA((SSkipListNode*)pNode));
@@ -1497,7 +1498,7 @@ bool tSkipListNodeFilterCallback(const void* pNode, void* param) {
 static int32_t doQueryTableList(STable* pSTable, SArray* pRes, tExprNode* pExpr) {
   // query according to the expression tree
   SExprTraverseSupp supp = {
-      .fp = (__result_filter_fn_t) tSkipListNodeFilterCallback,
+      .nodeFilterFn = (__result_filter_fn_t) indexedNodeFilterFp,
       .setupInfoFn = filterPrepare,
       .pExtInfo = pSTable->tagSchema,
       };
