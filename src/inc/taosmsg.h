@@ -100,6 +100,7 @@ TAOS_DEFINE_MESSAGE_TYPE( TSDB_MSG_TYPE_DM_CONFIG_TABLE, "config-table" )
 TAOS_DEFINE_MESSAGE_TYPE( TSDB_MSG_TYPE_DM_CONFIG_VNODE, "config-vnode" )	
 TAOS_DEFINE_MESSAGE_TYPE( TSDB_MSG_TYPE_DM_STATUS, "status" )
 TAOS_DEFINE_MESSAGE_TYPE( TSDB_MSG_TYPE_DM_GRANT, "grant" )
+TAOS_DEFINE_MESSAGE_TYPE( TSDB_MSG_TYPE_DM_AUTH, "auth" )
 TAOS_DEFINE_MESSAGE_TYPE( TSDB_MSG_TYPE_DUMMY12, "dummy12" )
 TAOS_DEFINE_MESSAGE_TYPE( TSDB_MSG_TYPE_DUMMY13, "dummy13" )
 TAOS_DEFINE_MESSAGE_TYPE( TSDB_MSG_TYPE_DUMMY14, "dummy14" )
@@ -626,7 +627,6 @@ typedef struct {
 typedef struct STableMetaMsg {
   int32_t       contLen;
   char          tableId[TSDB_TABLE_ID_LEN + 1];   // table id
-  char          stableId[TSDB_TABLE_ID_LEN + 1];  // stable name if it is created according to super table
   uint8_t       numOfTags;
   uint8_t       precision;
   uint8_t       tableType;
@@ -736,6 +736,14 @@ typedef struct {
   int32_t  status;
   char     tableId[TSDB_TABLE_ID_LEN + 1];
 } SMDAlterStreamMsg;
+
+typedef struct {
+  char user[TSDB_USER_LEN + 1];
+  char spi;
+  char encrypt;
+  char secret[TSDB_KEY_LEN + 1];
+  char ckey[TSDB_KEY_LEN + 1];
+} SDMAuthMsg, SDMAuthRsp;
 
 #pragma pack(pop)
 

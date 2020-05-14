@@ -85,8 +85,7 @@ typedef struct SSuperTableObj {
   int32_t    numOfTables;
   int16_t    nextColId;
   SSchema *  schema;
-  int32_t    vgLen;
-  int32_t *  vgList;
+  void *     vgHash;
 } SSuperTableObj;
 
 typedef struct {
@@ -224,7 +223,7 @@ typedef struct SAcctObj {
 typedef struct {
   int8_t   type;
   char     db[TSDB_DB_NAME_LEN + 1];
-  void *   pNode;
+  void *   pIter;
   int16_t  numOfColumns;
   int32_t  rowSize;
   int32_t  numOfRows;

@@ -34,12 +34,14 @@ extern "C" {
 
 #define TSDB_INVALID_SUPER_TABLE_ID -1
 
+#define TSDB_STATUS_COMMIT_START 1
+#define TSDB_STATUS_COMMIT_OVER  2
+
 // --------- TSDB APPLICATION HANDLE DEFINITION
 typedef struct {
-  // WAL handle
   void *appH;
   void *cqH;
-  int (*walCallBack)(void *);
+  int (*notifyStatus)(void *, int status);
   int (*eventCallBack)(void *);
 } STsdbAppH;
 
@@ -108,6 +110,8 @@ int   tsdbCreateTable(TsdbRepoT *repo, STableCfg *pCfg);
 int   tsdbDropTable(TsdbRepoT *pRepo, STableId tableId);
 int   tsdbAlterTable(TsdbRepoT *repo, STableCfg *pCfg);
 TSKEY tsdbGetTableLastKey(TsdbRepoT *repo, int64_t uid);
+
+uint32_t tsdbGetFileInfo(TsdbRepoT *repo, char *name, uint32_t *index, int32_t *size);
 
 // the TSDB repository info
 typedef struct STsdbRepoInfo {

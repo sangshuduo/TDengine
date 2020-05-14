@@ -38,6 +38,7 @@ typedef struct {
   int          status; 
   int8_t       role;   
   int64_t      version;
+  int64_t      savedVersion;
   void        *wqueue;
   void        *rqueue;
   void        *wal;
@@ -49,6 +50,7 @@ typedef struct {
   STsdbCfg    tsdbCfg;
   SSyncCfg    syncCfg;
   SWalCfg     walCfg;
+  char *       rootDir;
 } SVnodeObj;
 
 int  vnodeWriteToQueue(void *param, void *pHead, int type);

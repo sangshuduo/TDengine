@@ -365,7 +365,7 @@ void    tscInitMsgsFp();
 
 int tsParseSql(SSqlObj *pSql, bool multiVnodeInsertion);
 
-void tscProcessMsgFromServer(SRpcMsg *rpcMsg);
+void tscProcessMsgFromServer(SRpcMsg *rpcMsg, SRpcIpSet *pIpSet);
 int  tscProcessSql(SSqlObj *pSql);
 
 int  tscRenewMeterMeta(SSqlObj *pSql, char *tableId);
@@ -437,6 +437,9 @@ extern SRpcIpSet tscMgmtIpSet;
 extern int (*tscBuildMsg[TSDB_SQL_MAX])(SSqlObj *pSql, SSqlInfo *pInfo);
 
 typedef void (*__async_cb_func_t)(void *param, TAOS_RES *tres, int numOfRows);
+
+int32_t tscCompareTidTags(const void* p1, const void* p2);
+void tscBuildVgroupTableInfo(STableMetaInfo* pTableMetaInfo, SArray* tables);
 
 #ifdef __cplusplus
 }
