@@ -19,6 +19,7 @@ from util.sql import tdSql
 
 
 class TDTestCase:
+
     def init(self, conn):
         tdLog.debug("start to execute %s" % __file__)
         tdSql.init(conn.cursor())
@@ -27,27 +28,25 @@ class TDTestCase:
         tdSql.prepare()
 
         print("==============step1")
-        tdSql.execute("create table db.st (ts timestamp, i int) tags(j int)")
-        tdSql.execute("create table db.tb using st tags(1)")
-        tdSql.execute("insert into db.tb values(now, 1)")
+
+        tdLog.info("create table")
+
+        tdSql.execute(
+            "create table if not exists st(ts timestamp, tagtype int) tags(dev nchar(50))")
+        tdSql.execute(
+            "CREATE TABLE if not exists dev_001 using st tags('dev_01')")
 
         print("==============step2")
-        try:
-            tdSql.execute("drop table db.st")
-        except Exception as e:
-            tdLog.exit(e)
+        tdLog.info("multiple inserts by insert")
+        tdSql.execute(
+            "insert INTO dev_001 VALUES ('2020-05-13 10:00:00.000', 1),('2020-05-13 10:00:00.001', 1)")
+        tdSql.checkAffectedRows(2)
 
-        try:
-            tdSql.execute("select * from db.st")
-        except Exception as e:
-            if e.args[0] != 'invalid table name':
-                tdLog.exit(e)
-
-        try:
-            tdSql.execute("select * from db.tb")
-        except Exception as e:
-            if e.args[0] != 'invalid table name':
-                tdLog.exit(e)
+        print("==============step3")
+        tdLog.info("multiple inserts by import")
+        tdSql.execute(
+            "import INTO dev_001 VALUES ('2020-05-13 10:00:00.000', 1),('2020-05-13 10:00:00.001', 1)")
+        tdSql.checkAffectedRows(2)
 
     def stop(self):
         tdSql.close()
