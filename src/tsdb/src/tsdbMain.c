@@ -18,7 +18,7 @@ int tsdbDebugFlag = 135;
 #define TSDB_MIN_ID 0
 #define TSDB_MAX_ID INT_MAX
 
-#define TSDB_CFG_FILE_NAME "CONFIG"
+#define TSDB_CFG_FILE_NAME "config"
 #define TSDB_DATA_DIR_NAME "data"
 #define TSDB_DEFAULT_FILE_BLOCK_ROW_OPTION 0.7
 #define TSDB_MAX_LAST_FILE_SIZE (1024 * 1024 * 10) // 10M
@@ -29,7 +29,7 @@ static int32_t tsdbCheckAndSetDefaultCfg(STsdbCfg *pCfg);
 static int32_t tsdbSetRepoEnv(STsdbRepo *pRepo);
 static int32_t tsdbDestroyRepoEnv(STsdbRepo *pRepo);
 // static int     tsdbOpenMetaFile(char *tsdbDir);
-static int32_t tsdbInsertDataToTable(TsdbRepoT *repo, SSubmitBlk *pBlock, TSKEY now);
+static int32_t tsdbInsertDataToTable(TsdbRepoT *repo, SSubmitBlk *pBlock, TSKEY now, int * affectedrows);
 static int32_t tsdbRestoreCfg(STsdbRepo *pRepo, STsdbCfg *pCfg);
 static int32_t tsdbGetDataDirName(STsdbRepo *pRepo, char *fname);
 static void *  tsdbCommitData(void *arg);
@@ -169,6 +169,7 @@ static int tsdbRestoreInfo(STsdbRepo *pRepo) {
     if (tsdbSetAndOpenHelperFile(&rhelper, pFGroup) < 0) goto _err;
     for (int i = 1; i < pRepo->config.maxTables; i++) {
       STable *  pTable = pMeta->tables[i];
+      if (pTable == NULL) continue;
       SCompIdx *pIdx = &rhelper.pCompIdx[i];
 
       if (pIdx->offset > 0 && pTable->lastKey < pIdx->maxKey) pTable->lastKey = pIdx->maxKey;
@@ -258,7 +259,7 @@ TsdbRepoT *tsdbOpenRepo(char *tsdbDir, STsdbAppH *pAppH) {
  *
  * @return 0 for success, -1 for failure and the error number is set
  */
-int32_t tsdbCloseRepo(TsdbRepoT *repo) {
+int32_t tsdbCloseRepo(TsdbRepoT *repo, int toCommit) {
   STsdbRepo *pRepo = (STsdbRepo *)repo;
   if (pRepo == NULL) return 0;
   int id = pRepo->config.tsdbId;
@@ -285,7 +286,7 @@ int32_t tsdbCloseRepo(TsdbRepoT *repo) {
   tsdbUnLockRepo(repo);
 
   if (pRepo->appH.notifyStatus) pRepo->appH.notifyStatus(pRepo->appH.appH, TSDB_STATUS_COMMIT_START);
-  tsdbCommitData((void *)repo);
+  if (toCommit) tsdbCommitData((void *)repo);
 
   tsdbCloseFileH(pRepo->tsdbFileH);
 
@@ -406,22 +407,23 @@ STableInfo *tsdbGetTableInfo(TsdbRepoT *pRepo, STableId tableId) {
 }
 
 // TODO: need to return the number of data inserted
-int32_t tsdbInsertData(TsdbRepoT *repo, SSubmitMsg *pMsg) {
+int32_t tsdbInsertData(TsdbRepoT *repo, SSubmitMsg *pMsg, SShellSubmitRspMsg * pRsp) {
   SSubmitMsgIter msgIter;
   STsdbRepo *pRepo = (STsdbRepo *)repo;
 
   tsdbInitSubmitMsgIter(pMsg, &msgIter);
   SSubmitBlk *pBlock = NULL;
   int32_t code = TSDB_CODE_SUCCESS;
+  int32_t affectedrows = 0;
 
   TSKEY now = taosGetTimestamp(pRepo->config.precision);
 
   while ((pBlock = tsdbGetSubmitMsgNext(&msgIter)) != NULL) {
-    if ((code = tsdbInsertDataToTable(repo, pBlock, now)) != TSDB_CODE_SUCCESS) {
+    if ((code = tsdbInsertDataToTable(repo, pBlock, now, &affectedrows)) != TSDB_CODE_SUCCESS) {
       return code;
     }
   }
-
+  pRsp->affectedRows = htonl(affectedrows);
   return code;
 }
 
@@ -840,13 +842,13 @@ static int32_t tdInsertRowToTable(STsdbRepo *pRepo, SDataRow row, STable *pTable
   
   pTable->mem->numOfPoints = tSkipListGetSize(pTable->mem->pData);
 
-  tsdbTrace("vgId:%d, tid:%d, uid:" PRId64 ", a row is inserted to table! key:" PRId64,
-            pRepo->config.tsdbId, pTable->tableId.tid, pTable->tableId.uid, dataRowKey(row));
+  tsdbTrace("vgId:%d, tid:%d, uid:%" PRId64 ", table:%s a row is inserted to table! key:%" PRId64, pRepo->config.tsdbId,
+            pTable->tableId.tid, pTable->tableId.uid, varDataVal(pTable->name), dataRowKey(row));
 
   return 0;
 }
 
-static int32_t tsdbInsertDataToTable(TsdbRepoT *repo, SSubmitBlk *pBlock, TSKEY now) {
+static int32_t tsdbInsertDataToTable(TsdbRepoT *repo, SSubmitBlk *pBlock, TSKEY now, int32_t *affectedrows) {
   STsdbRepo *pRepo = (STsdbRepo *)repo;
 
   STableId tableId = {.uid = pBlock->uid, .tid = pBlock->tid};
@@ -866,15 +868,16 @@ static int32_t tsdbInsertDataToTable(TsdbRepoT *repo, SSubmitBlk *pBlock, TSKEY 
   tsdbInitSubmitBlkIter(pBlock, &blkIter);
   while ((row = tsdbGetSubmitBlkNext(&blkIter)) != NULL) {
     if (dataRowKey(row) < minKey || dataRowKey(row) > maxKey) {
-      tsdbError("vgId:%d, table tid:%d, talbe uid:%ld timestamp is out of range. now:" PRId64 ", maxKey:" PRId64
+      tsdbError("vgId:%d, table:%s, tid:%d, talbe uid:%ld timestamp is out of range. now:" PRId64 ", maxKey:" PRId64
                 ", minKey:" PRId64,
-                pRepo->config.tsdbId, pTable->tableId.tid, pTable->tableId.uid, now, minKey, maxKey);
+                pRepo->config.tsdbId, varDataVal(pTable->name), pTable->tableId.tid, pTable->tableId.uid, now, minKey, maxKey);
       return TSDB_CODE_TIMESTAMP_OUT_OF_RANGE;
     }
 
     if (tdInsertRowToTable(pRepo, row, pTable) < 0) {
       return -1;
     }
+     (*affectedrows)++;
   }
 
   return TSDB_CODE_SUCCESS;
@@ -1018,10 +1021,16 @@ static int tsdbCommitToFile(STsdbRepo *pRepo, int fid, SSkipListIterator **iters
 
   // Create and open files for commit
   tsdbGetDataDirName(pRepo, dataDir);
-  if ((pGroup = tsdbCreateFGroup(pFileH, dataDir, fid, pCfg->maxTables)) == NULL) goto _err;
+  if ((pGroup = tsdbCreateFGroup(pFileH, dataDir, fid, pCfg->maxTables)) == NULL) {
+    tsdbError("vgId:%d, failed to create file group %d", pRepo->config.tsdbId, fid);
+    goto _err;
+  }
 
   // Open files for write/read
-  if (tsdbSetAndOpenHelperFile(pHelper, pGroup) < 0) goto _err;
+  if (tsdbSetAndOpenHelperFile(pHelper, pGroup) < 0) {
+    tsdbError("vgId:%d, failed to set helper file", pRepo->config.tsdbId);
+    goto _err;
+  }
 
   // Loop to commit data in each table
   for (int tid = 1; tid < pCfg->maxTables; tid++) {
@@ -1058,13 +1067,22 @@ static int tsdbCommitToFile(STsdbRepo *pRepo, int fid, SSkipListIterator **iters
     ASSERT(pDataCols->numOfPoints == 0);
 
     // Move the last block to the new .l file if neccessary
-    if (tsdbMoveLastBlockIfNeccessary(pHelper) < 0) goto _err;
+    if (tsdbMoveLastBlockIfNeccessary(pHelper) < 0) {
+      tsdbError("vgId:%d, failed to move last block", pRepo->config.tsdbId);
+      goto _err;
+    }
 
     // Write the SCompBlock part
-    if (tsdbWriteCompInfo(pHelper) < 0) goto _err;
+    if (tsdbWriteCompInfo(pHelper) < 0) {
+      tsdbError("vgId:%d, failed to write compInfo part", pRepo->config.tsdbId);
+      goto _err;
+    }
   }
 
-  if (tsdbWriteCompIdx(pHelper) < 0) goto _err;
+  if (tsdbWriteCompIdx(pHelper) < 0) {
+    tsdbError("vgId:%d, failed to write compIdx part", pRepo->config.tsdbId);
+    goto _err;
+  }
 
   tsdbCloseHelperFile(pHelper, 0);
   // TODO: make it atomic with some methods

@@ -38,9 +38,9 @@ class TDSimClient:
             tdLog.exit(cmd)
 
     def deploy(self):
-        self.logDir = "%s/sim/psim/log" % (self.path,)
-        self.cfgDir = "%s/sim/psim/cfg" % (self.path)
-        self.cfgPath = "%s/sim/psim/cfg/taos.cfg" % (self.path)
+        self.logDir = "%s/pysim/psim/log" % (self.path,)
+        self.cfgDir = "%s/pysim/psim/cfg" % (self.path)
+        self.cfgPath = "%s/pysim/psim/cfg/taos.cfg" % (self.path)
 
         cmd = "rm -rf " + self.logDir
         if os.system(cmd) != 0:
@@ -100,10 +100,11 @@ class TDDnode:
         self.valgrind = value
 
     def deploy(self):
-        self.logDir = "%s/sim/dnode%d/log" % (self.path, self.index)
-        self.dataDir = "%s/sim/dnode%d/data" % (self.path, self.index)
-        self.cfgDir = "%s/sim/dnode%d/cfg" % (self.path, self.index)
-        self.cfgPath = "%s/sim/dnode%d/cfg/taos.cfg" % (self.path, self.index)
+        self.logDir = "%s/pysim/dnode%d/log" % (self.path, self.index)
+        self.dataDir = "%s/pysim/dnode%d/data" % (self.path, self.index)
+        self.cfgDir = "%s/pysim/dnode%d/cfg" % (self.path, self.index)
+        self.cfgPath = "%s/pysim/dnode%d/cfg/taos.cfg" % (
+            self.path, self.index)
 
         cmd = "rm -rf " + self.dataDir
         if os.system(cmd) != 0:
@@ -177,21 +178,42 @@ class TDDnode:
             (self.index, self.cfgPath))
 
     def start(self):
-        binPath = os.path.dirname(os.path.realpath(__file__))
-        binPath = binPath + "/../../../debug/"
-        binPath = os.path.realpath(binPath)
-        binPath += "/build/bin/"
+        selfPath = os.path.dirname(os.path.realpath(__file__))
+        binPath = ""
+
+        if ("TDinternal" in selfPath):
+            projPath = selfPath + "/../../../../"
+
+            for root, dirs, files in os.walk(projPath):
+                if ("taosd" in files):
+                    rootRealPath = os.path.dirname(os.path.realpath(root))
+                    if ("community" not in rootRealPath):
+                        binPath = os.path.join(root, "taosd")
+                        break
+        else:
+            projPath = selfPath + "/../../../"
+            for root, dirs, files in os.walk(projPath):
+                if ("taosd" in files):
+                    rootRealPath = os.path.dirname(os.path.realpath(root))
+                    if ("packaging" not in rootRealPath):
+                        binPath = os.path.join(root, "taosd")
+                        break
+
+        if (binPath == ""):
+            tdLog.exit("taosd not found!s")
+        else:
+            tdLog.info("taosd found in %s" % rootRealPath)
 
         if self.deployed == 0:
             tdLog.exit("dnode:%d is not deployed" % (self.index))
 
         if self.valgrind == 0:
-            cmd = "nohup %staosd -c %s > /dev/null 2>&1 & " % (
+            cmd = "nohup %s -c %s > /dev/null 2>&1 & " % (
                 binPath, self.cfgDir)
         else:
             valgrindCmdline = "valgrind --tool=memcheck --leak-check=full --show-reachable=no --track-origins=yes --show-leak-kinds=all -v --workaround-gcc296-bugs=yes"
 
-            cmd = "nohup %s %staosd -c %s 2>&1 & " % (
+            cmd = "nohup %s %s -c %s 2>&1 & " % (
                 valgrindCmdline, binPath, self.cfgDir)
 
             print(cmd)
@@ -262,11 +284,11 @@ class TDDnode:
             tdLog.exit(cmd)
 
     def getDnodeRootDir(self, index):
-        dnodeRootDir = "%s/sim/psim/dnode%d" % (self.path, index)
+        dnodeRootDir = "%s/pysim/psim/dnode%d" % (self.path, index)
         return dnodeRootDir
 
     def getDnodesRootDir(self):
-        dnodesRootDir = "%s/sim/psim" % (self.path)
+        dnodesRootDir = "%s/pysim/psim" % (self.path)
         return dnodesRootDir
 
 
@@ -380,7 +402,7 @@ class TDDnodes:
             tdLog.exit("index:%d should on a scale of [1, 10]" % (index))
 
     def stopAll(self):
-        tdLog.debug("stop all dnodes")
+        tdLog.info("stop all dnodes")
         for i in range(len(self.dnodes)):
             self.dnodes[i].stop()
 
@@ -411,7 +433,7 @@ class TDDnodes:
         # tdLog.exit(cmd)
 
     def getDnodesRootDir(self):
-        dnodesRootDir = "%s/sim" % (self.path)
+        dnodesRootDir = "%s/pysim" % (self.path)
         return dnodesRootDir
 
     def getSimCfgPath(self):
