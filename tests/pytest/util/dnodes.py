@@ -103,7 +103,8 @@ class TDDnode:
         self.logDir = "%s/pysim/dnode%d/log" % (self.path, self.index)
         self.dataDir = "%s/pysim/dnode%d/data" % (self.path, self.index)
         self.cfgDir = "%s/pysim/dnode%d/cfg" % (self.path, self.index)
-        self.cfgPath = "%s/pysim/dnode%d/cfg/taos.cfg" % (self.path, self.index)
+        self.cfgPath = "%s/pysim/dnode%d/cfg/taos.cfg" % (
+            self.path, self.index)
 
         cmd = "rm -rf " + self.dataDir
         if os.system(cmd) != 0:
@@ -188,7 +189,7 @@ class TDDnode:
                     rootRealPath = os.path.dirname(os.path.realpath(root))
                     if ("community" not in rootRealPath):
                         binPath = os.path.join(root, "taosd")
-                        break;
+                        break
         else:
             projPath = selfPath + "/../../../"
             for root, dirs, files in os.walk(projPath):
@@ -196,12 +197,12 @@ class TDDnode:
                     rootRealPath = os.path.dirname(os.path.realpath(root))
                     if ("packaging" not in rootRealPath):
                         binPath = os.path.join(root, "taosd")
-                        break;
+                        break
 
         if (binPath == ""):
             tdLog.exit("taosd not found!s")
         else:
-            tdLog.notice("taosd found in %s" % rootRealPath)
+            tdLog.info("taosd found in %s" % rootRealPath)
 
         if self.deployed == 0:
             tdLog.exit("dnode:%d is not deployed" % (self.index))
@@ -407,7 +408,7 @@ class TDDnodes:
             tdLog.exit("index:%d should on a scale of [1, 10]" % (index))
 
     def stopAll(self):
-        tdLog.debug("stop all dnodes")
+        tdLog.info("stop all dnodes")
         for i in range(len(self.dnodes)):
             self.dnodes[i].stop()
 
