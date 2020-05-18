@@ -763,6 +763,7 @@ static void mgmtProcessCreateSuperTableMsg(SQueuedMsg *pMsg) {
   pStable->createdTime  = taosGetTimestampMs();
   pStable->uid          = (((uint64_t) pStable->createdTime) << 16) + (sdbGetVersion() & ((1ul << 16) - 1ul));
   pStable->sversion     = 0;
+  pStable->tversion     = 0;
   pStable->numOfColumns = htons(pCreate->numOfColumns);
   pStable->numOfTags    = htons(pCreate->numOfTags);
 
@@ -882,7 +883,7 @@ static int32_t mgmtAddSuperTableTag(SSuperTableObj *pStable, SSchema schema[], i
   }
 
   pStable->numOfTags += ntags;
-  pStable->sversion++;
+  pStable->tversion++;
 
   SSdbOper oper = {
     .type = SDB_OPER_GLOBAL,
@@ -909,7 +910,7 @@ static int32_t mgmtDropSuperTableTag(SSuperTableObj *pStable, char *tagName) {
   memmove(pStable->schema + pStable->numOfColumns + col, pStable->schema + pStable->numOfColumns + col + 1,
           sizeof(SSchema) * (pStable->numOfTags - col - 1));
   pStable->numOfTags--;
-  pStable->sversion++;
+  pStable->tversion++;
 
   SSdbOper oper = {
     .type = SDB_OPER_GLOBAL,
@@ -1686,7 +1687,7 @@ static int32_t mgmtDoGetChildTableMeta(SQueuedMsg *pMsg, STableMetaMsg *pMeta) {
   pMeta->sid       = htonl(pTable->sid);
   pMeta->precision = pDb->cfg.precision;
   pMeta->tableType = pTable->info.type;
-  strncpy(pMeta->tableId, pTable->info.tableId, tListLen(pTable->info.tableId));
+  strncpy(pMeta->tableId, pTable->info.tableId, strlen(pTable->info.tableId));
 
   if (pTable->info.type == TSDB_CHILD_TABLE) {
     pMeta->sversion     = htons(pTable->superTable->sversion);
