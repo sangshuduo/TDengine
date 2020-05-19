@@ -134,21 +134,25 @@ def printSqlDrop(cmd):
 
 
 def printSqlShow(cmd):
-    printf("        %stdLog.info('%s')" % (getExtraSpace(), cmd))
+    cmd = processFixedString(cmd)
+
+    printf("        %stdLog.info('%s" % (getExtraSpace(), cmd))
     if "-x step" in cmd:
         cmd = re.sub(r' -x step[0-9]?', '', cmd)
-        printf("        %stdSql.error('%s')" % (getExtraSpace(), cmd))
+        printf("        %stdSql.error('%s" % (getExtraSpace(), cmd))
     else:
-        printf("        %stdSql.query('%s')" % (getExtraSpace(), cmd))
+        printf("        %stdSql.query('%s" % (getExtraSpace(), cmd))
 
 
 def printSqlDescribe(cmd):
-    printf("        %stdLog.info('%s')" % (getExtraSpace(), cmd))
+    cmd = processFixedString(cmd)
+
+    printf("        %stdLog.info('%s" % (getExtraSpace(), cmd))
     if "-x step" in cmd:
         cmd = re.sub(r' -x step[0-9]?', '', cmd)
-        printf("        %stdSql.error('%s')" % (getExtraSpace(), cmd))
+        printf("        %stdSql.error('%s" % (getExtraSpace(), cmd))
     else:
-        printf("        %stdSql.query('%s')" % (getExtraSpace(), cmd))
+        printf("        %stdSql.query('%s" % (getExtraSpace(), cmd))
 
 
 def printIfRows(cmd):
@@ -301,17 +305,19 @@ if __name__ == "__main__":
                 printSqlDrop(line)
 
             if (line.find("sql reset query cache") == 0):
+                line = line.split(' ', 1)[1]
                 printSqlResetQueryCache(line)
 
             if (line.find("sql alter table") == 0):
+                line = line.split(' ', 1)[1]
                 printSqlAlterTable(line)
 
             if (line.find("sql show") == 0):
-                line = line.split(' ', 1)[1].replace("$tb", "%s")
+                line = line.split(' ', 1)[1]
                 printSqlShow(line)
 
             if (line.find("sql describe") == 0):
-                line = line.split(' ', 1)[1].replace("$tb", "%s")
+                line = line.split(' ', 1)[1]
                 printSqlDescribe(line)
 
             if (line.find("if $rows") == 0):
