@@ -1,8 +1,8 @@
 system sh/stop_dnodes.sh
 
-$totalVnodes = 100
-$minVnodes = 50
-$maxVnodes = 50
+$totalVnodes = 20
+$minVnodes = 10
+$maxVnodes = 10
 $maxTables = 4
 $totalRows = $totalVnodes * $maxTables
 
@@ -32,51 +32,6 @@ while $x < $totalRows
   $x = $x + 1
 endw 
 
-print ========== step2
-sql select * from mt
-if $rows != $totalRows then
-  return -1
-endi  
-
-sql select count(*) from mt
-if $data00 != $totalRows then
-  return -1
-endi  
-
-print ==========  step3
-sql create dnode $hostname2
-system sh/exec_up.sh -n dnode2 -s start
-
-$x = 0
-show3: 
-	$x = $x + 1
-	sleep 3000
-	if $x == 1000 then 
-		return -1
-	endi
-	
-sql show dnodes
-print dnode1 openvnodes $data2_1
-print dnode2 openvnodes $data2_2
-if $data2_1 != $minVnodes then
-	goto show3
-endi
-if $data2_2 != $maxVnodes then
-	goto show3
-endi
-
-print ========== step4
-sql select * from mt
-if $rows != $totalRows then
-  return -1
-endi  
-
-sql select count(*) from mt
-if $data00 != $totalRows then
-  return -1
-endi  
-
-return
 
 system sh/exec_up.sh -n dnode1 -s stop  -x SIGINT
 system sh/exec_up.sh -n dnode2 -s stop  -x SIGINT
