@@ -1236,6 +1236,7 @@ static void mgmtGetSuperTableMeta(SQueuedMsg *pMsg) {
   STableMetaMsg *pMeta   = rpcMallocCont(sizeof(STableMetaMsg) + sizeof(SSchema) * (TSDB_MAX_TAGS + TSDB_MAX_COLUMNS + 16));
   pMeta->uid          = htobe64(pTable->uid);
   pMeta->sversion     = htons(pTable->sversion);
+  pMeta->tversion     = htons(pTable->tversion);
   pMeta->precision    = pMsg->pDb->cfg.precision;
   pMeta->numOfTags    = (uint8_t)pTable->numOfTags;
   pMeta->numOfColumns = htons((int16_t)pTable->numOfColumns);
@@ -1359,12 +1360,14 @@ static void *mgmtBuildCreateChildTableMsg(SCMCreateTableMsg *pMsg, SChildTableOb
     pCreate->numOfColumns  = htons(pTable->superTable->numOfColumns);
     pCreate->numOfTags     = htons(pTable->superTable->numOfTags);
     pCreate->sversion      = htonl(pTable->superTable->sversion);
+    pCreate->tversion      = htonl(pTable->superTable->tversion);
     pCreate->tagDataLen    = htonl(tagDataLen);
     pCreate->superTableUid = htobe64(pTable->superTable->uid);
   } else {
     pCreate->numOfColumns  = htons(pTable->numOfColumns);
     pCreate->numOfTags     = 0;
     pCreate->sversion      = htonl(pTable->sversion);
+    pCreate->tversion      = 0;
     pCreate->tagDataLen    = 0;
     pCreate->superTableUid = 0;
   }
@@ -1412,7 +1415,7 @@ static SChildTableObj* mgmtDoCreateChildTable(SCMCreateTableMsg *pCreate, SVgObj
     char *pTagData = (char *) pCreate->schema;  // it is a tag key
     SSuperTableObj *pSuperTable = mgmtGetSuperTable(pTagData);
     if (pSuperTable == NULL) {
-      mError("table:%s, corresponding super table does not exist", pCreate->tableId);
+      mError("table:%s, corresponding super table:%s does not exist", pCreate->tableId, pTagData);
       free(pTable);
       terrno = TSDB_CODE_INVALID_TABLE;
       return NULL;
@@ -1502,6 +1505,11 @@ static void mgmtProcessCreateChildTableMsg(SQueuedMsg *pMsg) {
       }
 
       pMsg->pTable = (STableObj *)mgmtDoCreateChildTable(pCreate, pVgroup, sid);
+      if (pMsg->pTable == NULL) {
+        mgmtSendSimpleResp(pMsg->thandle, terrno);
+        return;
+      }
+
       mgmtIncTableRef(pMsg->pTable);
     }
   } else {
@@ -1691,11 +1699,13 @@ static int32_t mgmtDoGetChildTableMeta(SQueuedMsg *pMsg, STableMetaMsg *pMeta) {
 
   if (pTable->info.type == TSDB_CHILD_TABLE) {
     pMeta->sversion     = htons(pTable->superTable->sversion);
+    pMeta->tversion     = htons(pTable->superTable->tversion);
     pMeta->numOfTags    = (int8_t)pTable->superTable->numOfTags;
     pMeta->numOfColumns = htons((int16_t)pTable->superTable->numOfColumns);
     pMeta->contLen      = sizeof(STableMetaMsg) + mgmtSetSchemaFromSuperTable(pMeta->schema, pTable->superTable);
   } else {
     pMeta->sversion     = htons(pTable->sversion);
+    pMeta->tversion     = 0;
     pMeta->numOfTags    = 0;
     pMeta->numOfColumns = htons((int16_t)pTable->numOfColumns);
     pMeta->contLen      = sizeof(STableMetaMsg) + mgmtSetSchemaFromNormalTable(pMeta->schema, pTable); 
@@ -1737,7 +1747,12 @@ static void mgmtAutoCreateChildTable(SQueuedMsg *pMsg) {
   pCreateMsg->igExists = 1;
   pCreateMsg->getMeta = 1;
   pCreateMsg->contLen = htonl(contLen);
-  memcpy(pCreateMsg->schema, pInfo->tags, sizeof(STagData));
+
+  contLen = sizeof(STagData);
+  if (contLen > pMsg->contLen - sizeof(SCMTableInfoMsg)) {
+    contLen = pMsg->contLen - sizeof(SCMTableInfoMsg);
+  }
+  memcpy(pCreateMsg->schema, pInfo->tags, contLen);
 
   SQueuedMsg *newMsg = mgmtCloneQueuedMsg(pMsg);
   pMsg->pCont = newMsg->pCont;
