@@ -72,10 +72,9 @@ int32_t vnodeProcessWrite(void *param1, int qtype, void *param2, void *item) {
   code = walWrite(pVnode->wal, pHead);
   if (code < 0) return code;
 
-  // forward to peers if data is from RPC or CQ
+  // forward to peers, even it is WAL/FWD, it shall be called to update version in sync 
   int32_t syncCode = 0;
-  if (qtype == TAOS_QTYPE_RPC || qtype == TAOS_QTYPE_CQ) 
-    syncCode = syncForwardToPeer(pVnode->sync, pHead, item);
+  syncCode = syncForwardToPeer(pVnode->sync, pHead, item, qtype);
   if (syncCode < 0) return syncCode;
 
   // write data locally 
@@ -91,17 +90,16 @@ static int32_t vnodeProcessSubmitMsg(SVnodeObj *pVnode, void *pCont, SRspRet *pR
   // save insert result into item
 
   vTrace("vgId:%d, submit msg is processed", pVnode->vgId);
-  code = tsdbInsertData(pVnode->tsdb, pCont);
-
+  
   pRet->len = sizeof(SShellSubmitRspMsg);
   pRet->rsp = rpcMallocCont(pRet->len);
   SShellSubmitRspMsg *pRsp = pRet->rsp;
-
+  code = tsdbInsertData(pVnode->tsdb, pCont, pRsp);
+  pRsp->numOfFailedBlocks = 0; //TODO
+  //pRet->len += pRsp->numOfFailedBlocks * sizeof(SShellSubmitRspBlock); //TODO
   pRsp->code              = 0;
   pRsp->numOfRows         = htonl(1);
-  pRsp->affectedRows      = htonl(1);
-  pRsp->numOfFailedBlocks = 0;
-
+  
   return code;
 }
 

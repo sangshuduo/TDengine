@@ -61,10 +61,10 @@ int32_t tscEmbedded = 0;
  */
 int64_t tsMsPerDay[] = {86400000L, 86400000000L};
 
-char  tsFirst[TSDB_FQDN_LEN] = {0};
-char  tsSecond[TSDB_FQDN_LEN] = {0};
-char  tsArbitrator[TSDB_FQDN_LEN] = {0};
-char  tsLocalEp[TSDB_FQDN_LEN] = {0};  // Local End Point, hostname:port
+char  tsFirst[TSDB_EP_LEN] = {0};  
+char  tsSecond[TSDB_EP_LEN] = {0};
+char  tsArbitrator[TSDB_EP_LEN] = {0};
+char  tsLocalEp[TSDB_EP_LEN] = {0};  // Local End Point, hostname:port
 uint16_t tsServerPort = 6030;
 uint16_t tsDnodeShellPort = 6030;  // udp[6035-6039] tcp[6035]
 uint16_t tsDnodeDnodePort = 6035;   // udp/tcp
@@ -141,6 +141,7 @@ int32_t rpcDebugFlag = 135;
 int32_t uDebugFlag = 131;
 int32_t debugFlag = 131;
 int32_t sDebugFlag = 135;
+int32_t tsdbDebugFlag = 135;
 
 // the maximum number of results for projection query on super table that are returned from
 // one virtual node, to order according to timestamp
@@ -216,7 +217,8 @@ void taosSetAllDebugFlag() {
     rpcDebugFlag = debugFlag;
     uDebugFlag = debugFlag;
     sDebugFlag = debugFlag;
-    //qDebugFlag = debugFlag;    
+    tsdbDebugFlag = debugFlag;
+    qDebugFlag = debugFlag;    
   }
   uPrint("all debug flag are set to %d", debugFlag);
 }
@@ -284,7 +286,7 @@ static void doInitGlobalConfig() {
   cfg.cfgType = TSDB_CFG_CTYPE_B_CONFIG | TSDB_CFG_CTYPE_B_CLIENT;
   cfg.minValue = 0;
   cfg.maxValue = 0;
-  cfg.ptrLength = TSDB_FQDN_LEN;
+  cfg.ptrLength = TSDB_EP_LEN;
   cfg.unitType = TAOS_CFG_UTYPE_NONE;
   taosInitConfigOption(cfg);
 
@@ -294,7 +296,7 @@ static void doInitGlobalConfig() {
   cfg.cfgType = TSDB_CFG_CTYPE_B_CONFIG | TSDB_CFG_CTYPE_B_CLIENT;
   cfg.minValue = 0;
   cfg.maxValue = 0;
-  cfg.ptrLength = TSDB_FQDN_LEN;
+  cfg.ptrLength = TSDB_EP_LEN;
   cfg.unitType = TAOS_CFG_UTYPE_NONE;
   taosInitConfigOption(cfg);
 
@@ -356,7 +358,7 @@ static void doInitGlobalConfig() {
   cfg.cfgType = TSDB_CFG_CTYPE_B_CONFIG | TSDB_CFG_CTYPE_B_CLIENT;
   cfg.minValue = 0;
   cfg.maxValue = 0;
-  cfg.ptrLength = TSDB_FQDN_LEN;
+  cfg.ptrLength = TSDB_EP_LEN;
   cfg.unitType = TAOS_CFG_UTYPE_NONE;
   taosInitConfigOption(cfg);
 
@@ -1131,6 +1133,16 @@ static void doInitGlobalConfig() {
   cfg.unitType = TAOS_CFG_UTYPE_NONE;
   taosInitConfigOption(cfg);
 
+  cfg.option = "tsdbDebugFlag";
+  cfg.ptr = &tsdbDebugFlag;
+  cfg.valType = TAOS_CFG_VTYPE_INT32;
+  cfg.cfgType = TSDB_CFG_CTYPE_B_CONFIG | TSDB_CFG_CTYPE_B_LOG | TSDB_CFG_CTYPE_B_CLIENT;
+  cfg.minValue = 0;
+  cfg.maxValue = 255;
+  cfg.ptrLength = 0;
+  cfg.unitType = TAOS_CFG_UTYPE_NONE;
+  taosInitConfigOption(cfg);
+
   cfg.option = "tscEnableRecordSql";
   cfg.ptr = &tsTscEnableRecordSql;
   cfg.valType = TAOS_CFG_VTYPE_INT32;
@@ -1252,7 +1264,7 @@ bool taosCheckGlobalCfg() {
   return true;
 }
 
-int taosGetFqdnPortFromEp(char *ep, char *fqdn, uint16_t *port) {
+int taosGetFqdnPortFromEp(const char *ep, char *fqdn, uint16_t *port) {
   *port = 0;
   strcpy(fqdn, ep);
 

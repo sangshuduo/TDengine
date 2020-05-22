@@ -29,7 +29,7 @@ sleep 3000
 
 sql create database d1 replica 2 maxTables 4
 sql create table d1.t1(ts timestamp, i int)
-sql insert into d1.t1 values(now, 1)
+sql insert into d1.t1 values(1588262400001, 1)
 
 sql show dnodes
 print dnode1 $data4_1
@@ -82,15 +82,18 @@ $x = 0
 show4: 
 	$x = $x + 1
 	sleep 5000
-	if $x == 50 then 
+	if $x == 10 then 
 	  return -1
 	endi
 
 sql show dnodes
+print dnode1 $data4_1
+print dnode2 $data4_2
+print dnode3 $data4_3
 if $data4_1 != ready then
   goto show4
 endi
-if $data4_2 != NULL then
+if $data4_2 != null then
   goto show4
 endi
 if $data4_3 != ready then

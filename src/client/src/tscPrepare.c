@@ -194,7 +194,7 @@ static int normalStmtPrepare(STscStmt* stmt) {
 
 static char* normalStmtBuildSql(STscStmt* stmt) {
   SNormalStmt* normal = &stmt->normal;
-  SStringBuilder sb = {0};
+  SStringBuilder sb; memset(&sb, 0, sizeof(sb));
 
   if (taosStringBuilderSetJmp(&sb) != 0) {
     taosStringBuilderDestroy(&sb);
@@ -447,7 +447,7 @@ static int insertStmtExecute(STscStmt* stmt) {
   SSqlRes *pRes = &pSql->res;
   pRes->numOfRows = 0;
   pRes->numOfTotal = 0;
-  pRes->numOfTotalInCurrentClause = 0;
+  pRes->numOfClauseTotal = 0;
   
   pRes->qhandle = 0;
 

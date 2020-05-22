@@ -16,8 +16,8 @@
 #include "os.h"
 #include "qast.h"
 #include "qextbuffer.h"
+#include "qfill.h"
 #include "qhistogram.h"
-#include "qinterpolation.h"
 #include "qpercentile.h"
 #include "qsyntaxtreefunction.h"
 #include "qtsbuf.h"
@@ -3418,6 +3418,7 @@ static void spread_function(SQLFunctionCtx *pCtx) {
   
   int32_t numOfElems = pCtx->size;
   
+  // todo : opt with pre-calculated result
   // column missing cause the hasNull to be true
   if (usePreVal(pCtx)) {
     numOfElems = pCtx->size - pCtx->preAggVals.statis.numOfNull;
@@ -3446,13 +3447,13 @@ static void spread_function(SQLFunctionCtx *pCtx) {
       }
     }
   } else {
-    if (pInfo->min > pCtx->param[1].dKey) {
-      pInfo->min = pCtx->param[1].dKey;
-    }
-    
-    if (pInfo->max < pCtx->param[2].dKey) {
-      pInfo->max = pCtx->param[2].dKey;
-    }
+//    if (pInfo->min > pCtx->param[1].dKey) {
+//      pInfo->min = pCtx->param[1].dKey;
+//    }
+//
+//    if (pInfo->max < pCtx->param[2].dKey) {
+//      pInfo->max = pCtx->param[2].dKey;
+//    }
   }
   
   void *pData = GET_INPUT_CHAR(pCtx);
@@ -3620,299 +3621,6 @@ void spread_function_finalizer(SQLFunctionCtx *pCtx) {
   doFinalizer(pCtx);
 }
 
-static void getStatics_i8(int64_t *primaryKey, int32_t type, int8_t *data, int32_t numOfRow, int64_t *min, int64_t *max,
-                          int64_t *sum, int16_t *minIndex, int16_t *maxIndex, int32_t *numOfNull) {
-  *min = INT64_MAX;
-  *max = INT64_MIN;
-  *minIndex = 0;
-  *maxIndex = 0;
-  
-  assert(numOfRow <= INT16_MAX);
-  
-  //  int64_t lastKey = 0;
-  //  int8_t  lastVal = TSDB_DATA_TINYINT_NULL;
-  
-  for (int32_t i = 0; i < numOfRow; ++i) {
-    if (isNull((char *)&data[i], type)) {
-      (*numOfNull) += 1;
-      continue;
-    }
-    
-    *sum += data[i];
-    if (*min > data[i]) {
-      *min = data[i];
-      *minIndex = i;
-    }
-    
-    if (*max < data[i]) {
-      *max = data[i];
-      *maxIndex = i;
-    }
-    
-    //    if (type != TSDB_DATA_TYPE_BOOL) { // ignore the bool data type pre-calculation
-    //      if (isNull((char *)&lastVal, type)) {
-    //        lastKey = primaryKey[i];
-    //        lastVal = data[i];
-    //      } else {
-    //        *wsum = lastVal * (primaryKey[i] - lastKey);
-    //        lastKey = primaryKey[i];
-    //        lastVal = data[i];
-    //      }
-    //    }
-  }
-}
-
-static void getStatics_i16(int64_t *primaryKey, int16_t *data, int32_t numOfRow, int64_t *min, int64_t *max,
-                           int64_t *sum, int16_t *minIndex, int16_t *maxIndex, int32_t *numOfNull) {
-  *min = INT64_MAX;
-  *max = INT64_MIN;
-  *minIndex = 0;
-  *maxIndex = 0;
-  
-  assert(numOfRow <= INT16_MAX);
-  
-  //  int64_t lastKey = 0;
-  //  int16_t lastVal = TSDB_DATA_SMALLINT_NULL;
-  
-  for (int32_t i = 0; i < numOfRow; ++i) {
-    if (isNull((const char*) &data[i], TSDB_DATA_TYPE_SMALLINT)) {
-      (*numOfNull) += 1;
-      continue;
-    }
-    
-    *sum += data[i];
-    if (*min > data[i]) {
-      *min = data[i];
-      *minIndex = i;
-    }
-    
-    if (*max < data[i]) {
-      *max = data[i];
-      *maxIndex = i;
-    }
-    
-    //    if (isNull(&lastVal, TSDB_DATA_TYPE_SMALLINT)) {
-    //      lastKey = primaryKey[i];
-    //      lastVal = data[i];
-    //    } else {
-    //      *wsum = lastVal * (primaryKey[i] - lastKey);
-    //      lastKey = primaryKey[i];
-    //      lastVal = data[i];
-    //    }
-  }
-}
-
-static void getStatics_i32(int64_t *primaryKey, int32_t *data, int32_t numOfRow, int64_t *min, int64_t *max,
-                           int64_t *sum, int16_t *minIndex, int16_t *maxIndex, int32_t *numOfNull) {
-  *min = INT64_MAX;
-  *max = INT64_MIN;
-  *minIndex = 0;
-  *maxIndex = 0;
-  
-  assert(numOfRow <= INT16_MAX);
-  
-  //  int64_t lastKey = 0;
-  //  int32_t lastVal = TSDB_DATA_INT_NULL;
-  
-  for (int32_t i = 0; i < numOfRow; ++i) {
-    if (isNull((const char*) &data[i], TSDB_DATA_TYPE_INT)) {
-      (*numOfNull) += 1;
-      continue;
-    }
-    
-    *sum += data[i];
-    if (*min > data[i]) {
-      *min = data[i];
-      *minIndex = i;
-    }
-    
-    if (*max < data[i]) {
-      *max = data[i];
-      *maxIndex = i;
-    }
-    
-    //    if (isNull(&lastVal, TSDB_DATA_TYPE_INT)) {
-    //      lastKey = primaryKey[i];
-    //      lastVal = data[i];
-    //    } else {
-    //      *wsum = lastVal * (primaryKey[i] - lastKey);
-    //      lastKey = primaryKey[i];
-    //      lastVal = data[i];
-    //    }
-  }
-}
-
-static void getStatics_i64(int64_t *primaryKey, int64_t *data, int32_t numOfRow, int64_t *min, int64_t *max,
-                           int64_t *sum, int16_t *minIndex, int16_t *maxIndex, int32_t *numOfNull) {
-  *min = INT64_MAX;
-  *max = INT64_MIN;
-  *minIndex = 0;
-  *maxIndex = 0;
-  
-  assert(numOfRow <= INT16_MAX);
-  
-  for (int32_t i = 0; i < numOfRow; ++i) {
-    if (isNull((const char*) &data[i], TSDB_DATA_TYPE_BIGINT)) {
-      (*numOfNull) += 1;
-      continue;
-    }
-    
-    *sum += data[i];
-    if (*min > data[i]) {
-      *min = data[i];
-      *minIndex = i;
-    }
-    
-    if (*max < data[i]) {
-      *max = data[i];
-      *maxIndex = i;
-    }
-    
-    //    if (isNull(&lastVal, TSDB_DATA_TYPE_BIGINT)) {
-    //      lastKey = primaryKey[i];
-    //      lastVal = data[i];
-    //    } else {
-    //      *wsum = lastVal * (primaryKey[i] - lastKey);
-    //      lastKey = primaryKey[i];
-    //      lastVal = data[i];
-    //    }
-  }
-}
-
-static void getStatics_f(int64_t *primaryKey, float *data, int32_t numOfRow, double *min, double *max, double *sum,
-                         int16_t *minIndex, int16_t *maxIndex, int32_t *numOfNull) {
-  float fmin      = DBL_MAX;
-  float fmax      = -DBL_MAX;
-  double dsum     = 0;
-  *minIndex       = 0;
-  *maxIndex       = 0;
-  
-  assert(numOfRow <= INT16_MAX);
-  
-  for (int32_t i = 0; i < numOfRow; ++i) {
-    if (isNull((const char*) &data[i], TSDB_DATA_TYPE_FLOAT)) {
-      (*numOfNull) += 1;
-      continue;
-    }
-    
-    float fv = 0;
-    fv = GET_FLOAT_VAL(&(data[i]));
-    dsum += fv;
-    if (fmin > fv) {
-      fmin = fv;
-      *minIndex = i;
-    }
-    
-    if (fmax < fv) {
-      fmax = fv;
-      *maxIndex = i;
-    }
-    
-    //    if (isNull(&lastVal, TSDB_DATA_TYPE_FLOAT)) {
-    //      lastKey = primaryKey[i];
-    //      lastVal = data[i];
-    //    } else {
-    //      *wsum = lastVal * (primaryKey[i] - lastKey);
-    //      lastKey = primaryKey[i];
-    //      lastVal = data[i];
-    //    }
-  }
-  
-  double csum = 0;
-  csum = GET_DOUBLE_VAL(sum);
-  csum += dsum;
-#ifdef _TD_ARM_32_
-  SET_DOUBLE_VAL_ALIGN(sum, &csum);
-  SET_DOUBLE_VAL_ALIGN(max, &fmax);
-  SET_DOUBLE_VAL_ALIGN(min, &fmin);
-#else
-  *sum = csum;
-  *max = fmax;
-  *min = fmin;
-#endif
-}
-
-static void getStatics_d(int64_t *primaryKey, double *data, int32_t numOfRow, double *min, double *max, double *sum,
-                         int16_t *minIndex, int16_t *maxIndex, int32_t *numOfNull) {
-  double dmin      = DBL_MAX;
-  double dmax      = -DBL_MAX;
-  double dsum      = 0;
-  *minIndex        = 0;
-  *maxIndex        = 0;
-  
-  assert(numOfRow <= INT16_MAX);
-  
-  for (int32_t i = 0; i < numOfRow; ++i) {
-    if (isNull((const char*) &data[i], TSDB_DATA_TYPE_DOUBLE)) {
-      (*numOfNull) += 1;
-      continue;
-    }
-    
-    double dv = 0;
-    dv = GET_DOUBLE_VAL(&(data[i]));
-    dsum += dv;
-    if (dmin > dv) {
-      dmin = dv;
-      *minIndex = i;
-    }
-    
-    if (dmax < dv) {
-      dmax = dv;
-      *maxIndex = i;
-    }
-    
-    //    if (isNull(&lastVal, TSDB_DATA_TYPE_DOUBLE)) {
-    //      lastKey = primaryKey[i];
-    //      lastVal = data[i];
-    //    } else {
-    //      *wsum = lastVal * (primaryKey[i] - lastKey);
-    //      lastKey = primaryKey[i];
-    //      lastVal = data[i];
-    //    }
-  }
-  
-  double csum = 0;
-  csum = GET_DOUBLE_VAL(sum);
-  csum += dsum;
-
-
-#ifdef _TD_ARM_32_
-  SET_DOUBLE_VAL_ALIGN(sum, &csum);
-    SET_DOUBLE_VAL_ALIGN(max, &dmax);
-    SET_DOUBLE_VAL_ALIGN(min, &dmin);
-#else
-  *sum = csum;
-  *max = dmax;
-  *min = dmin;
-#endif
-}
-
-void getStatistics(char *priData, char *data, int32_t size, int32_t numOfRow, int32_t type, int64_t *min, int64_t *max,
-                   int64_t *sum, int16_t *minIndex, int16_t *maxIndex, int32_t *numOfNull) {
-  int64_t *primaryKey = (int64_t *)priData;
-  if (type == TSDB_DATA_TYPE_BINARY || type == TSDB_DATA_TYPE_NCHAR) {
-    for (int32_t i = 0; i < numOfRow; ++i) {
-      if (isNull(data + i * size, type)) {
-        (*numOfNull) += 1;
-        continue;
-      }
-    }
-  } else {
-    if (type == TSDB_DATA_TYPE_TINYINT || type == TSDB_DATA_TYPE_BOOL) {
-      getStatics_i8(primaryKey, type, (int8_t *)data, numOfRow, min, max, sum, minIndex, maxIndex, numOfNull);
-    } else if (type == TSDB_DATA_TYPE_SMALLINT) {
-      getStatics_i16(primaryKey, (int16_t *)data, numOfRow, min, max, sum, minIndex, maxIndex, numOfNull);
-    } else if (type == TSDB_DATA_TYPE_INT) {
-      getStatics_i32(primaryKey, (int32_t *)data, numOfRow, min, max, sum, minIndex, maxIndex, numOfNull);
-    } else if (type == TSDB_DATA_TYPE_BIGINT || type == TSDB_DATA_TYPE_TIMESTAMP) {
-      getStatics_i64(primaryKey, (int64_t *)data, numOfRow, min, max, sum, minIndex, maxIndex, numOfNull);
-    } else if (type == TSDB_DATA_TYPE_DOUBLE) {
-      getStatics_d(primaryKey, (double *)data, numOfRow, (double*) min, (double*) max, (double*) sum, minIndex, maxIndex, numOfNull);
-    } else if (type == TSDB_DATA_TYPE_FLOAT) {
-      getStatics_f(primaryKey, (float *)data, numOfRow, (double*) min, (double*) max, (double*) sum, minIndex, maxIndex, numOfNull);
-    }
-  }
-}
 
 /**
  * param[1]: start time
@@ -4159,16 +3867,16 @@ static void interp_function(SQLFunctionCtx *pCtx) {
     SInterpInfoDetail *pInfoDetail = interpInfo.pInterpDetail;
     
     /* set no output result */
-    if (pInfoDetail->type == TSDB_INTERPO_NONE) {
+    if (pInfoDetail->type == TSDB_FILL_NONE) {
       pCtx->param[3].i64Key = 0;
     } else if (pInfoDetail->primaryCol == 1) {
       *(TSKEY *)pCtx->aOutputBuf = pInfoDetail->ts;
     } else {
-      if (pInfoDetail->type == TSDB_INTERPO_NULL) {
+      if (pInfoDetail->type == TSDB_FILL_NULL) {
         setNull(pCtx->aOutputBuf, pCtx->outputType, pCtx->outputBytes);
-      } else if (pInfoDetail->type == TSDB_INTERPO_SET_VALUE) {
+      } else if (pInfoDetail->type == TSDB_FILL_SET_VALUE) {
         tVariantDump(&pCtx->param[1], pCtx->aOutputBuf, pCtx->inputType);
-      } else if (pInfoDetail->type == TSDB_INTERPO_PREV) {
+      } else if (pInfoDetail->type == TSDB_FILL_PREV) {
         char *data = pCtx->param[1].pz;
         char *pVal = data + TSDB_KEYSIZE;
         
@@ -4179,7 +3887,7 @@ static void interp_function(SQLFunctionCtx *pCtx) {
           assignVal(pCtx->aOutputBuf, pVal, pCtx->outputBytes, pCtx->outputType);
         }
         
-      } else if (pInfoDetail->type == TSDB_INTERPO_LINEAR) {
+      } else if (pInfoDetail->type == TSDB_FILL_LINEAR) {
         char *data1 = pCtx->param[1].pz;
         char *data2 = pCtx->param[2].pz;
         
