@@ -17,7 +17,7 @@
 #include "hash.h"
 #include "hashfunc.h"
 #include "os.h"
-#include "shash.h"
+#include "hash.h"
 #include "taos.h"
 #include "taosdef.h"
 #include "tstoken.h"
@@ -389,6 +389,7 @@ static int32_t toBinary(tVariant *pVariant, char **pDest, int32_t *pDestSize) {
   return 0;
 }
 
+// todo handle the error
 static int32_t toNchar(tVariant *pVariant, char **pDest, int32_t *pDestSize) {
   char tmpBuf[40] = {0};
   
@@ -408,7 +409,7 @@ static int32_t toNchar(tVariant *pVariant, char **pDest, int32_t *pDestSize) {
   
   if (*pDest == pVariant->pz) {
     wchar_t *pWStr = calloc(1, (nLen + 1) * TSDB_NCHAR_SIZE);
-    taosMbsToUcs4(pDst, nLen, (char *)pWStr, (nLen + 1) * TSDB_NCHAR_SIZE);
+    taosMbsToUcs4(pDst, nLen, (char *)pWStr, (nLen + 1) * TSDB_NCHAR_SIZE, NULL);
     
     // free the binary buffer in the first place
     if (pVariant->nType == TSDB_DATA_TYPE_BINARY) {
@@ -424,7 +425,12 @@ static int32_t toNchar(tVariant *pVariant, char **pDest, int32_t *pDestSize) {
     
     pVariant->wpz = (wchar_t *)tmp;
   } else {
-    taosMbsToUcs4(pDst, nLen, *pDest, (nLen + 1) * TSDB_NCHAR_SIZE);
+    size_t output = -1;
+    taosMbsToUcs4(pDst, nLen, *pDest, (nLen + 1) * TSDB_NCHAR_SIZE, &output);
+    
+    if (pDestSize != NULL) {
+      *pDestSize = output;
+    }
   }
   
   return 0;
@@ -779,7 +785,7 @@ int32_t tVariantDump(tVariant *pVariant, char *payload, char type) {
     }
     case TSDB_DATA_TYPE_NCHAR: {
       if (pVariant->nType == TSDB_DATA_TYPE_NULL) {
-        *(uint32_t *)payload = TSDB_DATA_NCHAR_NULL;
+        *(uint32_t *) payload = TSDB_DATA_NCHAR_NULL;
       } else {
         if (pVariant->nType != TSDB_DATA_TYPE_NCHAR) {
           toNchar(pVariant, &payload, &pVariant->nLen);

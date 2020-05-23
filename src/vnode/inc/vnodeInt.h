@@ -20,15 +20,25 @@
 extern "C" {
 #endif
 
+#include "tlog.h"
 #include "tsync.h"
 #include "twal.h"
+#include "tcq.h"
+
+extern int32_t vDebugFlag;
+
+#define vError(...) if (vDebugFlag & DEBUG_ERROR) {taosPrintLog("ERROR VND ", 255, __VA_ARGS__); }
+#define vWarn(...) if (vDebugFlag & DEBUG_WARN) {taosPrintLog("WARN  VND ", vDebugFlag, __VA_ARGS__); }
+#define vTrace(...) if (vDebugFlag & DEBUG_TRACE) {taosPrintLog("VND ", vDebugFlag, __VA_ARGS__); }
+#define vPrint(...) {taosPrintLog("VND ", 255, __VA_ARGS__); }
 
 typedef struct {
   int32_t      vgId;      // global vnode group ID
   int32_t      refCount;  // reference count
   int          status; 
   int8_t       role;   
-  int64_t      version;
+  int64_t      version;   // current version 
+  int64_t      fversion;  // version on saved data file
   void        *wqueue;
   void        *rqueue;
   void        *wal;
@@ -36,10 +46,11 @@ typedef struct {
   void        *sync;
   void        *events;
   void        *cq;  // continuous query
-  int32_t     cfgVersion;
-  STsdbCfg    tsdbCfg;
-  SSyncCfg    syncCfg;
-  SWalCfg     walCfg;
+  int32_t      cfgVersion;
+  STsdbCfg     tsdbCfg;
+  SSyncCfg     syncCfg;
+  SWalCfg      walCfg;
+  char        *rootDir;
 } SVnodeObj;
 
 int  vnodeWriteToQueue(void *param, void *pHead, int type);

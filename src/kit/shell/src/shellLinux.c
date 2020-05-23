@@ -50,7 +50,7 @@ static struct argp_option options[] = {
 static error_t parse_opt(int key, char *arg, struct argp_state *state) {
   /* Get the input argument from argp_parse, which we
   know is a pointer to our arguments structure. */
-  struct arguments *arguments = state->input;
+  SShellArguments *arguments = state->input;
   wordexp_t full_path;
 
   switch (key) {
@@ -62,7 +62,13 @@ static error_t parse_opt(int key, char *arg, struct argp_state *state) {
       if (arg) arguments->password = arg;
       break;
     case 'P':
-      tsMnodeShellPort = atoi(arg);
+      if (arg) {
+        tsDnodeShellPort = atoi(arg);
+      } else {
+        fprintf(stderr, "Invalid port\n");
+        return -1;
+      }
+
       break;
     case 't':
       arguments->timezone = arg;
@@ -101,7 +107,12 @@ static error_t parse_opt(int key, char *arg, struct argp_state *state) {
       wordfree(&full_path);
       break;
     case 'T':
-      arguments->threadNum = atoi(arg);
+      if (arg) {
+        arguments->threadNum = atoi(arg);
+      } else {
+        fprintf(stderr, "Invalid number of threads\n");
+        return -1;
+      }
       break;
     case 'd':
       arguments->database = arg;
@@ -118,7 +129,7 @@ static error_t parse_opt(int key, char *arg, struct argp_state *state) {
 /* Our argp parser. */
 static struct argp argp = {options, parse_opt, args_doc, doc};
 
-void shellParseArgument(int argc, char *argv[], struct arguments *arguments) {
+void shellParseArgument(int argc, char *argv[], SShellArguments *arguments) {
   static char verType[32] = {0};
   sprintf(verType, "version: %s\n", version);
 

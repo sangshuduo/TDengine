@@ -79,7 +79,7 @@ static FORCE_INLINE void taosFreeNode(void *data) {
  */
 static SCacheDataNode *taosCreateHashNode(const char *key, size_t keyLen, const char *pData, size_t size,
                                           uint64_t duration) {
-  size_t totalSize = size + sizeof(SCacheDataNode) + keyLen;
+  size_t totalSize = size + sizeof(SCacheDataNode) + keyLen + 1;
   
   SCacheDataNode *pNewNode = calloc(1, totalSize);
   if (pNewNode == NULL) {
@@ -149,6 +149,7 @@ static void taosRemoveFromTrash(SCacheObj *pCacheObj, STrashElem *pElem) {
   }
   
   pElem->pData->signature = 0;
+  if (pCacheObj->freeFp) pCacheObj->freeFp(pElem->pData->data);
   free(pElem->pData);
   free(pElem);
 }
@@ -210,7 +211,8 @@ static FORCE_INLINE void taosCacheReleaseNode(SCacheObj *pCacheObj, SCacheDataNo
   int32_t size = pNode->size;
   taosHashRemove(pCacheObj->pHashTable, pNode->key, pNode->keySize);
   
-  uTrace("key:%s is removed from cache,total:%d,size:%ldbytes", pNode->key, pCacheObj->totalSize, size);
+  uTrace("key:%s is removed from cache,total:%d,size:%ldbytes", pNode->key, pCacheObj->totalSize, size);  
+  if (pCacheObj->freeFp) pCacheObj->freeFp(pNode->data);
   free(pNode);
 }
 
@@ -304,9 +306,9 @@ static FORCE_INLINE SCacheDataNode *taosAddToCacheImpl(SCacheObj *pCacheObj, con
 static void doCleanupDataCache(SCacheObj *pCacheObj) {
   __cache_wr_lock(pCacheObj);
   
-  if (taosHashGetSize(pCacheObj->pHashTable) > 0) {
-    taosHashCleanup(pCacheObj->pHashTable);
-  }
+  //if (taosHashGetSize(pCacheObj->pHashTable) > 0) {
+  taosHashCleanup(pCacheObj->pHashTable);
+  //}
   
   __cache_unlock(pCacheObj);
   
@@ -324,13 +326,26 @@ static void doCleanupDataCache(SCacheObj *pCacheObj) {
 static void taosCacheRefresh(void *handle, void *tmrId) {
   SCacheObj *pCacheObj = (SCacheObj *)handle;
   
-  if (pCacheObj == NULL || taosHashGetSize(pCacheObj->pHashTable) == 0) {
+  if (pCacheObj == NULL || T_REF_VAL_GET(pCacheObj) == 0) {
     uTrace("object is destroyed. no refresh retry");
     return;
   }
   
-  if (pCacheObj->deleting == 1) {
-    doCleanupDataCache(pCacheObj);
+  int16_t ref = T_REF_INC(pCacheObj);
+  if (ref == 1) {
+    T_REF_DEC(pCacheObj);
+    return;
+  }
+  
+  // todo add the ref before start the timer
+  int32_t num = taosHashGetSize(pCacheObj->pHashTable);
+  if (num == 0) {
+    ref = T_REF_DEC(pCacheObj);
+    if (ref == 0) {
+      doCleanupDataCache(pCacheObj);
+    } else {
+      taosTmrReset(taosCacheRefresh, pCacheObj->refreshTime, pCacheObj, pCacheObj->tmrCtrl, &pCacheObj->pTimer);
+    }
     return;
   }
   
@@ -355,16 +370,19 @@ static void taosCacheRefresh(void *handle, void *tmrId) {
   __cache_unlock(pCacheObj);
   
   taosHashDestroyIter(pIter);
-  
-  if (pCacheObj->deleting == 1) {  // clean up resources and abort
-    doCleanupDataCache(pCacheObj);
-  } else {
+
     taosTrashEmpty(pCacheObj, false);
-    taosTmrReset(taosCacheRefresh, pCacheObj->refreshTime, pCacheObj, pCacheObj->tmrCtrl, &pCacheObj->pTimer);
-  }
+    
+    ref = T_REF_DEC(pCacheObj);
+    if (ref == 0)  {
+      doCleanupDataCache(pCacheObj);
+      return;
+    } else {
+      taosTmrReset(taosCacheRefresh, pCacheObj->refreshTime, pCacheObj, pCacheObj->tmrCtrl, &pCacheObj->pTimer);
+    }
 }
 
-SCacheObj *taosCacheInit(void *tmrCtrl, int64_t refreshTime) {
+SCacheObj *taosCacheInitWithCb(void *tmrCtrl, int64_t refreshTime, void (*freeCb)(void *data)) {
   if (tmrCtrl == NULL || refreshTime <= 0) {
     return NULL;
   }
@@ -385,6 +403,7 @@ SCacheObj *taosCacheInit(void *tmrCtrl, int64_t refreshTime) {
   // set free cache node callback function for hash table
   taosHashSetFreecb(pCacheObj->pHashTable, taosFreeNode);
   
+  pCacheObj->freeFp = freeCb;
   pCacheObj->refreshTime = refreshTime * 1000;
   pCacheObj->tmrCtrl = tmrCtrl;
   
@@ -399,7 +418,12 @@ SCacheObj *taosCacheInit(void *tmrCtrl, int64_t refreshTime) {
     return NULL;
   }
   
+  T_REF_INC(pCacheObj);
   return pCacheObj;
+}
+
+SCacheObj *taosCacheInit(void *tmrCtrl, int64_t refreshTime) {
+  return taosCacheInitWithCb(tmrCtrl, refreshTime, NULL);
 }
 
 void *taosCachePut(SCacheObj *pCacheObj, const char *key, const void *pData, size_t dataSize, int duration) {
@@ -422,6 +446,8 @@ void *taosCachePut(SCacheObj *pCacheObj, const char *key, const void *pData, siz
       
       uTrace("key:%s %p added into cache, added:%" PRIu64 ", expire:%" PRIu64 ", total:%d, size:%" PRId64 " bytes",
              key, pNode, pNode->addedTime, pNode->expiredTime, pCacheObj->totalSize, dataSize);
+    } else {
+      uError("key:%s failed to added into cache, out of memory", key);
     }
   } else {  // old data exists, update the node
     pNode = taosUpdateCacheImpl(pCacheObj, pOld, key, keyLen, pData, dataSize, duration * 1000L);
@@ -552,5 +578,8 @@ void taosCacheCleanup(SCacheObj *pCacheObj) {
     return;
   }
   
-  pCacheObj->deleting = 1;
+  int32_t ref = T_REF_DEC(pCacheObj);
+  if (ref == 0) {
+    doCleanupDataCache(pCacheObj);
+  }
 }

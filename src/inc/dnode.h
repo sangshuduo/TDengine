@@ -20,6 +20,8 @@
 extern "C" {
 #endif
 
+#include "trpc.h"
+
 typedef struct {
   int32_t queryReqNum;
   int32_t submitReqNum;
@@ -42,10 +44,15 @@ void  dnodeFreeRqueue(void *rqueue);
 void  dnodeSendRpcWriteRsp(void *pVnode, void *param, int32_t code);
 
 bool     dnodeIsFirstDeploy();
-uint32_t dnodeGetMnodeMasteIp();
-void     dnodeGetMnodeIpSet(void *ipSet, bool usePublicIp);
+char    *dnodeGetMnodeMasterEp();
+void     dnodeGetMnodeDnodeIpSet(void *ipSet);
 void *   dnodeGetMnodeInfos();
 int32_t  dnodeGetDnodeId();
+
+void     dnodeAddClientRspHandle(uint8_t msgType, void (*fp)(SRpcMsg *rpcMsg));
+void     dnodeAddServerMsgHandle(uint8_t msgType, void (*fp)(SRpcMsg *rpcMsg));
+void     dnodeSendMsgToDnode(SRpcIpSet *ipSet, SRpcMsg *rpcMsg);
+void     dnodeSendMsgToDnodeRecv(SRpcMsg *rpcMsg, SRpcMsg *rpcRsp);
 
 #ifdef __cplusplus
 }

@@ -68,7 +68,7 @@ typedef struct SExtFileInfo {
 } SExtFileInfo;
 
 typedef struct tFilePage {
-  uint64_t numOfElems;
+  uint64_t num;
   char     data[];
 } tFilePage;
 
@@ -119,12 +119,6 @@ typedef struct tExtMemBuffer {
   SColumnModel *         pColumnModel;
   EXT_BUFFER_FLUSH_MODEL flushModel;
 } tExtMemBuffer;
-
-//typedef struct tTagSchema {
-//  struct SSchema *pSchema;
-//  int32_t         numOfCols;
-//  int32_t         colOffset[];
-//} tTagSchema;
 
 /**
  *

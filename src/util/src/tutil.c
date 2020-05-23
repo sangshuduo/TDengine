@@ -416,12 +416,12 @@ void getTmpfilePath(const char *fileNamePrefix, char *dstPath) {
 #else
   char *tmpDir = "/tmp/";
 #endif
-  
+  int64_t ts = taosGetTimestampUs();
   strcpy(tmpPath, tmpDir);
   strcat(tmpPath, tdengineTmpFileNamePrefix);
   strcat(tmpPath, fileNamePrefix);
-  strcat(tmpPath, "-%llu-%u");
-  snprintf(dstPath, PATH_MAX, tmpPath, taosGetPthreadId(), atomic_add_fetch_32(&tmpFileSerialNum, 1));
+  strcat(tmpPath, "-%d-%"PRIu64"-%u-%"PRIu64);
+  snprintf(dstPath, PATH_MAX, tmpPath, getpid(), taosGetPthreadId(), atomic_add_fetch_32(&tmpFileSerialNum, 1), ts);
 }
 
 int tasoUcs4Compare(void* f1_ucs4, void *f2_ucs4, int bytes) {
@@ -490,21 +490,26 @@ bool taosUcs4ToMbs(void *ucs4, int32_t ucs4_max_len, char *mbs) {
 #endif
 }
 
-bool taosMbsToUcs4(char *mbs, int32_t mbs_len, char *ucs4, int32_t ucs4_max_len) {
+bool taosMbsToUcs4(char *mbs, size_t mbsLength, char *ucs4, int32_t ucs4_max_len, size_t* len) {
   memset(ucs4, 0, ucs4_max_len);
 #ifdef USE_LIBICONV
   iconv_t cd = iconv_open(DEFAULT_UNICODE_ENCODEC, tsCharset);
-  size_t ucs4_input_len = mbs_len;
-  size_t outLen = ucs4_max_len;
-  if (iconv(cd, &mbs, &ucs4_input_len, &ucs4, &outLen) == -1) {
+  size_t ucs4_input_len = mbsLength;
+  size_t outLeft = ucs4_max_len;
+  if (iconv(cd, &mbs, &ucs4_input_len, &ucs4, &outLeft) == -1) {
     iconv_close(cd);
     return false;
   }
+  
   iconv_close(cd);
+  if (len != NULL) {
+    *len = ucs4_max_len - outLeft;
+  }
+  
   return true;
 #else
   mbstate_t state = {0};
-  int32_t len = mbsnrtowcs((wchar_t *) ucs4, (const char **) &mbs, mbs_len, ucs4_max_len / 4, &state);
+  int32_t len = mbsnrtowcs((wchar_t *) ucs4, (const char **) &mbs, mbsLength, ucs4_max_len / 4, &state);
   return len >= 0;
 #endif
 }

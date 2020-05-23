@@ -23,20 +23,19 @@
 #include "tglobal.h"
 #include "dnode.h"
 #include "mgmtDef.h"
-#include "mgmtLog.h"
+#include "mgmtInt.h"
+#include "mgmtServer.h"
 #include "mgmtAcct.h"
 #include "mgmtDnode.h"
 #include "mgmtMnode.h"
 #include "mgmtDb.h"
-#include "mgmtDClient.h"
-#include "mgmtDServer.h"
 #include "mgmtSdb.h"
 #include "mgmtVgroup.h"
 #include "mgmtUser.h"
 #include "mgmtTable.h"
 #include "mgmtShell.h"
 
-void *tsMgmtTmr = NULL;
+extern void *tsMgmtTmr;
 static bool tsMgmtIsRunning = false;
 
 int32_t mgmtStartSystem() {
@@ -51,19 +50,8 @@ int32_t mgmtStartSystem() {
     mkdir(tsMnodeDir, 0755);
   }
 
-  tsMgmtTmr = taosTmrInit((tsMaxShellConns) * 3, 200, 3600000, "MND");
-  if (tsMgmtTmr == NULL) {
-    mError("failed to init timer");
-    return -1;
-  }
-
   if (mgmtInitAccts() < 0) {
     mError("failed to init accts");
-    return -1;
-  }
-
-  if (grantInit() < 0) {
-    mError("failed to init grant");
     return -1;
   }
 
@@ -106,11 +94,12 @@ int32_t mgmtStartSystem() {
     mError("failed to init balance")
   }
 
-  if (mgmtInitDClient() < 0) {
+  if (grantInit() < 0) {
+    mError("failed to init grant");
     return -1;
   }
 
-  if (mgmtInitDServer() < 0) {
+  if (mgmtInitServer() < 0) {
     return -1;
   }
 
@@ -130,7 +119,7 @@ int32_t mgmtInitSystem() {
 
   struct stat dirstat;
   bool fileExist  = (stat(tsMnodeDir, &dirstat) == 0);
-  bool asMaster = (strcmp(tsMasterIp, tsPrivateIp) == 0);
+  bool asMaster = (strcmp(tsFirst, tsLocalEp) == 0);
 
   if (asMaster || fileExist) {
     if (mgmtStartSystem() != 0) {
@@ -143,21 +132,19 @@ int32_t mgmtInitSystem() {
 
 void mgmtCleanUpSystem() {
   mPrint("starting to clean up mgmt");
-  grantCleanUp();
-  mgmtCleanupMnodes();
-  balanceCleanUp();
+  tsMgmtIsRunning = false;
   mgmtCleanUpShell();
-  mgmtCleanupDClient();
-  mgmtCleanupDServer();
-  mgmtCleanUpAccts();
+  mgmtCleanupServer();
+  grantCleanUp();
+  balanceCleanUp();
+  sdbCleanUp();
+  mgmtCleanupMnodes();
   mgmtCleanUpTables();
   mgmtCleanUpVgroups();
   mgmtCleanUpDbs();
   mgmtCleanupDnodes();
   mgmtCleanUpUsers();
-  sdbCleanUp();
-  taosTmrCleanUp(tsMgmtTmr);
-  tsMgmtIsRunning = false;
+  mgmtCleanUpAccts();
   mPrint("mgmt is cleaned up");
 }
 

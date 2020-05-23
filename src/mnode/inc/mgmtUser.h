@@ -24,10 +24,10 @@ extern "C" {
 int32_t   mgmtInitUsers();
 void      mgmtCleanUpUsers();
 SUserObj *mgmtGetUser(char *name);
-void *    mgmtGetNextUser(void *pNode, SUserObj **pUser);
+void *    mgmtGetNextUser(void *pIter, SUserObj **pUser);
 void      mgmtIncUserRef(SUserObj *pUser);
 void      mgmtDecUserRef(SUserObj *pUser);
-SUserObj *mgmtGetUserFromConn(void *pConn, bool *usePublicIp);
+SUserObj *mgmtGetUserFromConn(void *pConn);
 int32_t   mgmtCreateUser(SAcctObj *pAcct, char *name, char *pass);
 void      mgmtDropAllUsers(SAcctObj *pAcct);
 

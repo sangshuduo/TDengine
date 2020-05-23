@@ -1,4 +1,4 @@
-#run unique/db/commit.sim
+run unique/db/commit.sim
 run unique/db/delete.sim
 run unique/db/replica_add12.sim
 run unique/db/replica_add13.sim

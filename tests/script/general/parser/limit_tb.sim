@@ -111,18 +111,7 @@ endi
 if $data09 != nchar0 then
   return -1
 endi
-if $data11 != null then
-  return -1
-endi
-if $data12 != null then
-  return -1
-endi
-if $data13 != null then
-  return -1
-endi
-if $data14 != null then
-  return -1
-endi
+
 
 ## TBASE-329
 sql select * from $tb where c1 < 9 order by ts desc limit 1 offset 1
@@ -538,6 +527,7 @@ if $data14 != 8.000000000 then
   return -1
 endi
 if $data21 != null then
+  print expect null, actual: $data21
   return -1
 endi
 

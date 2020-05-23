@@ -1,14 +1,14 @@
 system sh/stop_dnodes.sh
 
-system sh/ip.sh -i 1 -s up
-system sh/ip.sh -i 2 -s up
-system sh/ip.sh -i 3 -s up
-system sh/ip.sh -i 4 -s up
 
-system sh/deploy.sh -n dnode1 -m 192.168.0.1 -i 192.168.0.1
-system sh/deploy.sh -n dnode2 -m 192.168.0.1 -i 192.168.0.2
-system sh/deploy.sh -n dnode3 -m 192.168.0.1 -i 192.168.0.3
-system sh/deploy.sh -n dnode4 -m 192.168.0.1 -i 192.168.0.4
+
+
+
+
+system sh/deploy.sh -n dnode1 -i 1
+system sh/deploy.sh -n dnode2 -i 2
+system sh/deploy.sh -n dnode3 -i 3
+system sh/deploy.sh -n dnode4 -i 4
 
 system sh/cfg.sh -n dnode1 -c numOfTotalVnodes -v 8
 system sh/cfg.sh -n dnode2 -c numOfTotalVnodes -v 8
@@ -20,30 +20,25 @@ system sh/cfg.sh -n dnode2 -c statusInterval -v 1
 system sh/cfg.sh -n dnode3 -c statusInterval -v 1
 system sh/cfg.sh -n dnode4 -c statusInterval -v 1
 
-system sh/cfg.sh -n dnode1 -c balanceMonitorInterval -v 1
-system sh/cfg.sh -n dnode2 -c balanceMonitorInterval -v 1
-system sh/cfg.sh -n dnode3 -c balanceMonitorInterval -v 1
-system sh/cfg.sh -n dnode4 -c balanceMonitorInterval -v 1
+system sh/cfg.sh -n dnode1 -c balanceInterval -v 10
+system sh/cfg.sh -n dnode2 -c balanceInterval -v 10
+system sh/cfg.sh -n dnode3 -c balanceInterval -v 10
+system sh/cfg.sh -n dnode4 -c balanceInterval -v 10
 
-system sh/cfg.sh -n dnode1 -c balanceStartInterval -v 10
-system sh/cfg.sh -n dnode2 -c balanceStartInterval -v 10
-system sh/cfg.sh -n dnode3 -c balanceStartInterval -v 10
-system sh/cfg.sh -n dnode4 -c balanceStartInterval -v 10
-
-system sh/cfg.sh -n dnode1 -c clog -v 1
-system sh/cfg.sh -n dnode2 -c clog -v 1
-system sh/cfg.sh -n dnode3 -c clog -v 1
-system sh/cfg.sh -n dnode4 -c clog -v 1
+system sh/cfg.sh -n dnode1 -c wallevel -v 1
+system sh/cfg.sh -n dnode2 -c wallevel -v 1
+system sh/cfg.sh -n dnode3 -c wallevel -v 1
+system sh/cfg.sh -n dnode4 -c wallevel -v 1
 
 system sh/cfg.sh -n dnode1 -c mgmtEqualVnodeNum -v 0
 system sh/cfg.sh -n dnode2 -c mgmtEqualVnodeNum -v 0
 system sh/cfg.sh -n dnode3 -c mgmtEqualVnodeNum -v 0
 system sh/cfg.sh -n dnode4 -c mgmtEqualVnodeNum -v 0
 
-system sh/cfg.sh -n dnode1 -c sessionsPerVnode -v 4
-system sh/cfg.sh -n dnode2 -c sessionsPerVnode -v 4
-system sh/cfg.sh -n dnode3 -c sessionsPerVnode -v 4
-system sh/cfg.sh -n dnode4 -c sessionsPerVnode -v 4
+system sh/cfg.sh -n dnode1 -c maxtablesPerVnode -v 4
+system sh/cfg.sh -n dnode2 -c maxtablesPerVnode -v 4
+system sh/cfg.sh -n dnode3 -c maxtablesPerVnode -v 4
+system sh/cfg.sh -n dnode4 -c maxtablesPerVnode -v 4
 
 system sh/cfg.sh -n dnode1 -c numOfMPeers -v 3
 system sh/cfg.sh -n dnode2 -c numOfMPeers -v 3
@@ -80,7 +75,7 @@ $db = $dbPrefix . $i
 $mt = $mtPrefix . $i
 $st = $stPrefix . $i
 
-sql create database $db tables 4
+sql create database $db maxTables 4
 sql use $db
 sql create table $mt (ts timestamp, tbcol int, tbcol2 float) TAGS(tgcol int)
 
@@ -161,19 +156,19 @@ show1:
 	endi
 sql show dnodes -x show1
 $dnode1Vnodes = $data3_192.168.0.1
-print 192.168.0.1 $dnode1Vnodes
+print dnode1 $dnode1Vnodes
 $dnode2Vnodes = $data3_192.168.0.2
-print 192.168.0.2 $dnode2Vnodes
+print dnode2 $dnode2Vnodes
 
 if $dnode1Vnodes != 6 then
   goto show1
 endi
-if $dnode2Vnodes != null then
+if $dnode2Vnodes != NULL then
   goto show1
 endi
 
 print =============== step4 start dnode2
-sql create dnode 192.168.0.2
+sql create dnode $hostname2
 system sh/exec.sh -n dnode2 -s start
 sleep 8000
 
@@ -186,9 +181,9 @@ show2:
 	endi
 sql show dnodes -x show2
 $dnode1Vnodes = $data3_192.168.0.1
-print 192.168.0.1 $dnode1Vnodes
+print dnode1 $dnode1Vnodes
 $dnode2Vnodes = $data3_192.168.0.2
-print 192.168.0.2 $dnode2Vnodes
+print dnode2 $dnode2Vnodes
 
 if $dnode1Vnodes != 7 then
   goto show2
@@ -202,7 +197,7 @@ system sh/exec.sh -n dnode1 -s stop
 print stop dnode1 and sleep 10000
 sleep 10000
 
-sql drop dnode 192.168.0.1
+sql drop dnode $hostname1
 print drop dnode1 and sleep 9000
 sleep 9000
 
@@ -215,11 +210,11 @@ show6:
 	endi
 sql show dnodes -x show6
 $dnode1Vnodes = $data3_192.168.0.1
-print 192.168.0.1 $dnode1Vnodes
+print dnode1 $dnode1Vnodes
 $dnode2Vnodes = $data3_192.168.0.2
-print 192.168.0.2 $dnode2Vnodes
+print dnode2 $dnode2Vnodes
 
-if $dnode1Vnodes != null then
+if $dnode1Vnodes != NULL then
   goto show6
 endi
 if $dnode2Vnodes != 6 then

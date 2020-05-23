@@ -1,10 +1,9 @@
 system sh/stop_dnodes.sh
 
-system sh/ip.sh -i 1 -s up
-system sh/deploy.sh -n dnode1 -m 192.168.0.1 -i 192.168.0.1
-system sh/cfg.sh -n dnode1 -c commitLog -v 0
-system sh/cfg.sh -n dnode1 -c meterMetaKeepTimer -v 10
-system sh/cfg.sh -n dnode1 -c metricMetaKeepTimer -v 10
+
+system sh/deploy.sh -n dnode1 -i 1
+system sh/cfg.sh -n dnode1 -c walLevel -v 0
+system sh/cfg.sh -n dnode1 -c tableMetaKeepTimer -v 10
 system sh/exec.sh -n dnode1 -s start
 
 sleep 3000
@@ -28,11 +27,15 @@ sql create table $tb using $mt tags( "1" )
 sql insert into $tb values (now, 1)
 
 sql select * from $tb
-print ===>rows $rows, data $data01
+#print ===>rows $rows, data $data01
+
 if $rows != 1 then
+  print expect 1, actual: $rows
   return -1
-endi  
+endi
+
 if $data01 != 1 then
+  print expect 1 actual: $data01
   return -1
 endi  
 
@@ -47,10 +50,9 @@ endi
 
 print =============== step2
 system sh/exec.sh -n dnode1 -s stop
-system sh/deploy.sh -n dnode1 -m 192.168.0.1 -i 192.168.0.1
-system sh/cfg.sh -n dnode1 -c commitLog -v 0
-system sh/cfg.sh -n dnode1 -c meterMetaKeepTimer -v 10
-system sh/cfg.sh -n dnode1 -c metricMetaKeepTimer -v 10
+system sh/deploy.sh -n dnode1 -i 1
+system sh/cfg.sh -n dnode1 -c walLevel -v 0
+system sh/cfg.sh -n dnode1 -c tableMetaKeepTimer -v 10
 system sh/exec.sh -n dnode1 -s start
 
 print =============== step3
@@ -68,8 +70,10 @@ sql select * from $tb
 print ===>rows $rows, data $data01
 if $rows != 1 then
   return -1
-endi  
+endi
+
 if $data01 != 1 then
+  print expect 1, actual $data01
   return -1
 endi  
 
@@ -82,6 +86,8 @@ if $data01 != 1 then
   return -1
 endi  
 if $data02 != 3 then
+  print expect 3 actual: $data02
   return -1
 endi 
 
+system sh/exec.sh -n dnode1 -s stop -x SIGINT

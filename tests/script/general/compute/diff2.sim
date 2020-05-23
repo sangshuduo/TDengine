@@ -1,7 +1,7 @@
 system sh/stop_dnodes.sh
-system sh/ip.sh -i 1 -s up
-system sh/deploy.sh -n dnode1 -m 192.168.0.1 -i 192.168.0.1
-system sh/cfg.sh -n dnode1 -c commitLog -v 0
+
+system sh/deploy.sh -n dnode1 -i 1
+system sh/cfg.sh -n dnode1 -c walLevel -v 0
 system sh/exec.sh -n dnode1 -s start
 sleep 3000
 sql connect
@@ -81,7 +81,7 @@ sql_error select diff(c8) from $tb
 sql_error select diff(c9) from $tb
 sql_error select diff(ts) from $tb
 sql_error select diff(c1), diff(c2) from $tb
-sql_error select 2+diff(c1) from $tb
+#sql_error select 2+diff(c1) from $tb
 sql_error select diff(c1+2) from $tb
 sql_error select diff(c1) from $tb where ts > 0 and ts < now + 100m interval(10m)
 sql_error select diff(c1) from $mt
@@ -153,3 +153,5 @@ print =============== clear
 #if $rows != 0 then 
 #  return -1
 #endi
+
+system sh/exec.sh -n dnode1 -s stop -x SIGINT

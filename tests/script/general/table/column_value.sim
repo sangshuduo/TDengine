@@ -1,8 +1,6 @@
 system sh/stop_dnodes.sh
-
-system sh/ip.sh -i 1 -s up
-system sh/deploy.sh -n dnode1 -m 192.168.0.1 -i 192.168.0.1
-system sh/cfg.sh -n dnode1 -c commitLog -v 0
+system sh/deploy.sh -n dnode1 -i 1
+system sh/cfg.sh -n dnode1 -c walLevel -v 0
 system sh/exec.sh -n dnode1 -s start
 
 sleep 3000
@@ -36,13 +34,12 @@ if $rows != 0 then
 endi
 
 print =============== step2
-sql create table  $tb (ts timestamp, speed bigint, v1 binary(1500), v2 binary(1500), v3 binary(1500), v4 binary(500), v5 binary(500)) -x step2
-	return -1
-step2:
+sql create table  $tb (ts timestamp, speed bigint, v1 binary(1500), v2 binary(1500), v3 binary(1500), v4 binary(500), v5 binary(500))
 sql show tables
-if $rows != 0 then 
+if $rows != 1 then 
   return -1
 endi
+sql drop table $tb
 
 print =============== step3
 sql create table $tb (ts timestamp, speed float, v1 binary(100), v2 binary(100), v3 binary(100), v4 binary(100), v5 binary(100)) 
@@ -63,11 +60,9 @@ if $rows != 0 then
 endi
 
 print =============== step4
-sql create table  $tb (ts timestamp, speed double, v1 binary(1500), v2 binary(1500), v3 binary(1500), v4 binary(500), v5 binary(500)) -x step4
-	return -1
-step4:
+sql create table  $tb (ts timestamp, speed double, v1 binary(1500), v2 binary(1500), v3 binary(1500), v4 binary(500), v5 binary(500)) 
 sql show tables
-if $rows != 0 then 
+if $rows != 1 then 
   return -1
 endi
 
@@ -77,6 +72,4 @@ if $rows != 0 then
   return -1
 endi
 
-
-
-
+system sh/exec.sh -n dnode1 -s stop -x SIGINT

@@ -20,15 +20,15 @@
 #include "tutil.h"
 #include "dnode.h"
 #include "mgmtDef.h"
-#include "mgmtLog.h"
+#include "mgmtInt.h"
 #include "mgmtAcct.h"
 #include "mgmtDb.h"
 #include "mgmtSdb.h"
 #include "mgmtUser.h"
 
 void *  tsAcctSdb = NULL;
-int32_t tsAcctUpdateSize;
-static void mgmtCreateRootAcct();
+static int32_t tsAcctUpdateSize;
+static void    mgmtCreateRootAcct();
 
 static int32_t mgmtActionAcctDestroy(SSdbOper *pOper) {
   SAcctObj *pAcct = pOper->pObj;
@@ -94,7 +94,7 @@ int32_t mgmtInitAccts() {
   SSdbTableDesc tableDesc = {
     .tableId      = SDB_TABLE_ACCOUNT,
     .tableName    = "accounts",
-    .hashSessions = TSDB_MAX_ACCOUNTS,
+    .hashSessions = TSDB_DEFAULT_ACCOUNTS_HASH_SIZE,
     .maxRowSize   = tsAcctUpdateSize,
     .refCountPos  = (int8_t *)(&tObj.refCount) - (int8_t *)&tObj,
     .keyType      = SDB_KEY_STRING,
@@ -126,8 +126,8 @@ void *mgmtGetAcct(char *name) {
   return sdbGetRow(tsAcctSdb, name);
 }
 
-void *mgmtGetNextAcct(void *pNode, SAcctObj **pAcct) {
-  return sdbFetchRow(tsAcctSdb, pNode, (void **)pAcct); 
+void *mgmtGetNextAcct(void *pIter, SAcctObj **pAcct) {
+  return sdbFetchRow(tsAcctSdb, pIter, (void **)pAcct); 
 }
 
 void mgmtIncAcctRef(SAcctObj *pAcct) {

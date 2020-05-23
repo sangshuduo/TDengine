@@ -23,8 +23,9 @@
 #include "ttime.h"
 #include "tname.h"
 #include "tbalance.h"
+#include "tdataformat.h"
 #include "mgmtDef.h"
-#include "mgmtLog.h"
+#include "mgmtInt.h"
 #include "mgmtAcct.h"
 #include "mgmtDb.h"
 #include "mgmtDnode.h"
@@ -36,7 +37,7 @@
 #include "mgmtUser.h"
 #include "mgmtVgroup.h"
 
-void *  tsDbSdb = NULL;
+static void *  tsDbSdb = NULL;
 static int32_t tsDbUpdateSize;
 
 static int32_t mgmtCreateDb(SAcctObj *pAcct, SCMCreateDbMsg *pCreate);
@@ -82,7 +83,7 @@ static int32_t mgmtDbActionDelete(SSdbOper *pOper) {
   mgmtDropDbFromAcct(pAcct, pDb);
   mgmtDropAllChildTables(pDb);
   mgmtDropAllSuperTables(pDb);
-  mgmtDropAllVgroups(pDb);
+  mgmtDropAllDbVgroups(pDb, false);
   mgmtDecAcctRef(pAcct);
   
   return TSDB_CODE_SUCCESS;
@@ -95,6 +96,8 @@ static int32_t mgmtDbActionUpdate(SSdbOper *pOper) {
     memcpy(pSaved, pDb, pOper->rowSize);
     free(pDb);
   }
+  mgmtUpdateAllDbVgroups(pSaved);
+  mgmtDecDbRef(pSaved);
   return TSDB_CODE_SUCCESS;
 }
 
@@ -125,7 +128,7 @@ int32_t mgmtInitDbs() {
   SSdbTableDesc tableDesc = {
     .tableId      = SDB_TABLE_DB,
     .tableName    = "dbs",
-    .hashSessions = TSDB_MAX_DBS,
+    .hashSessions = TSDB_DEFAULT_DBS_HASH_SIZE,
     .maxRowSize   = tsDbUpdateSize,
     .refCountPos  = (int8_t *)(&tObj.refCount) - (int8_t *)&tObj,
     .keyType      = SDB_KEY_STRING,
@@ -154,6 +157,10 @@ int32_t mgmtInitDbs() {
   return 0;
 }
 
+void *mgmtGetNextDb(void *pIter, SDbObj **pDb) {
+  return sdbFetchRow(tsDbSdb, pIter, (void **)pDb);
+}
+
 SDbObj *mgmtGetDb(char *db) {
   return (SDbObj *)sdbGetRow(tsDbSdb, db);
 }
@@ -174,18 +181,20 @@ SDbObj *mgmtGetDbByTableId(char *tableId) {
   memset(db, 0, sizeof(db));
   strncpy(db, tableId, pos - tableId);
 
-  return (SDbObj *)sdbGetRow(tsDbSdb, db);
+  return mgmtGetDb(db);
 }
 
 static int32_t mgmtCheckDbCfg(SDbCfg *pCfg) {
   if (pCfg->cacheBlockSize < TSDB_MIN_CACHE_BLOCK_SIZE || pCfg->cacheBlockSize > TSDB_MAX_CACHE_BLOCK_SIZE) {
     mError("invalid db option cacheBlockSize:%d valid range: [%d, %d]", pCfg->cacheBlockSize, TSDB_MIN_CACHE_BLOCK_SIZE,
            TSDB_MAX_CACHE_BLOCK_SIZE);
+    return TSDB_CODE_INVALID_OPTION;
   }
 
   if (pCfg->totalBlocks < TSDB_MIN_TOTAL_BLOCKS || pCfg->totalBlocks > TSDB_MAX_TOTAL_BLOCKS) {
     mError("invalid db option totalBlocks:%d valid range: [%d, %d]", pCfg->totalBlocks, TSDB_MIN_TOTAL_BLOCKS,
            TSDB_MAX_TOTAL_BLOCKS);
+    return TSDB_CODE_INVALID_OPTION;
   }
 
   if (pCfg->maxTables < TSDB_MIN_TABLES || pCfg->maxTables > TSDB_MAX_TABLES) {
@@ -200,18 +209,22 @@ static int32_t mgmtCheckDbCfg(SDbCfg *pCfg) {
   }
 
   if (pCfg->daysToKeep < TSDB_MIN_KEEP || pCfg->daysToKeep > TSDB_MAX_KEEP) {
-    mError("invalid db option daysToKeep:%d", pCfg->daysToKeep);
+    mError("invalid db option daysToKeep:%d valid range: [%d, %d]", pCfg->daysToKeep, TSDB_MIN_KEEP, TSDB_MAX_KEEP);
     return TSDB_CODE_INVALID_OPTION;
   }
 
   if (pCfg->daysToKeep < pCfg->daysPerFile) {
-    mError("invalid db option daysToKeep:%d daysPerFile:%d", pCfg->daysToKeep, pCfg->daysPerFile);
+    mError("invalid db option daysToKeep:%d should larger than daysPerFile:%d", pCfg->daysToKeep, pCfg->daysPerFile);
     return TSDB_CODE_INVALID_OPTION;
   }
 
-  if (pCfg->minRowsPerFileBlock < TSDB_MIN_MIN_ROW_FBLOCK || pCfg->minRowsPerFileBlock > TSDB_MAX_MIN_ROW_FBLOCK) {
-    mError("invalid db option minRowsPerFileBlock:%d valid range: [%d, %d]", pCfg->minRowsPerFileBlock,
-           TSDB_MIN_MIN_ROW_FBLOCK, TSDB_MAX_MIN_ROW_FBLOCK);
+  if (pCfg->daysToKeep2 < TSDB_MIN_KEEP || pCfg->daysToKeep2 > pCfg->daysToKeep) {
+    mError("invalid db option daysToKeep2:%d valid range: [%d, %d]", pCfg->daysToKeep, TSDB_MIN_KEEP, pCfg->daysToKeep);
+    return TSDB_CODE_INVALID_OPTION;
+  }
+
+  if (pCfg->daysToKeep1 < TSDB_MIN_KEEP || pCfg->daysToKeep1 > pCfg->daysToKeep2) {
+    mError("invalid db option daysToKeep1:%d valid range: [%d, %d]", pCfg->daysToKeep1, TSDB_MIN_KEEP, pCfg->daysToKeep2);
     return TSDB_CODE_INVALID_OPTION;
   }
 
@@ -221,9 +234,15 @@ static int32_t mgmtCheckDbCfg(SDbCfg *pCfg) {
     return TSDB_CODE_INVALID_OPTION;
   }
 
+  if (pCfg->minRowsPerFileBlock < TSDB_MIN_MIN_ROW_FBLOCK || pCfg->minRowsPerFileBlock > TSDB_MAX_MIN_ROW_FBLOCK) {
+    mError("invalid db option minRowsPerFileBlock:%d valid range: [%d, %d]", pCfg->minRowsPerFileBlock,
+           TSDB_MIN_MIN_ROW_FBLOCK, TSDB_MAX_MIN_ROW_FBLOCK);
+    return TSDB_CODE_INVALID_OPTION;
+  }
+
   if (pCfg->minRowsPerFileBlock > pCfg->maxRowsPerFileBlock) {
-    mError("invalid db option minRowsPerFileBlock:%d maxRowsPerFileBlock:%d", pCfg->minRowsPerFileBlock,
-           pCfg->maxRowsPerFileBlock);
+    mError("invalid db option minRowsPerFileBlock:%d should smaller than maxRowsPerFileBlock:%d",
+           pCfg->minRowsPerFileBlock, pCfg->maxRowsPerFileBlock);
     return TSDB_CODE_INVALID_OPTION;
   }
 
@@ -245,8 +264,8 @@ static int32_t mgmtCheckDbCfg(SDbCfg *pCfg) {
     return TSDB_CODE_INVALID_OPTION;
   }
 
-  if (pCfg->commitLog < TSDB_MIN_CLOG_LEVEL || pCfg->commitLog > TSDB_MAX_CLOG_LEVEL) {
-    mError("invalid db option commitLog:%d, only 0-2 allowed", pCfg->commitLog);
+  if (pCfg->walLevel < TSDB_MIN_WAL_LEVEL || pCfg->walLevel > TSDB_MAX_WAL_LEVEL) {
+    mError("invalid db option walLevel:%d, valid range: [%d, %d]", pCfg->walLevel, TSDB_MIN_WAL_LEVEL, TSDB_MAX_WAL_LEVEL);
     return TSDB_CODE_INVALID_OPTION;
   }
 
@@ -256,13 +275,25 @@ static int32_t mgmtCheckDbCfg(SDbCfg *pCfg) {
     return TSDB_CODE_INVALID_OPTION;
   }
 
+  if (pCfg->replications > 1 && pCfg->walLevel <= TSDB_MIN_WAL_LEVEL) {
+    mError("invalid db option walLevel:%d must > 0, while replica:%d > 1", pCfg->walLevel, pCfg->replications);
+    return TSDB_CODE_INVALID_OPTION;
+  }
+
+#ifndef _SYNC
+  if (pCfg->replications != 1) {
+    mError("invalid db option replications:%d can only be 1 in this version", pCfg->replications);
+    return TSDB_CODE_INVALID_OPTION;
+  }
+#endif
+
   return TSDB_CODE_SUCCESS;
 }
 
 static void mgmtSetDefaultDbCfg(SDbCfg *pCfg) {
   if (pCfg->cacheBlockSize < 0) pCfg->cacheBlockSize = tsCacheBlockSize;
-  if (pCfg->totalBlocks < 0) pCfg->totalBlocks = tsTotalBlocks;
-  if (pCfg->maxTables < 0) pCfg->maxTables = tsTablesPerVnode;
+  if (pCfg->totalBlocks < 0) pCfg->totalBlocks = tsBlocksPerVnode;
+  if (pCfg->maxTables < 0) pCfg->maxTables = tsMaxTablePerVnode;
   if (pCfg->daysPerFile < 0) pCfg->daysPerFile = tsDaysPerFile;
   if (pCfg->daysToKeep < 0) pCfg->daysToKeep = tsDaysToKeep;
   if (pCfg->daysToKeep1 < 0) pCfg->daysToKeep1 = pCfg->daysToKeep;
@@ -272,7 +303,7 @@ static void mgmtSetDefaultDbCfg(SDbCfg *pCfg) {
   if (pCfg->commitTime < 0) pCfg->commitTime = tsCommitTime;
   if (pCfg->precision < 0) pCfg->precision = tsTimePrecision;
   if (pCfg->compression < 0) pCfg->compression = tsCompression;
-  if (pCfg->commitLog < 0) pCfg->commitLog = tsCommitLog;
+  if (pCfg->walLevel < 0) pCfg->walLevel = tsWAL;
   if (pCfg->replications < 0) pCfg->replications = tsReplications;
 }
 
@@ -284,8 +315,10 @@ static int32_t mgmtCreateDb(SAcctObj *pAcct, SCMCreateDbMsg *pCreate) {
   if (pDb != NULL) {
     mgmtDecDbRef(pDb); 
     if (pCreate->ignoreExist) {
+      mTrace("db:%s, already exist, ignore exist is set", pCreate->db);
       return TSDB_CODE_SUCCESS;
     } else {
+      mError("db:%s, is already exist, ignore exist not set", pCreate->db);
       return TSDB_CODE_DB_ALREADY_EXIST;
     }
   }
@@ -300,17 +333,17 @@ static int32_t mgmtCreateDb(SAcctObj *pAcct, SCMCreateDbMsg *pCreate) {
   pDb->cfg = (SDbCfg) {
     .cacheBlockSize      = pCreate->cacheBlockSize,
     .totalBlocks         = pCreate->totalBlocks,
-    .maxTables           = pCreate->maxSessions,
+    .maxTables           = pCreate->maxTables,
     .daysPerFile         = pCreate->daysPerFile,
     .daysToKeep          = pCreate->daysToKeep,
     .daysToKeep1         = pCreate->daysToKeep1,
     .daysToKeep2         = pCreate->daysToKeep2,
-    .minRowsPerFileBlock = pCreate->maxRowsPerFileBlock,
+    .minRowsPerFileBlock = pCreate->minRowsPerFileBlock,
     .maxRowsPerFileBlock = pCreate->maxRowsPerFileBlock,
     .commitTime          = pCreate->commitTime,
     .precision           = pCreate->precision,
     .compression         = pCreate->compression,
-    .commitLog           = pCreate->commitLog,
+    .walLevel            = pCreate->walLevel,
     .replications        = pCreate->replications
   };
 
@@ -346,8 +379,27 @@ bool mgmtCheckIsMonitorDB(char *db, char *monitordb) {
   return (strncasecmp(dbName, monitordb, len) == 0 && len == strlen(monitordb));
 }
 
+#if 0
+void mgmtPrintVgroups(SDbObj *pDb, char *oper) {
+  mPrint("db:%s, vgroup link from head, oper:%s", pDb->name, oper);  
+  SVgObj *pVgroup = pDb->pHead;
+  while (pVgroup != NULL) {
+    mPrint("vgId:%d", pVgroup->vgId);
+    pVgroup = pVgroup->next;
+  }
+
+  mPrint("db:%s, vgroup link from tail", pDb->name, pDb->numOfVgroups);
+  pVgroup = pDb->pTail;
+  while (pVgroup != NULL) {
+    mPrint("vgId:%d", pVgroup->vgId);
+    pVgroup = pVgroup->prev;
+  }
+}
+#endif
+
 void mgmtAddVgroupIntoDb(SVgObj *pVgroup) {
   SDbObj *pDb = pVgroup->pDb;
+
   pVgroup->next = pDb->pHead;
   pVgroup->prev = NULL;
 
@@ -397,10 +449,10 @@ static int32_t mgmtGetDbMeta(STableMetaMsg *pMeta, SShowObj *pShow, void *pConn)
   int32_t cols = 0;
 
   SSchema *pSchema = pMeta->schema;
-  SUserObj *pUser = mgmtGetUserFromConn(pConn, NULL);
+  SUserObj *pUser = mgmtGetUserFromConn(pConn);
   if (pUser == NULL) return 0;
 
-  pShow->bytes[cols] = TSDB_DB_NAME_LEN;
+  pShow->bytes[cols] = TSDB_DB_NAME_LEN + VARSTR_HEADER_SIZE;
   pSchema[cols].type = TSDB_DATA_TYPE_BINARY;
   strcpy(pSchema[cols].name, "name");
   pSchema[cols].bytes = htons(pShow->bytes[cols]);
@@ -408,7 +460,7 @@ static int32_t mgmtGetDbMeta(STableMetaMsg *pMeta, SShowObj *pShow, void *pConn)
 
   pShow->bytes[cols] = 8;
   pSchema[cols].type = TSDB_DATA_TYPE_TIMESTAMP;
-  strcpy(pSchema[cols].name, "create time");
+  strcpy(pSchema[cols].name, "created_time");
   pSchema[cols].bytes = htons(pShow->bytes[cols]);
   cols++;
 
@@ -448,7 +500,7 @@ static int32_t mgmtGetDbMeta(STableMetaMsg *pMeta, SShowObj *pShow, void *pConn)
   }
 #endif
 
-  pShow->bytes[cols] = 24;
+  pShow->bytes[cols] = 24 + VARSTR_HEADER_SIZE;
   pSchema[cols].type = TSDB_DATA_TYPE_BINARY;
   strcpy(pSchema[cols].name, "keep1,keep2,keep(D)");
   pSchema[cols].bytes = htons(pShow->bytes[cols]);
@@ -459,7 +511,7 @@ static int32_t mgmtGetDbMeta(STableMetaMsg *pMeta, SShowObj *pShow, void *pConn)
 #endif
     pShow->bytes[cols] = 4;
     pSchema[cols].type = TSDB_DATA_TYPE_INT;
-    strcpy(pSchema[cols].name, "tables");
+    strcpy(pSchema[cols].name, "maxtables");
     pSchema[cols].bytes = htons(pShow->bytes[cols]);
     cols++;
 
@@ -489,13 +541,13 @@ static int32_t mgmtGetDbMeta(STableMetaMsg *pMeta, SShowObj *pShow, void *pConn)
 
     pShow->bytes[cols] = 4;
     pSchema[cols].type = TSDB_DATA_TYPE_INT;
-    strcpy(pSchema[cols].name, "ctime(s)");
+    strcpy(pSchema[cols].name, "ctime(Sec.)");
     pSchema[cols].bytes = htons(pShow->bytes[cols]);
     cols++;
 
     pShow->bytes[cols] = 1;
     pSchema[cols].type = TSDB_DATA_TYPE_TINYINT;
-    strcpy(pSchema[cols].name, "clog");
+    strcpy(pSchema[cols].name, "wallevel");
     pSchema[cols].bytes = htons(pShow->bytes[cols]);
     cols++;
 
@@ -508,13 +560,13 @@ static int32_t mgmtGetDbMeta(STableMetaMsg *pMeta, SShowObj *pShow, void *pConn)
   }
 #endif
 
-  pShow->bytes[cols] = 3;
+  pShow->bytes[cols] = 3 + VARSTR_HEADER_SIZE;
   pSchema[cols].type = TSDB_DATA_TYPE_BINARY;
   strcpy(pSchema[cols].name, "precision");
   pSchema[cols].bytes = htons(pShow->bytes[cols]);
   cols++;
 
-  pShow->bytes[cols] = 10;
+  pShow->bytes[cols] = 10 + VARSTR_HEADER_SIZE;
   pSchema[cols].type = TSDB_DATA_TYPE_BINARY;
   strcpy(pSchema[cols].name, "status");
   pSchema[cols].bytes = htons(pShow->bytes[cols]);
@@ -545,17 +597,19 @@ static int32_t mgmtRetrieveDbs(SShowObj *pShow, char *data, int32_t rows, void *
   SDbObj *pDb = NULL;
   char *  pWrite;
   int32_t cols = 0;
-  SUserObj *pUser = mgmtGetUserFromConn(pConn, NULL);
+  SUserObj *pUser = mgmtGetUserFromConn(pConn);
   if (pUser == NULL) return 0;
 
   while (numOfRows < rows) {
-    pShow->pNode = sdbFetchRow(tsDbSdb, pShow->pNode, (void **) &pDb);
+    pShow->pIter = mgmtGetNextDb(pShow->pIter, &pDb);
     if (pDb == NULL) break;
 
     cols = 0;
 
     pWrite = data + pShow->offset[cols] * rows + pShow->bytes[cols] * numOfRows;
-    strcpy(pWrite, mgmtGetDbStr(pDb->name));
+    
+    char* name = mgmtGetDbStr(pDb->name);
+    STR_WITH_MAXSIZE_TO_VARSTR(pWrite, name, TSDB_DB_NAME_LEN);
     cols++;
 
     pWrite = data + pShow->offset[cols] * rows + pShow->bytes[cols] * numOfRows;
@@ -591,7 +645,10 @@ static int32_t mgmtRetrieveDbs(SShowObj *pShow, char *data, int32_t rows, void *
 #endif
 
     pWrite = data + pShow->offset[cols] * rows + pShow->bytes[cols] * numOfRows;
-    sprintf(pWrite, "%d,%d,%d", pDb->cfg.daysToKeep1, pDb->cfg.daysToKeep2, pDb->cfg.daysToKeep);
+    
+    char tmp[128] = {0};
+    size_t n = sprintf(tmp, "%d,%d,%d", pDb->cfg.daysToKeep1, pDb->cfg.daysToKeep2, pDb->cfg.daysToKeep);
+    STR_WITH_SIZE_TO_VARSTR(pWrite, tmp, n);
     cols++;
 
 #ifndef __CLOUD_VERSION__
@@ -622,7 +679,7 @@ static int32_t mgmtRetrieveDbs(SShowObj *pShow, char *data, int32_t rows, void *
       cols++;
 
       pWrite = data + pShow->offset[cols] * rows + pShow->bytes[cols] * numOfRows;
-      *(int8_t *)pWrite = pDb->cfg.commitLog;
+      *(int8_t *)pWrite = pDb->cfg.walLevel;
       cols++;
 
       pWrite = data + pShow->offset[cols] * rows + pShow->bytes[cols] * numOfRows;
@@ -635,11 +692,17 @@ static int32_t mgmtRetrieveDbs(SShowObj *pShow, char *data, int32_t rows, void *
     pWrite = data + pShow->offset[cols] * rows + pShow->bytes[cols] * numOfRows;
     char *prec = (pDb->cfg.precision == TSDB_TIME_PRECISION_MILLI) ? TSDB_TIME_PRECISION_MILLI_STR
                                                                    : TSDB_TIME_PRECISION_MICRO_STR;
-    strcpy(pWrite, prec);
+    STR_WITH_SIZE_TO_VARSTR(pWrite, prec, 2);
     cols++;
 
     pWrite = data + pShow->offset[cols] * rows + pShow->bytes[cols] * numOfRows;
-    strcpy(pWrite, pDb->status != TSDB_DB_STATUS_READY ? "dropping" : "ready");
+    if (pDb->status == TSDB_DB_STATUS_READY) {
+      const char *src = "ready";
+      STR_WITH_SIZE_TO_VARSTR(pWrite, src, strlen(src));
+    } else {
+      const char *src = "dropping";
+      STR_WITH_SIZE_TO_VARSTR(pWrite, src, strlen(src));
+    }
     cols++;
 
     numOfRows++;
@@ -674,8 +737,7 @@ static int32_t mgmtSetDbDropping(SDbObj *pDb) {
   SSdbOper oper = {
     .type = SDB_OPER_GLOBAL,
     .table = tsDbSdb,
-    .pObj = pDb,
-    .rowSize = tsDbUpdateSize
+    .pObj = pDb
   };
 
   int32_t code = sdbUpdateRow(&oper);
@@ -688,7 +750,8 @@ static int32_t mgmtSetDbDropping(SDbObj *pDb) {
 
 static void mgmtProcessCreateDbMsg(SQueuedMsg *pMsg) {
   SCMCreateDbMsg *pCreate = pMsg->pCont;
-  pCreate->maxSessions     = htonl(pCreate->maxSessions);
+  
+  pCreate->maxTables       = htonl(pCreate->maxTables);
   pCreate->cacheBlockSize  = htonl(pCreate->cacheBlockSize);
   pCreate->totalBlocks     = htonl(pCreate->totalBlocks);
   pCreate->daysPerFile     = htonl(pCreate->daysPerFile);
@@ -708,6 +771,8 @@ static void mgmtProcessCreateDbMsg(SQueuedMsg *pMsg) {
     code = mgmtCreateDb(pMsg->pUser->pAcct, pCreate);
     if (code == TSDB_CODE_SUCCESS) {
       mLPrint("db:%s, is created by %s", pCreate->db, pMsg->pUser->user);
+    } else {
+      mError("db:%s, failed to create, reason:%s", pCreate->db, tstrerror(code));
     }
   }
 
@@ -716,34 +781,45 @@ static void mgmtProcessCreateDbMsg(SQueuedMsg *pMsg) {
 
 static SDbCfg mgmtGetAlterDbOption(SDbObj *pDb, SCMAlterDbMsg *pAlter) {
   SDbCfg  newCfg = pDb->cfg;
-  int32_t cacheBlockSize = htonl(pAlter->daysToKeep);
-  int32_t totalBlocks = htonl(pAlter->totalBlocks);
-  int32_t maxTables = htonl(pAlter->maxSessions);
-  int32_t daysToKeep = htonl(pAlter->daysToKeep);
-  int32_t daysToKeep1 = htonl(pAlter->daysToKeep1);
-  int32_t daysToKeep2 = htonl(pAlter->daysToKeep2);
-  int8_t  compression = pAlter->compression;
-  int8_t  replications = pAlter->replications;
-
+  int32_t maxTables      = htonl(pAlter->maxTables);
+  int32_t cacheBlockSize = htonl(pAlter->cacheBlockSize);
+  int32_t totalBlocks    = htonl(pAlter->totalBlocks);
+  int32_t daysPerFile    = htonl(pAlter->daysPerFile);
+  int32_t daysToKeep     = htonl(pAlter->daysToKeep);
+  int32_t daysToKeep1    = htonl(pAlter->daysToKeep1);
+  int32_t daysToKeep2    = htonl(pAlter->daysToKeep2);
+  int32_t minRows        = htonl(pAlter->minRowsPerFileBlock);
+  int32_t maxRows        = htonl(pAlter->maxRowsPerFileBlock);
+  int32_t commitTime     = htonl(pAlter->commitTime);
+  int8_t  compression    = pAlter->compression;
+  int8_t  walLevel       = pAlter->walLevel;
+  int8_t  replications   = pAlter->replications;
+  int8_t  precision      = pAlter->precision;
+  
   terrno = TSDB_CODE_SUCCESS;
 
   if (cacheBlockSize > 0 && cacheBlockSize != pDb->cfg.cacheBlockSize) {
-    mTrace("db:%s, cache:%d change to %d", pDb->name, pDb->cfg.cacheBlockSize, cacheBlockSize);
-    newCfg.cacheBlockSize = cacheBlockSize;
+    mError("db:%s, can't alter cache option", pDb->name);
+    terrno = TSDB_CODE_INVALID_OPTION;
   }
 
   if (totalBlocks > 0 && totalBlocks != pDb->cfg.totalBlocks) {
-    mTrace("db:%s, blocks:%d change to %d", pDb->name, pDb->cfg.totalBlocks, totalBlocks);
+    mPrint("db:%s, blocks:%d change to %d", pDb->name, pDb->cfg.totalBlocks, totalBlocks);
     newCfg.totalBlocks = totalBlocks;
   }
 
-  if (maxTables > 0 && maxTables != pDb->cfg.maxTables) {
-    mTrace("db:%s, tables:%d change to %d", pDb->name, pDb->cfg.maxTables, maxTables);
+  if (maxTables > 0) {
+    mPrint("db:%s, maxTables:%d change to %d", pDb->name, pDb->cfg.maxTables, maxTables);
     newCfg.maxTables = maxTables;
     if (newCfg.maxTables < pDb->cfg.maxTables) {
-      mTrace("db:%s, tables:%d should larger than origin:%d", pDb->name, newCfg.maxTables, pDb->cfg.maxTables);
+      mError("db:%s, tables:%d should larger than origin:%d", pDb->name, newCfg.maxTables, pDb->cfg.maxTables);
       terrno = TSDB_CODE_INVALID_OPTION;
     }
+  }
+
+  if (daysPerFile > 0 && daysPerFile != pDb->cfg.daysPerFile) {
+    mError("db:%s, can't alter days option", pDb->name);
+    terrno = TSDB_CODE_INVALID_OPTION;
   }
 
   if (daysToKeep > 0 && daysToKeep != pDb->cfg.daysToKeep) {
@@ -761,20 +837,56 @@ static SDbCfg mgmtGetAlterDbOption(SDbObj *pDb, SCMAlterDbMsg *pAlter) {
     newCfg.daysToKeep2 = daysToKeep2;
   }
 
-  if (compression > 0 && compression != pDb->cfg.compression) {
+  if (minRows > 0 && minRows != pDb->cfg.minRowsPerFileBlock) {
+    mError("db:%s, can't alter minRows option", pDb->name);
+    terrno = TSDB_CODE_INVALID_OPTION;
+  }
+
+  if (maxRows > 0 && maxRows != pDb->cfg.maxRowsPerFileBlock) {
+    mError("db:%s, can't alter maxRows option", pDb->name);
+    terrno = TSDB_CODE_INVALID_OPTION;
+  }
+
+  if (commitTime > 0 && commitTime != pDb->cfg.commitTime) {
+    mError("db:%s, can't alter commitTime option", pDb->name);
+    terrno = TSDB_CODE_INVALID_OPTION;
+  }
+
+  if (precision > 0 && precision != pDb->cfg.precision) {
+    mError("db:%s, can't alter precision option", pDb->name);
+    terrno = TSDB_CODE_INVALID_OPTION;
+  }
+
+  if (compression >= 0 && compression != pDb->cfg.compression) {
     mTrace("db:%s, compression:%d change to %d", pDb->name, pDb->cfg.compression, compression);
     newCfg.compression = compression;
+  }
+
+  if (walLevel > 0 && walLevel != pDb->cfg.walLevel) {
+    mError("db:%s, can't alter walLevel option", pDb->name);
+    terrno = TSDB_CODE_INVALID_OPTION;
   }
 
   if (replications > 0 && replications != pDb->cfg.replications) {
     mTrace("db:%s, replications:%d change to %d", pDb->name, pDb->cfg.replications, replications);
     newCfg.replications = replications;
-  } 
-  if (replications > mgmtGetDnodesNum()) {
-    mError("db:%s, no enough dnode to change replica:%d", pDb->name, replications);
-    terrno = TSDB_CODE_NO_ENOUGH_DNODES;
+
+    if (replications > 1 && pDb->cfg.walLevel <= TSDB_MIN_WAL_LEVEL) {
+      mError("db:%s, walLevel:%d must > 0, while replica:%d > 1", pDb->name, pDb->cfg.walLevel, replications);
+      terrno = TSDB_CODE_INVALID_OPTION;
+    }
+
+    if (replications > mgmtGetDnodesNum()) {
+      mError("db:%s, no enough dnode to change replica:%d", pDb->name, replications);
+      terrno = TSDB_CODE_NO_ENOUGH_DNODES;
+    }
+
+    if (pDb->cfg.replications - replications >= 2) {
+      mError("db:%s, replica number can't change from 3 to 1", pDb->name, replications);
+      terrno = TSDB_CODE_INVALID_OPTION;
+    }
   }
-  
+
   return newCfg;
 }
 
@@ -797,8 +909,7 @@ static int32_t mgmtAlterDb(SDbObj *pDb, SCMAlterDbMsg *pAlter) {
     SSdbOper oper = {
       .type = SDB_OPER_GLOBAL,
       .table = tsDbSdb,
-      .pObj = pDb,
-      .rowSize = tsDbUpdateSize
+      .pObj = pDb
     };
 
     int32_t code = sdbUpdateRow(&oper);
@@ -807,14 +918,15 @@ static int32_t mgmtAlterDb(SDbObj *pDb, SCMAlterDbMsg *pAlter) {
     }
   }
 
-  void *pNode = NULL;
+  void *pIter = NULL;
   while (1) {
     SVgObj *pVgroup = NULL;
-    pNode = mgmtGetNextVgroup(pNode, &pVgroup);
+    pIter = mgmtGetNextVgroup(pIter, &pVgroup);
     if (pVgroup == NULL) break;   
     mgmtSendCreateVgroupMsg(pVgroup, NULL);
     mgmtDecVgroupRef(pVgroup);
   }
+  sdbFreeIter(pIter);
 
   if (oldReplica != pDb->cfg.replications) {
     balanceNotify();
@@ -833,21 +945,21 @@ static void mgmtProcessAlterDbMsg(SQueuedMsg *pMsg) {
     return;
   }
 
-  SDbObj *pDb = pMsg->pDb = mgmtGetDb(pAlter->db);
-  if (pDb == NULL) {
+  if (pMsg->pDb == NULL) pMsg->pDb = mgmtGetDb(pAlter->db);
+  if (pMsg->pDb == NULL) {
     mError("db:%s, failed to alter, invalid db", pAlter->db);
     mgmtSendSimpleResp(pMsg->thandle, TSDB_CODE_INVALID_DB);
     return;
   }
 
-  int32_t code = mgmtAlterDb(pDb, pAlter);
+  int32_t code = mgmtAlterDb(pMsg->pDb, pAlter);
   if (code != TSDB_CODE_SUCCESS) {
     mError("db:%s, failed to alter, invalid db option", pAlter->db);
     mgmtSendSimpleResp(pMsg->thandle, code);
     return;
   }
 
-  mTrace("db:%s, all vgroups is altered", pDb->name);
+  mTrace("db:%s, all vgroups is altered", pMsg->pDb->name);
   mgmtSendSimpleResp(pMsg->thandle, TSDB_CODE_SUCCESS);
 }
 
@@ -878,8 +990,8 @@ static void mgmtProcessDropDbMsg(SQueuedMsg *pMsg) {
     return;
   }
 
-  SDbObj *pDb = pMsg->pDb = mgmtGetDb(pDrop->db);
-  if (pDb == NULL) {
+  if (pMsg->pDb == NULL) pMsg->pDb = mgmtGetDb(pDrop->db);
+  if (pMsg->pDb == NULL) {
     if (pDrop->ignoreNotExists) {
       mTrace("db:%s, db is not exist, think drop success", pDrop->db);
       mgmtSendSimpleResp(pMsg->thandle, TSDB_CODE_SUCCESS);
@@ -891,42 +1003,46 @@ static void mgmtProcessDropDbMsg(SQueuedMsg *pMsg) {
     }
   }
 
-  if (mgmtCheckIsMonitorDB(pDb->name, tsMonitorDbName)) {
+  if (mgmtCheckIsMonitorDB(pMsg->pDb->name, tsMonitorDbName)) {
     mError("db:%s, can't drop monitor database", pDrop->db);
     mgmtSendSimpleResp(pMsg->thandle, TSDB_CODE_MONITOR_DB_FORBIDDEN);
     return;
   }
 
-  int32_t code = mgmtSetDbDropping(pDb);
+  int32_t code = mgmtSetDbDropping(pMsg->pDb);
   if (code != TSDB_CODE_SUCCESS) {
     mError("db:%s, failed to drop, reason:%s", pDrop->db, tstrerror(code));
     mgmtSendSimpleResp(pMsg->thandle, code);
     return;
   }
 
-  SVgObj *pVgroup = pDb->pHead;
+#if 1
+  mgmtDropAllDbVgroups(pMsg->pDb, true);
+#else
+  SVgObj *pVgroup = pMsg->pDb->pHead;
   if (pVgroup != NULL) {
-    mPrint("vgroup:%d, will be dropped", pVgroup->vgId);
+    mPrint("vgId:%d, will be dropped", pVgroup->vgId);
     SQueuedMsg *newMsg = mgmtCloneQueuedMsg(pMsg);
     newMsg->ahandle = pVgroup;
     newMsg->expected = pVgroup->numOfVnodes;
     mgmtDropVgroup(pVgroup, newMsg);
     return;
   }
+#endif  
 
-  mTrace("db:%s, all vgroups is dropped", pDb->name);
+  mTrace("db:%s, all vgroups is dropped", pMsg->pDb->name);
   mgmtDropDb(pMsg);
 }
 
 void  mgmtDropAllDbs(SAcctObj *pAcct)  {
   int32_t numOfDbs = 0;
   SDbObj *pDb = NULL;
-  void *  pNode = NULL;
+  void *  pIter = NULL;
 
   mPrint("acct:%s, all dbs will be dropped from sdb", pAcct->user);
 
   while (1) {
-    pNode = sdbFetchRow(tsDbSdb, pNode, (void **)&pDb);
+    pIter = mgmtGetNextDb(pIter, &pDb);
     if (pDb == NULL) break;
 
     if (pDb->pAcct == pAcct) {
@@ -942,6 +1058,8 @@ void  mgmtDropAllDbs(SAcctObj *pAcct)  {
     }
     mgmtDecDbRef(pDb);
   }
+
+  sdbFreeIter(pIter);
 
   mPrint("acct:%s, all dbs:%d is dropped from sdb", pAcct->user, numOfDbs);
 }

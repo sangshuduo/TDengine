@@ -20,9 +20,10 @@
 #include "tutil.h"
 #include "tglobal.h"
 #include "tgrant.h"
+#include "tdataformat.h"
 #include "dnode.h"
 #include "mgmtDef.h"
-#include "mgmtLog.h"
+#include "mgmtInt.h"
 #include "mgmtAcct.h"
 #include "mgmtMnode.h"
 #include "mgmtSdb.h"
@@ -36,6 +37,7 @@ static int32_t mgmtRetrieveUsers(SShowObj *pShow, char *data, int32_t rows, void
 static void    mgmtProcessCreateUserMsg(SQueuedMsg *pMsg);
 static void    mgmtProcessAlterUserMsg(SQueuedMsg *pMsg);
 static void    mgmtProcessDropUserMsg(SQueuedMsg *pMsg);
+static void    mgmtProcessAuthMsg(SRpcMsg *rpcMsg);
 
 static int32_t mgmtUserActionDestroy(SSdbOper *pOper) {
   tfree(pOper->pObj);
@@ -115,7 +117,7 @@ int32_t mgmtInitUsers() {
   SSdbTableDesc tableDesc = {
     .tableId      = SDB_TABLE_USER,
     .tableName    = "users",
-    .hashSessions = TSDB_MAX_USERS,
+    .hashSessions = TSDB_DEFAULT_USERS_HASH_SIZE,
     .maxRowSize   = tsUserUpdateSize,
     .refCountPos  = (int8_t *)(&tObj.refCount) - (int8_t *)&tObj,
     .keyType      = SDB_KEY_STRING,
@@ -139,7 +141,8 @@ int32_t mgmtInitUsers() {
   mgmtAddShellMsgHandle(TSDB_MSG_TYPE_CM_DROP_USER, mgmtProcessDropUserMsg);
   mgmtAddShellShowMetaHandle(TSDB_MGMT_TABLE_USER, mgmtGetUserMeta);
   mgmtAddShellShowRetrieveHandle(TSDB_MGMT_TABLE_USER, mgmtRetrieveUsers);
-  
+  dnodeAddServerMsgHandle(TSDB_MSG_TYPE_DM_AUTH, mgmtProcessAuthMsg);
+   
   mTrace("table:%s, hash is created", tableDesc.tableName);
   return 0;
 }
@@ -152,8 +155,8 @@ SUserObj *mgmtGetUser(char *name) {
   return (SUserObj *)sdbGetRow(tsUserSdb, name);
 }
 
-void *mgmtGetNextUser(void *pNode, SUserObj **pUser) { 
-  return sdbFetchRow(tsUserSdb, pNode, (void **)pUser); 
+void *mgmtGetNextUser(void *pIter, SUserObj **pUser) { 
+  return sdbFetchRow(tsUserSdb, pIter, (void **)pUser); 
 }
 
 void mgmtIncUserRef(SUserObj *pUser) { 
@@ -168,8 +171,7 @@ static int32_t mgmtUpdateUser(SUserObj *pUser) {
   SSdbOper oper = {
     .type = SDB_OPER_GLOBAL,
     .table = tsUserSdb,
-    .pObj = pUser,
-    .rowSize = tsUserUpdateSize
+    .pObj = pUser
   };
 
   int32_t code = sdbUpdateRow(&oper);
@@ -249,7 +251,7 @@ static int32_t mgmtDropUser(SUserObj *pUser) {
 }
 
 static int32_t mgmtGetUserMeta(STableMetaMsg *pMeta, SShowObj *pShow, void *pConn) {
-  SUserObj *pUser = mgmtGetUserFromConn(pConn, NULL);
+  SUserObj *pUser = mgmtGetUserFromConn(pConn);
   if (pUser == NULL) {
     return TSDB_CODE_NO_USER_FROM_CONN;
   }
@@ -257,13 +259,13 @@ static int32_t mgmtGetUserMeta(STableMetaMsg *pMeta, SShowObj *pShow, void *pCon
   int32_t cols = 0;
   SSchema *pSchema = pMeta->schema;
 
-  pShow->bytes[cols] = TSDB_USER_LEN;
+  pShow->bytes[cols] = TSDB_USER_LEN + VARSTR_HEADER_SIZE;
   pSchema[cols].type = TSDB_DATA_TYPE_BINARY;
   strcpy(pSchema[cols].name, "name");
   pSchema[cols].bytes = htons(pShow->bytes[cols]);
   cols++;
 
-  pShow->bytes[cols] = 6;
+  pShow->bytes[cols] = 8 + VARSTR_HEADER_SIZE;
   pSchema[cols].type = TSDB_DATA_TYPE_BINARY;
   strcpy(pSchema[cols].name, "privilege");
   pSchema[cols].bytes = htons(pShow->bytes[cols]);
@@ -271,7 +273,7 @@ static int32_t mgmtGetUserMeta(STableMetaMsg *pMeta, SShowObj *pShow, void *pCon
 
   pShow->bytes[cols] = 8;
   pSchema[cols].type = TSDB_DATA_TYPE_TIMESTAMP;
-  strcpy(pSchema[cols].name, "create time");
+  strcpy(pSchema[cols].name, "create_time");
   pSchema[cols].bytes = htons(pShow->bytes[cols]);
   cols++;
 
@@ -298,22 +300,25 @@ static int32_t mgmtRetrieveUsers(SShowObj *pShow, char *data, int32_t rows, void
   char     *pWrite;
 
   while (numOfRows < rows) {
-    pShow->pNode = sdbFetchRow(tsUserSdb, pShow->pNode, (void **) &pUser);
+    pShow->pIter = mgmtGetNextUser(pShow->pIter, &pUser);
     if (pUser == NULL) break;
     
     cols = 0;
 
     pWrite = data + pShow->offset[cols] * rows + pShow->bytes[cols] * numOfRows;
-    strcpy(pWrite, pUser->user);
+    STR_WITH_MAXSIZE_TO_VARSTR(pWrite, pUser->user, TSDB_USER_LEN);
     cols++;
 
     pWrite = data + pShow->offset[cols] * rows + pShow->bytes[cols] * numOfRows;
     if (pUser->superAuth) {
-      strcpy(pWrite, "super");
+      const char *src = "super";
+      STR_WITH_SIZE_TO_VARSTR(pWrite, src, strlen(src));
     } else if (pUser->writeAuth) {
-      strcpy(pWrite, "write");
+      const char *src = "writable";
+      STR_WITH_SIZE_TO_VARSTR(pWrite, src, strlen(src));
     } else {
-      strcpy(pWrite, "read");
+      const char *src = "readable";
+      STR_WITH_SIZE_TO_VARSTR(pWrite, src, strlen(src));
     }
     cols++;
 
@@ -329,12 +334,9 @@ static int32_t mgmtRetrieveUsers(SShowObj *pShow, char *data, int32_t rows, void
   return numOfRows;
 }
 
-SUserObj *mgmtGetUserFromConn(void *pConn, bool *usePublicIp) {
+SUserObj *mgmtGetUserFromConn(void *pConn) {
   SRpcConnInfo connInfo;
   if (rpcGetConnInfo(pConn, &connInfo) == 0) {
-    if (usePublicIp) {
-      *usePublicIp = (connInfo.serverIp == tsPublicIpInt);
-    }
     return mgmtGetUser(connInfo.user);
   } else {
     mError("can not get user from conn:%p", pConn);
@@ -399,7 +401,7 @@ static void mgmtProcessAlterUserMsg(SQueuedMsg *pMsg) {
       code = mgmtUpdateUser(pUser);
       mLPrint("user:%s, password is altered by %s, result:%s", pUser->user, pOperUser->user, tstrerror(code));
     } else {
-      mError("user:%s, no rights to ater user", pOperUser->user);
+      mError("user:%s, no rights to alter user", pOperUser->user);
       code = TSDB_CODE_NO_RIGHTS;
     }
 
@@ -442,13 +444,13 @@ static void mgmtProcessAlterUserMsg(SQueuedMsg *pMsg) {
       code = mgmtUpdateUser(pUser);
       mLPrint("user:%s, privilege is altered by %s, result:%s", pUser->user, pOperUser->user, tstrerror(code));
     } else {
-      mError("user:%s, no rights to ater user", pOperUser->user);
+      mError("user:%s, no rights to alter user", pOperUser->user);
       code = TSDB_CODE_NO_RIGHTS;
     }
 
     mgmtSendSimpleResp(pMsg->thandle, code);
   } else {
-    mError("user:%s, no rights to ater user", pOperUser->user);
+    mError("user:%s, no rights to alter user", pOperUser->user);
     mgmtSendSimpleResp(pMsg->thandle, TSDB_CODE_NO_RIGHTS);
   }
 
@@ -502,15 +504,13 @@ static void mgmtProcessDropUserMsg(SQueuedMsg *pMsg) {
 }
 
 void  mgmtDropAllUsers(SAcctObj *pAcct)  {
-  void *    pNode = NULL;
-  void *    pLastNode = NULL;
+  void *    pIter = NULL;
   int32_t   numOfUsers = 0;
   int32_t   acctNameLen = strlen(pAcct->user);
   SUserObj *pUser = NULL;
 
   while (1) {
-    pLastNode = pNode;
-    pNode = sdbFetchRow(tsUserSdb, pNode, (void **)&pUser);
+    pIter = mgmtGetNextUser(pIter, &pUser);
     if (pUser == NULL) break;
 
     if (strncmp(pUser->acct, pAcct->user, acctNameLen) == 0) {
@@ -520,12 +520,50 @@ void  mgmtDropAllUsers(SAcctObj *pAcct)  {
         .pObj = pUser,
       };
       sdbDeleteRow(&oper);
-      pNode = pLastNode;
       numOfUsers++;
     }
 
     mgmtDecUserRef(pUser);
   }
 
+  sdbFreeIter(pIter);
+
   mTrace("acct:%s, all users:%d is dropped from sdb", pAcct->user, numOfUsers);
+}
+
+int32_t mgmtRetriveAuth(char *user, char *spi, char *encrypt, char *secret, char *ckey) {
+  if (!sdbIsMaster()) {
+    *secret = 0;
+    mTrace("user:%s, failed to auth user, reason:%s", user, tstrerror(TSDB_CODE_NOT_READY));
+    return TSDB_CODE_NOT_READY;
+  }
+
+  SUserObj *pUser = mgmtGetUser(user);
+  if (pUser == NULL) {
+    *secret = 0;
+    mError("user:%s, failed to auth user, reason:%s", user, tstrerror(TSDB_CODE_INVALID_USER));
+    return TSDB_CODE_INVALID_USER;
+  } else {
+    *spi = 1;
+    *encrypt = 0;
+    *ckey = 0;
+
+    memcpy(secret, pUser->pass, TSDB_KEY_LEN);
+    mgmtDecUserRef(pUser);
+    mTrace("user:%s, auth info is returned", user);
+    return TSDB_CODE_SUCCESS;
+  }
+}
+
+static void mgmtProcessAuthMsg(SRpcMsg *rpcMsg) {
+  SRpcMsg rpcRsp = {.handle = rpcMsg->handle, .pCont = NULL, .contLen = 0, .code = 0, .msgType = 0};
+  
+  SDMAuthMsg *pAuthMsg = rpcMsg->pCont;
+  SDMAuthRsp *pAuthRsp = rpcMallocCont(sizeof(SDMAuthRsp));
+  
+  rpcRsp.code = mgmtRetriveAuth(pAuthMsg->user, &pAuthRsp->spi, &pAuthRsp->encrypt, pAuthRsp->secret, pAuthRsp->ckey);
+  rpcRsp.pCont = pAuthRsp;
+  rpcRsp.contLen = sizeof(SDMAuthRsp);
+  
+  rpcSendResponse(&rpcRsp);
 }

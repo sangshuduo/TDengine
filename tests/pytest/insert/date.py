@@ -7,9 +7,9 @@ from util.sql import *
 
 
 class TDTestCase:
-    def init(self, conn):
+    def init(self, conn, logSql):
         tdLog.debug("start to execute %s" % __file__)
-        tdSql.init(conn.cursor())
+        tdSql.init(conn.cursor(), logSql)
 
     def run(self):
         tdSql.prepare()
@@ -18,7 +18,7 @@ class TDTestCase:
         # TSIM:
         # TSIM: system sh/ip.sh -i 1 -s up
         # TSIM: system sh/deploy.sh -n dnode1 -m 192.168.0.1 -i 192.168.0.1
-        # TSIM: system sh/cfg.sh -n dnode1 -c commitLog -v 0
+        # TSIM: system sh/cfg.sh -n dnode1 -c walLevel -v 0
         # TSIM: system sh/exec.sh -n dnode1 -s start
         # TSIM:
         # TSIM: sleep 3000

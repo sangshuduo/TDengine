@@ -1,6 +1,4 @@
 #include <stdlib.h>
-
-// #include "taosdef.h"
 #include "tskiplist.h"
 #include "tsdb.h"
 #include "taosdef.h"
@@ -8,15 +6,17 @@
 #include "tsdbMain.h"
 
 #define TSDB_SUPER_TABLE_SL_LEVEL 5 // TODO: may change here
-#define TSDB_META_FILE_NAME "META"
+// #define TSDB_META_FILE_NAME "META"
+
+const int32_t DEFAULT_TAG_INDEX_COLUMN = 0;   // skip list built based on the first column of tags
 
 static int     tsdbFreeTable(STable *pTable);
 static int32_t tsdbCheckTableCfg(STableCfg *pCfg);
 static int     tsdbAddTableToMeta(STsdbMeta *pMeta, STable *pTable, bool addIdx);
-static int     tsdbAddTableIntoMap(STsdbMeta *pMeta, STable *pTable);
 static int     tsdbAddTableIntoIndex(STsdbMeta *pMeta, STable *pTable);
 static int     tsdbRemoveTableFromIndex(STsdbMeta *pMeta, STable *pTable);
 static int     tsdbEstimateTableEncodeSize(STable *pTable);
+static int     tsdbRemoveTableFromMeta(STsdbMeta *pMeta, STable *pTable, bool rmFromIdx);
 
 /**
  * Encode a TSDB table object as a binary content
@@ -39,11 +39,12 @@ void *tsdbEncodeTable(STable *pTable, int *contLen) {
 
   void *ptr = ret;
   T_APPEND_MEMBER(ptr, pTable, STable, type);
-  // Encode name
-  *(int *)ptr = strlen(pTable->name);
+  // Encode name, todo refactor
+  *(int *)ptr = varDataLen(pTable->name);
   ptr = (char *)ptr + sizeof(int);
-  memcpy(ptr, pTable->name, strlen(pTable->name));
-  ptr = (char *)ptr + strlen(pTable->name);
+  memcpy(ptr, varDataVal(pTable->name), varDataLen(pTable->name));
+  ptr = (char *)ptr + varDataLen(pTable->name);
+  
   T_APPEND_MEMBER(ptr, &(pTable->tableId), STableId, uid);
   T_APPEND_MEMBER(ptr, &(pTable->tableId), STableId, tid);
   T_APPEND_MEMBER(ptr, pTable, STable, superUid);
@@ -79,13 +80,16 @@ STable *tsdbDecodeTable(void *cont, int contLen) {
   T_READ_MEMBER(ptr, int8_t, pTable->type);
   int len = *(int *)ptr;
   ptr = (char *)ptr + sizeof(int);
-  pTable->name = calloc(1, len + 1);
+  pTable->name = calloc(1, len + VARSTR_HEADER_SIZE + 1);
   if (pTable->name == NULL) return NULL;
-  memcpy(pTable->name, ptr, len);
+  
+  varDataSetLen(pTable->name, len);
+  memcpy(pTable->name->data, ptr, len);
+  
   ptr = (char *)ptr + len;
-  T_READ_MEMBER(ptr, int64_t, pTable->tableId.uid);
+  T_READ_MEMBER(ptr, uint64_t, pTable->tableId.uid);
   T_READ_MEMBER(ptr, int32_t, pTable->tableId.tid);
-  T_READ_MEMBER(ptr, int64_t, pTable->superUid);
+  T_READ_MEMBER(ptr, uint64_t, pTable->superUid);
   T_READ_MEMBER(ptr, int32_t, pTable->sversion);
 
   if (pTable->type == TSDB_SUPER_TABLE) {
@@ -105,8 +109,13 @@ void tsdbFreeEncode(void *cont) {
 }
 
 static char* getTagIndexKey(const void* pData) {
-  STable* table = *(STable**) pData;
-  return getTupleKey(table->tagVal);
+  STableIndexElem* elem = (STableIndexElem*) pData;
+  
+  SDataRow row = elem->pTable->tagVal;
+  STSchema* pSchema = tsdbGetTableTagSchema(elem->pMeta, elem->pTable);
+  STColumn* pCol = &pSchema->columns[DEFAULT_TAG_INDEX_COLUMN];
+  
+  return tdGetRowDataOfCol(row, pCol->type, TD_DATA_ROW_HEAD_SIZE + pCol->offset);
 }
 
 int tsdbRestoreTable(void *pHandle, void *cont, int contLen) {
@@ -118,7 +127,7 @@ int tsdbRestoreTable(void *pHandle, void *cont, int contLen) {
   if (pTable->type == TSDB_SUPER_TABLE) {
     STColumn* pColSchema = schemaColAt(pTable->tagSchema, 0);
     pTable->pIndex = tSkipListCreate(TSDB_SUPER_TABLE_SL_LEVEL, pColSchema->type, pColSchema->bytes,
-                                    1, 0, 0, getTagIndexKey);
+                                    1, 0, 1, getTagIndexKey);
   }
 
   tsdbAddTableToMeta(pMeta, pTable, false);
@@ -129,7 +138,7 @@ int tsdbRestoreTable(void *pHandle, void *cont, int contLen) {
 void tsdbOrgMeta(void *pHandle) {
   STsdbMeta *pMeta = (STsdbMeta *)pHandle;
 
-  for (int i = 0; i < pMeta->maxTables; i++) {
+  for (int i = 1; i < pMeta->maxTables; i++) {
     STable *pTable = pMeta->tables[i];
     if (pTable != NULL && pTable->type == TSDB_CHILD_TABLE) {
       tsdbAddTableIntoIndex(pMeta, pTable);
@@ -179,7 +188,7 @@ int32_t tsdbFreeMeta(STsdbMeta *pMeta) {
 
   tsdbCloseMetaFile(pMeta->mfh);
 
-  for (int i = 0; i < pMeta->maxTables; i++) {
+  for (int i = 1; i < pMeta->maxTables; i++) {
     if (pMeta->tables[i] != NULL) {
       tsdbFreeTable(pMeta->tables[i]);
     }
@@ -225,45 +234,59 @@ STSchema * tsdbGetTableTagSchema(STsdbMeta *pMeta, STable *pTable) {
   }
 }
 
-int32_t tsdbGetTableTagVal(TsdbRepoT* repo, STableId id, int32_t colId, int16_t* type, int16_t* bytes, char** val) {
+int32_t tsdbGetTableTagVal(TsdbRepoT* repo, STableId* id, int32_t colId, int16_t* type, int16_t* bytes, char** val) {
   STsdbMeta* pMeta = tsdbGetMeta(repo);
-  STable* pTable = tsdbGetTableByUid(pMeta, id.uid);
+  STable* pTable = tsdbGetTableByUid(pMeta, id->uid);
   
   STSchema* pSchema = tsdbGetTableTagSchema(pMeta, pTable);
-  
   STColumn* pCol = NULL;
+  
+  // todo binary search
   for(int32_t col = 0; col < schemaNCols(pSchema); ++col) {
     STColumn* p = schemaColAt(pSchema, col);
     if (p->colId == colId) {
       pCol = p;
+      break;
     }
   }
   
-  assert(pCol != NULL);
+  if (pCol == NULL) {
+    return -1;  // No matched tags. Maybe the modification of tags has not been done yet.
+  }
   
   SDataRow row = (SDataRow)pTable->tagVal;
-  char* d = dataRowAt(row, TD_DATA_ROW_HEAD_SIZE);
+  char* d = tdGetRowDataOfCol(row, pCol->type, TD_DATA_ROW_HEAD_SIZE + pCol->offset);
   
   *val = d;
   *type  = pCol->type;
   *bytes = pCol->bytes;
   
-  return 0;
+  return TSDB_CODE_SUCCESS;
 }
 
-int32_t tsdbTableGetName(TsdbRepoT *repo, STableId id, char** name) {
+char* tsdbGetTableName(TsdbRepoT *repo, const STableId* id, int16_t* bytes) {
   STsdbMeta* pMeta = tsdbGetMeta(repo);
-  STable* pTable = tsdbGetTableByUid(pMeta, id.uid);
+  STable* pTable = tsdbGetTableByUid(pMeta, id->uid);
   
-  *name = strndup(pTable->name, TSDB_TABLE_NAME_LEN);
-  if (*name == NULL) {
-    return -1;
+  if (pTable == NULL) {
+    if (bytes != NULL) {
+      *bytes = 0;
+    }
+    
+    return NULL;
   } else {
-    return 0;
+    if (bytes != NULL) {
+      *bytes = varDataLen(pTable->name);
+    }
+    
+    return (char*) pTable->name;
   }
 }
 
-int32_t tsdbCreateTableImpl(STsdbMeta *pMeta, STableCfg *pCfg) {
+int tsdbCreateTable(TsdbRepoT *repo, STableCfg *pCfg) {
+  STsdbRepo *pRepo = (STsdbRepo *)repo;
+  STsdbMeta *pMeta = pRepo->tsdbMeta;
+
   if (tsdbCheckTableCfg(pCfg) < 0) return -1;
 
   STable *super = NULL;
@@ -283,13 +306,17 @@ int32_t tsdbCreateTableImpl(STsdbMeta *pMeta, STableCfg *pCfg) {
       super->superUid = TSDB_INVALID_SUPER_TABLE_ID;
       super->schema = tdDupSchema(pCfg->schema);
       super->tagSchema = tdDupSchema(pCfg->tagSchema);
-      super->tagVal = tdDataRowDup(pCfg->tagValues);
-      super->name = strdup(pCfg->sname);
+      super->tagVal = NULL;
+      
+      // todo refactor extract method
+      size_t size = strnlen(pCfg->sname, TSDB_TABLE_NAME_LEN);
+      super->name = calloc(1, size + VARSTR_HEADER_SIZE + 1);
+      STR_WITH_SIZE_TO_VARSTR(super->name, pCfg->sname, size);
 
       // index the first tag column
       STColumn* pColSchema = schemaColAt(super->tagSchema, 0);
       super->pIndex = tSkipListCreate(TSDB_SUPER_TABLE_SL_LEVEL, pColSchema->type, pColSchema->bytes,
-          1, 0, 0, getTagIndexKey);  // Allow duplicate key, no lock
+          1, 0, 1, getTagIndexKey);  // Allow duplicate key, no lock
 
       if (super->pIndex == NULL) {
         tdFreeSchema(super->schema);
@@ -310,7 +337,11 @@ int32_t tsdbCreateTableImpl(STsdbMeta *pMeta, STableCfg *pCfg) {
   }
 
   table->tableId = pCfg->tableId;
-  table->name = strdup(pCfg->name);
+  
+  size_t size = strnlen(pCfg->name, TSDB_TABLE_NAME_LEN);
+  table->name = calloc(1, size + VARSTR_HEADER_SIZE + 1);
+  STR_WITH_SIZE_TO_VARSTR(table->name, pCfg->name, size);
+  
   table->lastKey = 0;
   if (IS_CREATE_STABLE(pCfg)) { // TSDB_CHILD_TABLE
     table->type = TSDB_CHILD_TABLE;
@@ -323,8 +354,14 @@ int32_t tsdbCreateTableImpl(STsdbMeta *pMeta, STableCfg *pCfg) {
   }
 
   // Register to meta
-  if (newSuper) tsdbAddTableToMeta(pMeta, super, true);
+  if (newSuper) {
+    tsdbAddTableToMeta(pMeta, super, true);
+    tsdbTrace("vgId:%d, super table %s is created! uid:%" PRId64, pRepo->config.tsdbId, varDataVal(super->name),
+              super->tableId.uid);
+  }
   tsdbAddTableToMeta(pMeta, table, true);
+  tsdbTrace("vgId:%d, table %s is created! tid:%d, uid:%" PRId64, pRepo->config.tsdbId, varDataVal(table->name),
+            table->tableId.tid, table->tableId.uid);
 
   // Write to meta file
   int bufLen = 0;
@@ -357,27 +394,27 @@ STable *tsdbIsValidTableToInsert(STsdbMeta *pMeta, STableId tableId) {
   return pTable;
 }
 
-int32_t tsdbDropTableImpl(STsdbMeta *pMeta, STableId tableId) {
+// int32_t tsdbDropTableImpl(STsdbMeta *pMeta, STableId tableId) {
+int tsdbDropTable(TsdbRepoT *repo, STableId tableId) {
+  STsdbRepo *pRepo = (STsdbRepo *)repo;
+  if (pRepo == NULL) return -1;
+
+  STsdbMeta *pMeta = pRepo->tsdbMeta;
   if (pMeta == NULL) return -1;
 
   STable *pTable = tsdbGetTableByUid(pMeta, tableId.uid);
-  if (pTable == NULL) return -1;
-
-  if (pTable->type == TSDB_SUPER_TABLE) {
-    // TODO: implement drop super table
+  if (pTable == NULL) {
+    tsdbError("vgId:%d, failed to drop table since table not exists! tid:%d, uid:" PRId64, pRepo->config.tsdbId,
+              tableId.tid, tableId.uid);
     return -1;
-  } else {
-    pMeta->tables[pTable->tableId.tid] = NULL;
-    pMeta->nTables--;
-    assert(pMeta->nTables >= 0);
-    if (pTable->type == TSDB_CHILD_TABLE) {
-      tsdbRemoveTableFromIndex(pMeta, pTable);
-    }
-
-    tsdbFreeTable(pTable);
   }
 
+  tsdbTrace("vgId:%d, table %s is dropped! tid:%d, uid:%" PRId64, pRepo->config.tsdbId, varDataVal(pTable->name),
+            tableId.tid, tableId.uid);
+  if (tsdbRemoveTableFromMeta(pMeta, pTable, true) < 0) return -1;
+
   return 0;
+
 }
 
 // int32_t tsdbInsertRowToTableImpl(SSkipListNode *pNode, STable *pTable) {
@@ -403,6 +440,7 @@ static int tsdbFreeTable(STable *pTable) {
 
   // Free content
   if (TSDB_TABLE_IS_SUPER_TABLE(pTable)) {
+    tdFreeSchema(pTable->tagSchema);
     tSkipListDestroy(pTable->pIndex);
   }
 
@@ -419,7 +457,7 @@ static int32_t tsdbCheckTableCfg(STableCfg *pCfg) {
   return 0;
 }
 
-STable *tsdbGetTableByUid(STsdbMeta *pMeta, int64_t uid) {
+STable *tsdbGetTableByUid(STsdbMeta *pMeta, uint64_t uid) {
   void *ptr = taosHashGet(pMeta->map, (char *)(&uid), sizeof(uid));
 
   if (ptr == NULL) return NULL;
@@ -433,10 +471,12 @@ static int tsdbAddTableToMeta(STsdbMeta *pMeta, STable *pTable, bool addIdx) {
     if (pMeta->superList == NULL) {
       pMeta->superList = pTable;
       pTable->next = NULL;
+      pTable->prev = NULL;
     } else {
-      STable *pTemp = pMeta->superList;
+      pTable->next = pMeta->superList;
+      pTable->prev = NULL;
+      pTable->next->prev = pTable;
       pMeta->superList = pTable;
-      pTable->next = pTemp;
     }
   } else {
     // add non-super table to the array
@@ -451,27 +491,53 @@ static int tsdbAddTableToMeta(STsdbMeta *pMeta, STable *pTable, bool addIdx) {
   // Update the pMeta->maxCols and pMeta->maxRowBytes
   if (pTable->type == TSDB_SUPER_TABLE || pTable->type == TSDB_NORMAL_TABLE) {
     if (schemaNCols(pTable->schema) > pMeta->maxCols) pMeta->maxCols = schemaNCols(pTable->schema);
-    int bytes = tdMaxRowBytesFromSchema(pTable->schema);
+    int bytes = dataRowMaxBytesFromSchema(pTable->schema);
     if (bytes > pMeta->maxRowBytes) pMeta->maxRowBytes = bytes;
-    tdUpdateSchema(pTable->schema);
   }
 
-  return tsdbAddTableIntoMap(pMeta, pTable);
-}
-
-// static int tsdbRemoveTableFromMeta(STsdbMeta *pMeta, STable *pTable) {
-//   // TODO
-//   return 0;
-// }
-
-static int tsdbAddTableIntoMap(STsdbMeta *pMeta, STable *pTable) {
-  // TODO: add the table to the map
-  int64_t uid = pTable->tableId.uid;
-  if (taosHashPut(pMeta->map, (char *)(&uid), sizeof(uid), (void *)(&pTable), sizeof(pTable)) < 0) {
+  if (taosHashPut(pMeta->map, (char *)(&pTable->tableId.uid), sizeof(pTable->tableId.uid), (void *)(&pTable), sizeof(pTable)) < 0) {
     return -1;
   }
   return 0;
 }
+
+static int tsdbRemoveTableFromMeta(STsdbMeta *pMeta, STable *pTable, bool rmFromIdx) {
+  if (pTable->type == TSDB_SUPER_TABLE) {
+    SSkipListIterator  *pIter = tSkipListCreateIter(pTable->pIndex);
+    while (tSkipListIterNext(pIter)) {
+      STableIndexElem *pEle = (STableIndexElem *)SL_GET_NODE_DATA(tSkipListIterGet(pIter));
+      STable *tTable = pEle->pTable;
+
+      ASSERT(tTable != NULL && tTable->type == TSDB_CHILD_TABLE);
+
+      tsdbRemoveTableFromMeta(pMeta, tTable, false);
+    }
+
+    tSkipListDestroyIter(pIter);
+
+    // TODO: Remove the table from the list
+    if (pTable->prev != NULL) {
+      pTable->prev->next = pTable->next;
+      if (pTable->next != NULL) {
+        pTable->next->prev = pTable->prev;
+      }
+    } else {
+      pMeta->superList = pTable->next;
+    }
+  } else {
+    pMeta->tables[pTable->tableId.tid] = NULL;
+    if (pTable->type == TSDB_CHILD_TABLE && rmFromIdx) {
+      tsdbRemoveTableFromIndex(pMeta, pTable);
+    }
+
+    pMeta->nTables--;
+  }
+
+  taosHashRemove(pMeta->map, (char *)(&(pTable->tableId.uid)), sizeof(pTable->tableId.uid));
+  tsdbFreeTable(pTable);
+  return 0;
+}
+
 static int tsdbAddTableIntoIndex(STsdbMeta *pMeta, STable *pTable) {
   assert(pTable->type == TSDB_CHILD_TABLE && pTable != NULL);
   STable* pSTable = tsdbGetTableByUid(pMeta, pTable->superUid);
@@ -484,27 +550,51 @@ static int tsdbAddTableIntoIndex(STsdbMeta *pMeta, STable *pTable) {
   
   // NOTE: do not allocate the space for key, since in each skip list node, only keep the pointer to pTable, not the
   // actual key value, and the key value will be retrieved during query through the pTable and getTagIndexKey function
-  SSkipListNode* pNode = calloc(1, headSize + POINTER_BYTES);
+  SSkipListNode* pNode = calloc(1, headSize + sizeof(STableIndexElem));
   pNode->level = level;
   
   SSkipList* list = pSTable->pIndex;
-  memcpy(SL_GET_NODE_DATA(pNode), &pTable, POINTER_BYTES);
+  STableIndexElem* elem = (STableIndexElem*) (SL_GET_NODE_DATA(pNode));
+  
+  elem->pTable = pTable;
+  elem->pMeta = pMeta;
   
   tSkipListPut(list, pNode);
-
   return 0;
 }
 
 static int tsdbRemoveTableFromIndex(STsdbMeta *pMeta, STable *pTable) {
-  assert(pTable->type == TSDB_CHILD_TABLE);
-  // TODO
+  assert(pTable->type == TSDB_CHILD_TABLE && pTable != NULL);
+  
+  STable* pSTable = tsdbGetTableByUid(pMeta, pTable->superUid);
+  assert(pSTable != NULL);
+  
+  STSchema* pSchema = tsdbGetTableTagSchema(pMeta, pTable);
+  STColumn* pCol = &pSchema->columns[DEFAULT_TAG_INDEX_COLUMN];
+  
+  char* key = tdGetRowDataOfCol(pTable->tagVal, pCol->type, TD_DATA_ROW_HEAD_SIZE + pCol->offset);
+  SArray* res = tSkipListGet(pSTable->pIndex, key);
+  
+  size_t size = taosArrayGetSize(res);
+  assert(size > 0);
+  
+  for(int32_t i = 0; i < size; ++i) {
+    SSkipListNode* pNode = taosArrayGetP(res, i);
+    
+    STableIndexElem* pElem = (STableIndexElem*) SL_GET_NODE_DATA(pNode);
+    if (pElem->pTable == pTable) {  // this is the exact what we need
+      tSkipListRemoveNode(pSTable->pIndex, pNode);
+    }
+  }
+  
+  taosArrayDestroy(res);
   return 0;
 }
 
 static int tsdbEstimateTableEncodeSize(STable *pTable) {
   int size = 0;
   size += T_MEMBER_SIZE(STable, type);
-  size += sizeof(int) + strlen(pTable->name);
+  size += sizeof(int) + varDataLen(pTable->name);
   size += T_MEMBER_SIZE(STable, tableId);
   size += T_MEMBER_SIZE(STable, superUid);
   size += T_MEMBER_SIZE(STable, sversion);
@@ -521,8 +611,7 @@ static int tsdbEstimateTableEncodeSize(STable *pTable) {
   return size;
 }
 
-char *getTupleKey(const void * data) {
+char *getTSTupleKey(const void * data) {
   SDataRow row = (SDataRow)data;
-
-  return dataRowAt(row, TD_DATA_ROW_HEAD_SIZE);
+  return POINTER_SHIFT(row, TD_DATA_ROW_HEAD_SIZE);
 }

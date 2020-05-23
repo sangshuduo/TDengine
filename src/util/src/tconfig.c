@@ -25,7 +25,7 @@
 #include "tsystem.h"
 #include "tutil.h"
 
-SGlobalCfg tsGlobalConfig[TSDB_CFG_MAX_NUM] = {0};
+SGlobalCfg tsGlobalConfig[TSDB_CFG_MAX_NUM] = {{0}};
 int32_t    tsGlobalConfigNum = 0;
 
 static char *tsGlobalUnit[] = {
@@ -236,7 +236,7 @@ void taosReadGlobalLogCfg() {
   int    olen, vlen;
   char   fileName[PATH_MAX] = {0};
 
-  mdebugFlag = 135;
+  mDebugFlag = 135;
   sdbDebugFlag = 135;
 
   wordexp_t full_path;
@@ -249,7 +249,7 @@ void taosReadGlobalLogCfg() {
   }
   wordfree(&full_path);
 
-  taosReadLogOption("logDir", logDir);
+  taosReadLogOption("tsLogDir", tsLogDir);
   
   sprintf(fileName, "%s/taos.cfg", configDir);
   fp = fopen(fileName, "r");

@@ -35,7 +35,8 @@ typedef enum {
 typedef enum {
   SDB_KEY_STRING, 
   SDB_KEY_INT,
-  SDB_KEY_AUTO
+  SDB_KEY_AUTO,
+  SDB_KEY_VAR_STRING,
 } ESdbKey;
 
 typedef enum {
@@ -72,6 +73,7 @@ void    sdbCleanUp();
 void *  sdbOpenTable(SSdbTableDesc *desc);
 void    sdbCloseTable(void *handle);
 bool    sdbIsMaster();
+bool    sdbIsServing();
 void    sdbUpdateMnodeRoles();
 
 int32_t sdbInsertRow(SSdbOper *pOper);
@@ -79,7 +81,8 @@ int32_t sdbDeleteRow(SSdbOper *pOper);
 int32_t sdbUpdateRow(SSdbOper *pOper);
 
 void    *sdbGetRow(void *handle, void *key);
-void    *sdbFetchRow(void *handle, void *pNode, void **ppRow);
+void    *sdbFetchRow(void *handle, void *pIter, void **ppRow);
+void     sdbFreeIter(void *pIter);
 void     sdbIncRef(void *thandle, void *pRow);
 void     sdbDecRef(void *thandle, void *pRow);
 int64_t  sdbGetNumOfRows(void *handle);

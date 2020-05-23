@@ -33,14 +33,14 @@ char      PROMPT_HEADER[] = "taos> ";
 char      CONTINUE_PROMPT[] = "   -> ";
 int       prompt_size = 6;
 TAOS_RES *result = NULL;
-History   history;
+SShellHistory   history;
 
 /*
  * FUNCTION: Initialize the shell.
  */
-TAOS *shellInit(struct arguments *args) {
+TAOS *shellInit(SShellArguments *args) {
   printf("\n");
-  printf(CLIENT_VERSION, osName, taos_get_client_info());
+  printf(CLIENT_VERSION, tsOsName, taos_get_client_info());
   fflush(stdout);
 
   // set options before initializing
@@ -60,15 +60,13 @@ TAOS *shellInit(struct arguments *args) {
 
   taos_init();
   /*
-   * set tsMetricMetaKeepTimer = 3000ms
-   * set tsMeterMetaKeepTimer = 3000ms
+   * set tsTableMetaKeepTimer = 3000ms
    * means not save cache in shell
    */
-  tsMetricMetaKeepTimer = 3;
-  tsMeterMetaKeepTimer = 3000;
+  tsTableMetaKeepTimer = 3000;
 
   // Connect to the database.
-  TAOS *con = taos_connect(args->host, args->user, args->password, args->database, tsMnodeShellPort);
+  TAOS *con = taos_connect(args->host, args->user, args->password, args->database, args->port);
   if (con == NULL) {
     return con;
   }
@@ -350,6 +348,8 @@ int shellDumpResult(TAOS *con, char *fname, int *error_no, bool printMode) {
   TAOS_FIELD *fields = taos_fetch_fields(result);
 
   row = taos_fetch_row(result);
+  int32_t* length = taos_fetch_lengths(result);
+  
   char t_str[TSDB_MAX_BYTES_PER_ROW] = "\0";
   int  l[TSDB_MAX_COLUMNS] = {0};
   int  maxLenColumnName = 0;
@@ -457,7 +457,7 @@ int shellDumpResult(TAOS *con, char *fname, int *error_no, bool printMode) {
               case TSDB_DATA_TYPE_BINARY:
               case TSDB_DATA_TYPE_NCHAR:
                 memset(t_str, 0, TSDB_MAX_BYTES_PER_ROW);
-                memcpy(t_str, row[i], fields[i].bytes);
+                memcpy(t_str, row[i], length[i]);
                 /* printf("%-*s|",max(fields[i].bytes, strlen(fields[i].name)),
                  * t_str); */
                 /* printf("%-*s|", l[i], t_str); */
@@ -532,7 +532,8 @@ int shellDumpResult(TAOS *con, char *fname, int *error_no, bool printMode) {
               case TSDB_DATA_TYPE_BINARY:
               case TSDB_DATA_TYPE_NCHAR:
                 memset(t_str, 0, TSDB_MAX_BYTES_PER_ROW);
-                memcpy(t_str, row[i], fields[i].bytes);
+                memcpy(t_str, row[i], length[i]);
+                
                 l[i] = MAX(fields[i].bytes, strlen(fields[i].name));
                 shellPrintNChar(t_str, l[i], printMode);
                 break;
@@ -610,7 +611,7 @@ int shellDumpResult(TAOS *con, char *fname, int *error_no, bool printMode) {
               case TSDB_DATA_TYPE_BINARY:
               case TSDB_DATA_TYPE_NCHAR:
                 memset(t_str, 0, TSDB_MAX_BYTES_PER_ROW);
-                memcpy(t_str, row[i], fields[i].bytes);
+                memcpy(t_str, row[i], length[i]);
                 fprintf(fp, "\'%s\'", t_str);
                 break;
               case TSDB_DATA_TYPE_TIMESTAMP:

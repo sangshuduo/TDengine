@@ -120,7 +120,7 @@ cmd ::= DROP TABLE ifexists(Y) ids(X) cpxName(Z).   {
 }
 
 cmd ::= DROP DATABASE ifexists(Y) ids(X).    { setDropDBTableInfo(pInfo, TSDB_SQL_DROP_DB, &X, &Y); }
-cmd ::= DROP DNODE IPTOKEN(X).        { setDCLSQLElems(pInfo, TSDB_SQL_DROP_DNODE, 1, &X);    }
+cmd ::= DROP DNODE ids(X).       { setDCLSQLElems(pInfo, TSDB_SQL_DROP_DNODE, 1, &X);    }
 cmd ::= DROP USER ids(X).        { setDCLSQLElems(pInfo, TSDB_SQL_DROP_USER, 1, &X);     }
 cmd ::= DROP ACCOUNT ids(X).     { setDCLSQLElems(pInfo, TSDB_SQL_DROP_ACCT, 1, &X);  }
 
@@ -136,8 +136,8 @@ cmd ::= DESCRIBE ids(X) cpxName(Y). {
 /////////////////////////////////THE ALTER STATEMENT////////////////////////////////////////
 cmd ::= ALTER USER ids(X) PASS ids(Y).          { setAlterUserSQL(pInfo, TSDB_ALTER_USER_PASSWD, &X, &Y, NULL);    }
 cmd ::= ALTER USER ids(X) PRIVILEGE ids(Y).     { setAlterUserSQL(pInfo, TSDB_ALTER_USER_PRIVILEGES, &X, NULL, &Y);}
-cmd ::= ALTER DNODE IPTOKEN(X) ids(Y).               { setDCLSQLElems(pInfo, TSDB_SQL_CFG_DNODE, 2, &X, &Y);          }
-cmd ::= ALTER DNODE IPTOKEN(X) ids(Y) ids(Z).        { setDCLSQLElems(pInfo, TSDB_SQL_CFG_DNODE, 3, &X, &Y, &Z);      }
+cmd ::= ALTER DNODE ids(X) ids(Y).              { setDCLSQLElems(pInfo, TSDB_SQL_CFG_DNODE, 2, &X, &Y);          }
+cmd ::= ALTER DNODE ids(X) ids(Y) ids(Z).       { setDCLSQLElems(pInfo, TSDB_SQL_CFG_DNODE, 3, &X, &Y, &Z);      }
 cmd ::= ALTER LOCAL ids(X).                     { setDCLSQLElems(pInfo, TSDB_SQL_CFG_LOCAL, 1, &X);              }
 cmd ::= ALTER LOCAL ids(X) ids(Y).              { setDCLSQLElems(pInfo, TSDB_SQL_CFG_LOCAL, 2, &X, &Y);          }
 cmd ::= ALTER DATABASE ids(X) alter_db_optr(Y). { SSQLToken t = {0};  setCreateDBSQL(pInfo, TSDB_SQL_ALTER_DB, &X, &Y, &t);}
@@ -162,7 +162,7 @@ ifnotexists(X) ::= .                {X.n = 0;}
 
 /////////////////////////////////THE CREATE STATEMENT///////////////////////////////////////
 //create option for dnode/db/user/account
-cmd ::= CREATE DNODE IPTOKEN(X).     { setDCLSQLElems(pInfo, TSDB_SQL_CREATE_DNODE, 1, &X);}
+cmd ::= CREATE DNODE   ids(X).     { setDCLSQLElems(pInfo, TSDB_SQL_CREATE_DNODE, 1, &X);}
 cmd ::= CREATE ACCOUNT ids(X) PASS ids(Y) acct_optr(Z).
                                 { setCreateAcctSQL(pInfo, TSDB_SQL_CREATE_ACCT, &X, &Y, &Z);}
 cmd ::= CREATE DATABASE ifnotexists(Z) ids(X) db_optr(Y).  { setCreateDBSQL(pInfo, TSDB_SQL_CREATE_DB, &X, &Y, &Z);}
@@ -212,31 +212,30 @@ acct_optr(Y) ::= pps(C) tseries(D) storage(P) streams(F) qtime(Q) dbs(E) users(K
 %destructor keep {tVariantListDestroy($$);}
 keep(Y)    ::= KEEP tagitemlist(X).           { Y = X; }
 
-tables(Y)  ::= TABLES INTEGER(X).             { Y = X; }
+tables(Y)  ::= MAXTABLES INTEGER(X).          { Y = X; }
 cache(Y)   ::= CACHE INTEGER(X).              { Y = X; }
 replica(Y) ::= REPLICA INTEGER(X).            { Y = X; }
 days(Y)    ::= DAYS INTEGER(X).               { Y = X; }
-rows(Y)    ::= ROWS INTEGER(X).               { Y = X; }
-
-ablocks(Y) ::= ABLOCKS ID(X).                 { Y = X; }
-tblocks(Y) ::= TBLOCKS INTEGER(X).            { Y = X; }
+minrows(Y) ::= MINROWS INTEGER(X).            { Y = X; }
+maxrows(Y) ::= MAXROWS INTEGER(X).            { Y = X; }
+blocks(Y)  ::= BLOCKS INTEGER(X).             { Y = X; }
 ctime(Y)   ::= CTIME INTEGER(X).              { Y = X; }
-clog(Y)    ::= CLOG INTEGER(X).               { Y = X; }
+wal(Y)     ::= WAL INTEGER(X).                { Y = X; }
 comp(Y)    ::= COMP INTEGER(X).               { Y = X; }
 prec(Y)    ::= PRECISION STRING(X).           { Y = X; }
 
 %type db_optr {SCreateDBInfo}
 db_optr(Y) ::= . {setDefaultCreateDbOption(&Y);}
 
-db_optr(Y) ::= db_optr(Z) tables(X).         { Y = Z; Y.tablesPerVnode = strtol(X.z, NULL, 10); }
+db_optr(Y) ::= db_optr(Z) tables(X).         { Y = Z; Y.maxTablesPerVnode = strtol(X.z, NULL, 10); }
 db_optr(Y) ::= db_optr(Z) cache(X).          { Y = Z; Y.cacheBlockSize = strtol(X.z, NULL, 10); }
 db_optr(Y) ::= db_optr(Z) replica(X).        { Y = Z; Y.replica = strtol(X.z, NULL, 10); }
 db_optr(Y) ::= db_optr(Z) days(X).           { Y = Z; Y.daysPerFile = strtol(X.z, NULL, 10); }
-db_optr(Y) ::= db_optr(Z) rows(X).           { Y = Z; Y.rowPerFileBlock = strtol(X.z, NULL, 10); }
-db_optr(Y) ::= db_optr(Z) ablocks(X).        { Y = Z; Y.numOfAvgCacheBlocks = strtod(X.z, NULL); }
-db_optr(Y) ::= db_optr(Z) tblocks(X).        { Y = Z; Y.numOfBlocksPerTable = strtol(X.z, NULL, 10); }
+db_optr(Y) ::= db_optr(Z) minrows(X).        { Y = Z; Y.minRowsPerBlock = strtod(X.z, NULL); }
+db_optr(Y) ::= db_optr(Z) maxrows(X).        { Y = Z; Y.maxRowsPerBlock = strtod(X.z, NULL); }
+db_optr(Y) ::= db_optr(Z) blocks(X).         { Y = Z; Y.numOfBlocks = strtol(X.z, NULL, 10); }
 db_optr(Y) ::= db_optr(Z) ctime(X).          { Y = Z; Y.commitTime = strtol(X.z, NULL, 10); }
-db_optr(Y) ::= db_optr(Z) clog(X).           { Y = Z; Y.commitLog = strtol(X.z, NULL, 10); }
+db_optr(Y) ::= db_optr(Z) wal(X).            { Y = Z; Y.walLevel = strtol(X.z, NULL, 10); }
 db_optr(Y) ::= db_optr(Z) comp(X).           { Y = Z; Y.compressionLevel = strtol(X.z, NULL, 10); }
 db_optr(Y) ::= db_optr(Z) prec(X).           { Y = Z; Y.precision = X; }
 db_optr(Y) ::= db_optr(Z) keep(X).           { Y = Z; Y.keep = X; }
@@ -245,7 +244,11 @@ db_optr(Y) ::= db_optr(Z) keep(X).           { Y = Z; Y.keep = X; }
 alter_db_optr(Y) ::= . { setDefaultCreateDbOption(&Y);}
 
 alter_db_optr(Y) ::= alter_db_optr(Z) replica(X).     { Y = Z; Y.replica = strtol(X.z, NULL, 10); }
-alter_db_optr(Y) ::= alter_db_optr(Z) tables(X).      { Y = Z; Y.tablesPerVnode = strtol(X.z, NULL, 10); }
+alter_db_optr(Y) ::= alter_db_optr(Z) tables(X).      { Y = Z; Y.maxTablesPerVnode = strtol(X.z, NULL, 10); }
+alter_db_optr(Y) ::= alter_db_optr(Z) keep(X).        { Y = Z; Y.keep = X; }
+alter_db_optr(Y) ::= alter_db_optr(Z) blocks(X).      { Y = Z; Y.numOfBlocks = strtol(X.z, NULL, 10); }
+alter_db_optr(Y) ::= alter_db_optr(Z) comp(X).        { Y = Z; Y.compressionLevel = strtol(X.z, NULL, 10); }
+alter_db_optr(Y) ::= alter_db_optr(Z) wal(X).         { Y = Z; Y.walLevel = strtol(X.z, NULL, 10); }
 
 %type typename {TAOS_FIELD}
 typename(A) ::= ids(X).              { tSQLSetColumnType (&A, &X); }
@@ -264,7 +267,7 @@ signed(A) ::= MINUS INTEGER(X).   { A = -strtol(X.z, NULL, 10);}
 ////////////////////////////////// The CREATE TABLE statement ///////////////////////////////
 cmd ::= CREATE TABLE ifnotexists(Y) ids(X) cpxName(Z) create_table_args.  {
     X.n += Z.n;
-    setCreatedMeterName(pInfo, &X, &Y);
+    setCreatedTableName(pInfo, &X, &Y);
 }
 
 %type create_table_args{SCreateTableSQL*}
@@ -652,5 +655,5 @@ cmd ::= KILL QUERY IPTOKEN(X) COLON(Z) INTEGER(Y) COLON(K) INTEGER(F).        {X
   DELIMITERS DESC DETACH EACH END EXPLAIN FAIL FOR GLOB IGNORE IMMEDIATE INITIALLY INSTEAD
   LIKE MATCH KEY OF OFFSET RAISE REPLACE RESTRICT ROW STATEMENT TRIGGER VIEW ALL
   COUNT SUM AVG MIN MAX FIRST LAST TOP BOTTOM STDDEV PERCENTILE APERCENTILE LEASTSQUARES HISTOGRAM DIFF
-  SPREAD TWA INTERP LAST_ROW RATE IRATE SUM_RATE SUM_IRATE AVG_RATE AVG_IRATE NOW IPTOKEN SEMI NONE PREV LINEAR IMPORT
+  SPREAD TWA INTERP LAST_ROW RATE IRATE SUM_RATE SUM_IRATE AVG_RATE AVG_IRATE TBID NOW IPTOKEN SEMI NONE PREV LINEAR IMPORT
   METRIC TBNAME JOIN METRICS STABLE NULL INSERT INTO VALUES.

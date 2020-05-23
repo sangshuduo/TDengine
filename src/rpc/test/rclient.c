@@ -31,20 +31,14 @@ typedef struct {
   void     *pRpc;
 } SInfo;
 
-static void processResponse(SRpcMsg *pMsg) {
+static void processResponse(SRpcMsg *pMsg, SRpcIpSet *pIpSet) {
   SInfo *pInfo = (SInfo *)pMsg->handle;
   tTrace("thread:%d, response is received, type:%d contLen:%d code:0x%x", pInfo->index, pMsg->msgType, pMsg->contLen, pMsg->code);
 
+  if (pIpSet) pInfo->ipSet = *pIpSet;
+
   rpcFreeCont(pMsg->pCont);
-
   sem_post(&pInfo->rspSem); 
-}
-
-static void processUpdateIpSet(void *handle, SRpcIpSet *pIpSet) {
-  SInfo *pInfo = (SInfo *)handle;
-
-  tTrace("thread:%d, ip set is changed, index:%d", pInfo->index, pIpSet->inUse);
-  pInfo->ipSet = *pIpSet;
 }
 
 static int tcount = 0;
@@ -88,18 +82,17 @@ int main(int argc, char *argv[]) {
   // server info
   ipSet.numOfIps = 1;
   ipSet.inUse = 0;
-  ipSet.port = 7000;
-  ipSet.ip[0] = inet_addr(serverIp);
-  ipSet.ip[1] = inet_addr("192.168.0.1");
+  ipSet.port[0] = 7000;
+  ipSet.port[1] = 7000;
+  strcpy(ipSet.fqdn[0], serverIp);
+  strcpy(ipSet.fqdn[1], "192.168.0.1");
 
   // client info
   memset(&rpcInit, 0, sizeof(rpcInit));
-  rpcInit.localIp      = "0.0.0.0";
   rpcInit.localPort    = 0;
   rpcInit.label        = "APP";
   rpcInit.numOfThreads = 1;
   rpcInit.cfp          = processResponse;
-  rpcInit.ufp          = processUpdateIpSet;
   rpcInit.sessions     = 100;
   rpcInit.idleTime     = tsShellActivityTimer*1000;
   rpcInit.user         = "michael";
@@ -110,11 +103,9 @@ int main(int argc, char *argv[]) {
 
   for (int i=1; i<argc; ++i) { 
     if (strcmp(argv[i], "-p")==0 && i < argc-1) {
-      ipSet.port = atoi(argv[++i]);
+      ipSet.port[0] = atoi(argv[++i]);
     } else if (strcmp(argv[i], "-i") ==0 && i < argc-1) {
-      ipSet.ip[0] = inet_addr(argv[++i]); 
-    } else if (strcmp(argv[i], "-l")==0 && i < argc-1) {
-      strcpy(rpcInit.localIp, argv[++i]); 
+      strcpy(ipSet.fqdn[0], argv[++i]); 
     } else if (strcmp(argv[i], "-t")==0 && i < argc-1) {
       rpcInit.numOfThreads = atoi(argv[++i]);
     } else if (strcmp(argv[i], "-m")==0 && i < argc-1) {
@@ -138,10 +129,9 @@ int main(int argc, char *argv[]) {
     } else {
       printf("\nusage: %s [options] \n", argv[0]);
       printf("  [-i ip]: first server IP address, default is:%s\n", serverIp);
-      printf("  [-p port]: server port number, default is:%d\n", ipSet.port);
+      printf("  [-p port]: server port number, default is:%d\n", ipSet.port[0]);
       printf("  [-t threads]: number of rpc threads, default is:%d\n", rpcInit.numOfThreads);
       printf("  [-s sessions]: number of rpc sessions, default is:%d\n", rpcInit.sessions);
-      printf("  [-l localIp]: local IP address, default is:%s\n", rpcInit.localIp);
       printf("  [-m msgSize]: message body size, default is:%d\n", msgSize);
       printf("  [-a threads]: number of app threads, default is:%d\n", appThreads);
       printf("  [-n requests]: number of requests per thread, default is:%d\n", numOfReqs);

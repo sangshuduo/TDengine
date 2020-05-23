@@ -67,7 +67,7 @@ static struct argp_option options[] = {
   {0}};
 
 /* Used by main to communicate with parse_opt. */
-struct arguments {
+typedef struct DemoArguments {
   char  *host;
   uint16_t    port;
   char  *user;
@@ -87,13 +87,13 @@ struct arguments {
   int    num_of_DPT;
   int    abort;
   char **arg_list;
-};
+} SDemoArguments;
 
 /* Parse a single option. */
 static error_t parse_opt(int key, char *arg, struct argp_state *state) {
   /* Get the input argument from argp_parse, which we
      know is a pointer to our arguments structure. */
-  struct arguments *arguments = state->input;
+  SDemoArguments *arguments = state->input;
   wordexp_t full_path;
   char **sptr;
   switch (key) {
@@ -269,7 +269,7 @@ double getCurrentTime();
 void callBack(void *param, TAOS_RES *res, int code);
 
 int main(int argc, char *argv[]) {
-  struct arguments arguments = {NULL,            // host
+  SDemoArguments arguments = {NULL,            // host
                                 0,               // port
                                 "root",          // user
                                 "taosdata",      // password
@@ -340,6 +340,9 @@ int main(int argc, char *argv[]) {
   int count_data_type = 0;
   char dataString[512];
   bool do_aggreFunc = true;
+
+  memset(dataString, 0, 512);
+
   if (strcasecmp(data_type[0], "BINARY") == 0 || strcasecmp(data_type[0], "BOOL") == 0) {
     do_aggreFunc = false;
   }
@@ -631,7 +634,7 @@ void *readMetric(void *sarg) {
   fprintf(fp, "Querying On %d records:\n", totalData);
 
   for (int j = 0; j < n; j++) {
-    char condition[BUFFER_SIZE] = "\0";
+    char condition[BUFFER_SIZE - 30] = "\0";
     char tempS[BUFFER_SIZE] = "\0";
 
     int m = 10 < num_of_tables ? 10 : num_of_tables;

@@ -122,6 +122,10 @@ The TDengine community has also kindly built some of their own connectors! Follo
 - [Rust Connector](https://github.com/taosdata/TDengine/tree/master/tests/examples/rust)
 - [.Net Core Connector](https://github.com/maikebing/Maikebing.EntityFrameworkCore.Taos)
 
+# How to run the test cases and how to add a new test case?
+  TDengine's test framework and all test cases are fully open source.
+  Please refer to [this document](tests/How-To-Run-Test-And-How-To-Add-New-Test-Case.md) for how to run test and develop new test case.
+
 # TDengine Roadmap
 - Support event-driven stream computing
 - Support user defined functions

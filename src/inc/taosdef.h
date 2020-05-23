@@ -32,8 +32,30 @@ extern "C" {
 #define TSKEY int64_t
 #endif
 
+#define TSWINDOW_INITIALIZER ((STimeWindow) {INT64_MIN, INT64_MAX})
+#define TSKEY_INITIAL_VAL    INT64_MIN
+
+// ----------------- For variable data types such as TSDB_DATA_TYPE_BINARY and TSDB_DATA_TYPE_NCHAR
+typedef int32_t VarDataOffsetT;
+typedef int16_t VarDataLenT;
+
+typedef struct tstr {
+  VarDataLenT len;
+  char        data[];
+} tstr;
+
+#define VARSTR_HEADER_SIZE  sizeof(VarDataLenT)
+
+#define varDataLen(v)       ((VarDataLenT *)(v))[0]
+#define varDataTLen(v)      (sizeof(VarDataLenT) + varDataLen(v))
+#define varDataVal(v)       ((void *)((char *)v + VARSTR_HEADER_SIZE))
+#define varDataCopy(dst, v) memcpy((dst), (void*) (v), varDataTLen(v))
+#define varDataLenByData(v) (*(VarDataLenT *)(((char*)(v)) - VARSTR_HEADER_SIZE))
+#define varDataSetLen(v, _len) (((VarDataLenT *)(v))[0] = (VarDataLenT) (_len))
+
 // this data type is internally used only in 'in' query to hold the values
 #define TSDB_DATA_TYPE_ARRAY      (TSDB_DATA_TYPE_NCHAR + 1)
+
 
 // Bytes for each type.
 extern const int32_t TYPE_BYTES[11];
@@ -60,10 +82,10 @@ extern const int32_t TYPE_BYTES[11];
 #define TSDB_DATA_NULL_STR              "NULL"
 #define TSDB_DATA_NULL_STR_L            "null"
 
-#define TSDB_TRUE 1
-#define TSDB_FALSE 0
-#define TSDB_OK 0
-#define TSDB_ERR -1
+#define TSDB_TRUE   1
+#define TSDB_FALSE  0
+#define TSDB_OK     0
+#define TSDB_ERR   -1
 
 #define TS_PATH_DELIMITER "."
 
@@ -121,6 +143,12 @@ typedef struct tDataTypeDescriptor {
   int16_t nameLen;
   int32_t nSize;
   char *  aName;
+  int (*compFunc)(const char *const input, int inputSize, const int nelements, char *const output, int outputSize,
+                  char algorithm, char *const buffer, int bufferSize);
+  int (*decompFunc)(const char *const input, int compressedSize, const int nelements, char *const output,
+                    int outputSize, char algorithm, char *const buffer, int bufferSize);
+  void (*getStatisFunc)(const TSKEY *primaryKey, const void *pData, int32_t numofrow, int64_t *min, int64_t *max,
+                         int64_t *sum, int16_t *minindex, int16_t *maxindex, int16_t *numofnull);
 } tDataTypeDescriptor;
 
 extern tDataTypeDescriptor tDataTypeDesc[11];
@@ -165,20 +193,20 @@ void tsDataSwap(void *pLeft, void *pRight, int32_t type, int32_t size);
 #define TSDB_ACCT_LEN             TSDB_UNI_LEN
 #define TSDB_PASSWORD_LEN         TSDB_UNI_LEN
 
-#define TSDB_MAX_COLUMNS          256
+#define TSDB_MAX_COLUMNS          1024
 #define TSDB_MIN_COLUMNS          2       //PRIMARY COLUMN(timestamp) + other columns
 
 #define TSDB_NODE_NAME_LEN        64
 #define TSDB_TABLE_NAME_LEN       192
 #define TSDB_DB_NAME_LEN          32
 #define TSDB_COL_NAME_LEN         64
-#define TSDB_MAX_SAVED_SQL_LEN    TSDB_MAX_COLUMNS * 16
+#define TSDB_MAX_SAVED_SQL_LEN    TSDB_MAX_COLUMNS * 64
 #define TSDB_MAX_SQL_LEN          TSDB_PAYLOAD_SIZE
 #define TSDB_MAX_ALLOWED_SQL_LEN  (8*1024*1024U)          // sql length should be less than 6mb
 
-#define TSDB_MAX_BYTES_PER_ROW    TSDB_MAX_COLUMNS * 16
-#define TSDB_MAX_TAGS_LEN         512
-#define TSDB_MAX_TAGS             32
+#define TSDB_MAX_BYTES_PER_ROW    TSDB_MAX_COLUMNS * 64
+#define TSDB_MAX_TAGS_LEN         65536
+#define TSDB_MAX_TAGS             128
 
 #define TSDB_AUTH_LEN             16
 #define TSDB_KEY_LEN              16
@@ -187,11 +215,11 @@ void tsDataSwap(void *pLeft, void *pRight, int32_t type, int32_t size);
 #define TSDB_CITY_LEN             20
 #define TSDB_STATE_LEN            20
 #define TSDB_COUNTRY_LEN          20
-#define TSDB_VNODES_SUPPORT       6
-#define TSDB_MGMT_SUPPORT         4
 #define TSDB_LOCALE_LEN           64
 #define TSDB_TIMEZONE_LEN         64
 
+#define TSDB_FQDN_LEN             128
+#define TSDB_EP_LEN               (TSDB_FQDN_LEN+6)
 #define TSDB_IPv4ADDR_LEN      	  16
 #define TSDB_FILENAME_LEN         128
 #define TSDB_METER_VNODE_BITS     20
@@ -199,7 +227,7 @@ void tsDataSwap(void *pLeft, void *pRight, int32_t type, int32_t size);
 #define TSDB_SHELL_VNODE_BITS     24
 #define TSDB_SHELL_SID_MASK       0xFF
 #define TSDB_HTTP_TOKEN_LEN       20
-#define TSDB_SHOW_SQL_LEN         32
+#define TSDB_SHOW_SQL_LEN         512
 
 #define TSDB_METER_STATE_OFFLINE  0
 #define TSDB_METER_STATE_ONLLINE  1
@@ -207,9 +235,9 @@ void tsDataSwap(void *pLeft, void *pRight, int32_t type, int32_t size);
 #define TSDB_DEFAULT_PKT_SIZE     65480  //same as RPC_MAX_UDP_SIZE
 
 #define TSDB_PAYLOAD_SIZE         (TSDB_DEFAULT_PKT_SIZE - 100)
-#define TSDB_DEFAULT_PAYLOAD_SIZE 1024   // default payload size
+#define TSDB_DEFAULT_PAYLOAD_SIZE 2048   // default payload size
 #define TSDB_EXTRA_PAYLOAD_SIZE   128    // extra bytes for auth
-#define TSDB_SQLCMD_SIZE          1024
+#define TSDB_CQ_SQL_SIZE          1024
 #define TSDB_MAX_VNODES           256
 #define TSDB_MIN_VNODES           50
 #define TSDB_INVALID_VNODE_NUM    0
@@ -218,19 +246,18 @@ void tsDataSwap(void *pLeft, void *pRight, int32_t type, int32_t size);
 #define TSDB_DNODE_ROLE_MGMT      1
 #define TSDB_DNODE_ROLE_VNODE     2
 
-#define TSDB_MAX_MPEERS           5
-#define TSDB_MAX_MGMT_IPS         (TSDB_MAX_MPEERS+1)
+#define TSDB_MAX_REPLICA          5
 
 #define TSDB_TBNAME_COLUMN_INDEX       (-1)
 #define TSDB_MULTI_METERMETA_MAX_NUM    100000  // maximum batch size allowed to load metermeta
 
 #define TSDB_MIN_CACHE_BLOCK_SIZE       1
-#define TSDB_MAX_CACHE_BLOCK_SIZE       1000000
+#define TSDB_MAX_CACHE_BLOCK_SIZE       128     // 128MB for each vnode
 #define TSDB_DEFAULT_CACHE_BLOCK_SIZE   16
 
 #define TSDB_MIN_TOTAL_BLOCKS           2
 #define TSDB_MAX_TOTAL_BLOCKS           10000
-#define TSDB_DEFAULT_TOTAL_BLOCKS       2
+#define TSDB_DEFAULT_TOTAL_BLOCKS       4
 
 #define TSDB_MIN_TABLES                 4
 #define TSDB_MAX_TABLES                 200000
@@ -264,9 +291,9 @@ void tsDataSwap(void *pLeft, void *pRight, int32_t type, int32_t size);
 #define TSDB_MAX_COMP_LEVEL             2
 #define TSDB_DEFAULT_COMP_LEVEL         2
 
-#define TSDB_MIN_CLOG_LEVEL             0
-#define TSDB_MAX_CLOG_LEVEL             2
-#define TSDB_DEFAULT_CLOG_LEVEL         2
+#define TSDB_MIN_WAL_LEVEL             0
+#define TSDB_MAX_WAL_LEVEL             2
+#define TSDB_DEFAULT_WAL_LEVEL         2
 
 #define TSDB_MIN_REPLICA_NUM            1
 #define TSDB_MAX_REPLICA_NUM            3
@@ -281,27 +308,30 @@ void tsDataSwap(void *pLeft, void *pRight, int32_t type, int32_t size);
 
 #define TSDB_MAX_RPC_THREADS            5
 
-#define TSDB_QUERY_TYPE_NON_TYPE                       0x00U     // none type
-#define TSDB_QUERY_TYPE_FREE_RESOURCE                  0x01U     // free qhandle at vnode
+#define TSDB_QUERY_TYPE_NON_TYPE                       0x00u     // none type
+#define TSDB_QUERY_TYPE_FREE_RESOURCE                  0x01u     // free qhandle at vnode
 
 /*
  * 1. ordinary sub query for select * from super_table
  * 2. all sqlobj generated by createSubqueryObj with this flag
  */
-#define TSDB_QUERY_TYPE_SUBQUERY                       0x02U
-#define TSDB_QUERY_TYPE_STABLE_SUBQUERY                0x04U     // two-stage subquery for super table
+#define TSDB_QUERY_TYPE_SUBQUERY                       0x02u
+#define TSDB_QUERY_TYPE_STABLE_SUBQUERY                0x04u     // two-stage subquery for super table
 
-#define TSDB_QUERY_TYPE_TABLE_QUERY                    0x08U     // query ordinary table; below only apply to client side
-#define TSDB_QUERY_TYPE_STABLE_QUERY                   0x10U    // query on super table
-#define TSDB_QUERY_TYPE_JOIN_QUERY                     0x20U    // join query
-#define TSDB_QUERY_TYPE_PROJECTION_QUERY               0x40U    // select *,columns... query
-#define TSDB_QUERY_TYPE_JOIN_SEC_STAGE                 0x80U    // join sub query at the second stage
+#define TSDB_QUERY_TYPE_TABLE_QUERY                    0x08u     // query ordinary table; below only apply to client side
+#define TSDB_QUERY_TYPE_STABLE_QUERY                   0x10u    // query on super table
+#define TSDB_QUERY_TYPE_JOIN_QUERY                     0x20u    // join query
+#define TSDB_QUERY_TYPE_PROJECTION_QUERY               0x40u    // select *,columns... query
+#define TSDB_QUERY_TYPE_JOIN_SEC_STAGE                 0x80u    // join sub query at the second stage
 
-#define TSDB_QUERY_TYPE_INSERT                        0x100U    // insert type
-#define TSDB_QUERY_TYPE_IMPORT                        0x200U    // import data
+#define TSDB_QUERY_TYPE_TAG_FILTER_QUERY              0x400u
+#define TSDB_QUERY_TYPE_INSERT                        0x100u    // insert type
+#define TSDB_QUERY_TYPE_IMPORT                        0x200u    // import data
+#define TSDB_QUERY_TYPE_MULTITABLE_QUERY              0x800u
 
 #define TSDB_QUERY_HAS_TYPE(x, _type)         (((x) & (_type)) != 0)
 #define TSDB_QUERY_SET_TYPE(x, _type)         ((x) |= (_type))
+#define TSDB_QUERY_CLEAR_TYPE(x, _type)       ((x) &= (~_type))
 #define TSDB_QUERY_RESET_TYPE(x)              ((x) = TSDB_QUERY_TYPE_NON_TYPE)
 
 #define TSDB_ORDER_ASC   1
@@ -310,15 +340,23 @@ void tsDataSwap(void *pLeft, void *pRight, int32_t type, int32_t size);
 #define TSDB_SESSIONS_PER_VNODE (300)
 #define TSDB_SESSIONS_PER_DNODE (TSDB_SESSIONS_PER_VNODE * TSDB_MAX_VNODES)
 
-#define TSDB_MAX_MNODES        5
-#define TSDB_MAX_DNODES        10
-#define TSDB_MAX_ACCOUNTS      10
-#define TSDB_MAX_USERS         20
-#define TSDB_MAX_DBS           100
-#define TSDB_MAX_VGROUPS       1000
-#define TSDB_MAX_SUPER_TABLES  100
-#define TSDB_MAX_NORMAL_TABLES 1000
-#define TSDB_MAX_CHILD_TABLES  100000
+#define TSDB_DEFAULT_MNODES_HASH_SIZE   5
+#define TSDB_DEFAULT_DNODES_HASH_SIZE   10
+#define TSDB_DEFAULT_ACCOUNTS_HASH_SIZE 10
+#define TSDB_DEFAULT_USERS_HASH_SIZE    20
+#define TSDB_DEFAULT_DBS_HASH_SIZE      100
+#define TSDB_DEFAULT_VGROUPS_HASH_SIZE  100
+#define TSDB_DEFAULT_STABLES_HASH_SIZE  100
+#define TSDB_DEFAULT_CTABLES_HASH_SIZE  10000
+
+#define TSDB_PORT_DNODESHELL 0 
+#define TSDB_PORT_DNODEDNODE 5 
+#define TSDB_PORT_SYNC       10 
+
+#define TAOS_QTYPE_RPC      0
+#define TAOS_QTYPE_FWD      1
+#define TAOS_QTYPE_WAL      2 
+#define TAOS_QTYPE_CQ       3
 
 typedef enum {
   TSDB_PRECISION_MILLI,

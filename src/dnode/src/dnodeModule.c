@@ -17,10 +17,11 @@
 #include "os.h"
 #include "taosdef.h"
 #include "tglobal.h"
+#include "trpc.h"
 #include "mnode.h"
 #include "http.h"
 #include "monitor.h"
-#include "dnodeLog.h"
+#include "dnodeInt.h"
 #include "dnodeModule.h"
 
 typedef struct {
@@ -32,7 +33,7 @@ typedef struct {
   void    (*stopFp)();
 } SModule;
 
-static SModule  tsModule[TSDB_MOD_MAX] = {0};
+static SModule  tsModule[TSDB_MOD_MAX] = {{0}};
 static uint32_t tsModuleStatus = 0;
 
 static void dnodeSetModuleStatus(int32_t module) {
@@ -44,13 +45,13 @@ static void dnodeUnSetModuleStatus(int32_t module) {
 }
 
 static void dnodeAllocModules() {
-  tsModule[TSDB_MOD_MGMT].name         = false;
+  tsModule[TSDB_MOD_MGMT].enable       = false;
   tsModule[TSDB_MOD_MGMT].name         = "mgmt";
   tsModule[TSDB_MOD_MGMT].initFp       = mgmtInitSystem;
   tsModule[TSDB_MOD_MGMT].cleanUpFp    = mgmtCleanUpSystem;
   tsModule[TSDB_MOD_MGMT].startFp      = mgmtStartSystem;
   tsModule[TSDB_MOD_MGMT].stopFp       = mgmtStopSystem;
- 
+
   tsModule[TSDB_MOD_HTTP].enable       = (tsEnableHttpModule == 1);
   tsModule[TSDB_MOD_HTTP].name         = "http";
   tsModule[TSDB_MOD_HTTP].initFp       = httpInitSystem;
@@ -60,7 +61,7 @@ static void dnodeAllocModules() {
   if (tsEnableHttpModule) {
     dnodeSetModuleStatus(TSDB_MOD_HTTP);
   }
-  
+
   tsModule[TSDB_MOD_MONITOR].enable    = (tsEnableMonitorModule == 1);
   tsModule[TSDB_MOD_MONITOR].name      = "monitor";
   tsModule[TSDB_MOD_MONITOR].initFp    = monitorInitSystem;
@@ -113,18 +114,20 @@ void dnodeStartModules() {
 }
 
 void dnodeProcessModuleStatus(uint32_t moduleStatus) {
-  bool enableMgmtModule = moduleStatus & (1 << TSDB_MOD_MGMT);
-  if (!tsModule[TSDB_MOD_MGMT].enable && enableMgmtModule) {
-    dPrint("module status is received, start mgmt module", tsModuleStatus, moduleStatus);
-    tsModule[TSDB_MOD_MGMT].enable = true;
-    dnodeSetModuleStatus(TSDB_MOD_MGMT);
-    (*tsModule[TSDB_MOD_MGMT].startFp)();
-  }
+  for (int32_t module = TSDB_MOD_MGMT; module < TSDB_MOD_HTTP; ++module) {
+    bool enableModule = moduleStatus & (1 << module);
+    if (!tsModule[module].enable && enableModule) {
+      dPrint("module status:%u is received, start %s module", tsModuleStatus, tsModule[module].name);
+      tsModule[module].enable = true;
+      dnodeSetModuleStatus(module);
+      (*tsModule[module].startFp)();
+    }
 
-  if (tsModule[TSDB_MOD_MGMT].enable && !enableMgmtModule) {
-    dPrint("module status is received, stop mgmt module", tsModuleStatus, moduleStatus);
-    tsModule[TSDB_MOD_MGMT].enable = false;
-    dnodeUnSetModuleStatus(TSDB_MOD_MGMT);
-    (*tsModule[TSDB_MOD_MGMT].stopFp)();
+    if (tsModule[module].enable && !enableModule) {
+      dPrint("module status:%u is received, stop %s module", tsModuleStatus, tsModule[module].name);
+      tsModule[module].enable = false;
+      dnodeUnSetModuleStatus(module);
+      (*tsModule[module].stopFp)();
+    }
   }
 }

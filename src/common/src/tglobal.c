@@ -25,14 +25,15 @@
 #include "tutil.h"
 #include "tlocale.h"
 #include "ttimezone.h"
+#include "tsync.h"
 
 char configDir[TSDB_FILENAME_LEN] = "/etc/taos";
 char tsVnodeDir[TSDB_FILENAME_LEN] = {0};
 char tsDnodeDir[TSDB_FILENAME_LEN] = {0};
 char tsMnodeDir[TSDB_FILENAME_LEN] = {0};
-char dataDir[TSDB_FILENAME_LEN] = "/var/lib/taos";
-char scriptDir[TSDB_FILENAME_LEN] = "/etc/taos";
-char osName[10] = "Linux";
+char tsDataDir[TSDB_FILENAME_LEN] = "/var/lib/taos";
+char tsScriptDir[TSDB_FILENAME_LEN] = "/etc/taos";
+char tsOsName[10] = "Linux";
 
 // system info, not configurable
 int64_t tsPageSize;
@@ -60,47 +61,43 @@ int32_t tscEmbedded = 0;
  */
 int64_t tsMsPerDay[] = {86400000L, 86400000000L};
 
-char  tsMasterIp[TSDB_IPv4ADDR_LEN] = {0};
-char  tsSecondIp[TSDB_IPv4ADDR_LEN] = {0};
-uint16_t tsMnodeShellPort = 6030;   // udp[6030-6034] tcp[6030]
-uint16_t tsDnodeShellPort = 6035;  // udp[6035-6039] tcp[6035]
-uint16_t tsMnodeDnodePort = 6040;   // udp/tcp
-uint16_t tsDnodeMnodePort = 6045;   // udp/tcp
-uint16_t tsSyncPort = 6050;
+char  tsFirst[TSDB_EP_LEN] = {0};  
+char  tsSecond[TSDB_EP_LEN] = {0};
+char  tsArbitrator[TSDB_EP_LEN] = {0};
+char  tsLocalEp[TSDB_EP_LEN] = {0};  // Local End Point, hostname:port
+uint16_t tsServerPort = 6030;
+uint16_t tsDnodeShellPort = 6030;  // udp[6035-6039] tcp[6035]
+uint16_t tsDnodeDnodePort = 6035;   // udp/tcp
+uint16_t tsSyncPort = 6040;
 
 int32_t tsStatusInterval = 1;         // second
 int32_t tsShellActivityTimer = 3;     // second
-int32_t tsVnodePeerHBTimer = 1;       // second
-int32_t tsMgmtPeerHBTimer = 1;        // second
-int32_t tsMeterMetaKeepTimer = 7200;  // second
-int32_t tsMetricMetaKeepTimer = 600;  // second
+int32_t tsTableMetaKeepTimer = 7200;  // second
 int32_t tsRpcTimer = 300;
 int32_t tsRpcMaxTime = 600;      // seconds;
 
 float   tsNumOfThreadsPerCore = 1.0;
 float   tsRatioOfQueryThreads = 0.5;
-char    tsPublicIp[TSDB_IPv4ADDR_LEN] = {0};
-char    tsPrivateIp[TSDB_IPv4ADDR_LEN] = {0};
 int16_t tsNumOfVnodesPerCore = 8;
 int16_t tsNumOfTotalVnodes = TSDB_INVALID_VNODE_NUM;
 
 #ifdef _TD_ARM_32_
-int32_t tsTablesPerVnode = 100;
+int32_t tsMaxTablePerVnode = 100;
 #else
-int32_t tsTablesPerVnode = TSDB_DEFAULT_TABLES;
+int32_t tsMaxTablePerVnode = TSDB_DEFAULT_TABLES;
 #endif
 
 int32_t tsCacheBlockSize = TSDB_DEFAULT_CACHE_BLOCK_SIZE;
-int32_t tsTotalBlocks = TSDB_DEFAULT_TOTAL_BLOCKS;
-int16_t tsDaysPerFile = TSDB_DEFAULT_DAYS_PER_FILE;
-int32_t tsDaysToKeep = TSDB_DEFAULT_KEEP;
+int32_t tsBlocksPerVnode = TSDB_DEFAULT_TOTAL_BLOCKS;
+int16_t tsDaysPerFile    = TSDB_DEFAULT_DAYS_PER_FILE;
+int32_t tsDaysToKeep     = TSDB_DEFAULT_KEEP;
 int32_t tsMinRowsInFileBlock = TSDB_DEFAULT_MIN_ROW_FBLOCK;
 int32_t tsMaxRowsInFileBlock = TSDB_DEFAULT_MAX_ROW_FBLOCK;
-int16_t tsCommitTime = TSDB_DEFAULT_COMMIT_TIME;  // seconds
+int16_t tsCommitTime    = TSDB_DEFAULT_COMMIT_TIME;  // seconds
 int32_t tsTimePrecision = TSDB_DEFAULT_PRECISION;
-int16_t tsCompression = TSDB_DEFAULT_COMP_LEVEL;
-int16_t tsCommitLog = TSDB_DEFAULT_CLOG_LEVEL;
-int32_t tsReplications = TSDB_DEFAULT_REPLICA_NUM;
+int16_t tsCompression   = TSDB_DEFAULT_COMP_LEVEL;
+int16_t tsWAL           = TSDB_DEFAULT_WAL_LEVEL;
+int32_t tsReplications  = TSDB_DEFAULT_REPLICA_NUM;
 
 /**
  * Change the meaning of affected rows:
@@ -110,9 +107,7 @@ int32_t tsReplications = TSDB_DEFAULT_REPLICA_NUM;
 int16_t tsAffectedRowsMod = 0;
 int32_t tsNumOfMPeers = 3;
 int32_t tsMaxShellConns = 2000;
-int32_t tsMaxTables = 100000;
 
-char    tsLocalIp[TSDB_IPv4ADDR_LEN] = {0};
 char    tsDefaultDB[TSDB_DB_NAME_LEN] = {0};
 char    tsDefaultUser[64] = "root";
 char    tsDefaultPass[64] = "taosdata";
@@ -120,9 +115,8 @@ int32_t tsMaxMeterConnections = 10000;
 int32_t tsMaxMgmtConnections = 2000;
 int32_t tsMaxVnodeConnections = 10000;
 
-int32_t tsBalanceMonitorInterval = 2;  // seconds
-int32_t tsBalanceStartInterval = 300;  // seconds
-int32_t tsOfflineThreshold = 864000;   // seconds 10days
+int32_t tsBalanceInterval = 300;  // seconds
+int32_t tsOfflineThreshold = 86400*100;   // seconds 10days
 int32_t tsMgmtEqualVnodeNum = 4;
 
 int32_t tsEnableHttpModule = 1;
@@ -132,18 +126,21 @@ int32_t tsRestRowLimit = 10240;
 int32_t tsMaxSQLStringLen = TSDB_MAX_SQL_LEN;
 
 int32_t tsNumOfLogLines = 10000000;
-int32_t mdebugFlag = 135;
+int32_t mDebugFlag = 135;
 int32_t sdbDebugFlag = 135;
-int32_t ddebugFlag = 131;
-int32_t cdebugFlag = 131;
-int32_t jnidebugFlag = 131;
-int32_t odbcdebugFlag = 131;
+int32_t dDebugFlag = 135;
+int32_t vDebugFlag = 135;
+int32_t cDebugFlag = 135;
+int32_t jniDebugFlag = 131;
+int32_t odbcDebugFlag = 131;
 int32_t httpDebugFlag = 131;
 int32_t monitorDebugFlag = 131;
-int32_t qdebugFlag = 131;
-int32_t rpcDebugFlag = 131;
+int32_t qDebugFlag = 131;
+int32_t rpcDebugFlag = 135;
 int32_t uDebugFlag = 131;
 int32_t debugFlag = 131;
+int32_t sDebugFlag = 135;
+int32_t tsdbDebugFlag = 131;
 
 // the maximum number of results for projection query on super table that are returned from
 // one virtual node, to order according to timestamp
@@ -183,7 +180,6 @@ float tsStreamComputDelayRatio = 0.1;
 int32_t tsProjectExecInterval = 10000;   // every 10sec, the projection will be executed once
 int64_t tsMaxRetentWindow = 24 * 3600L;  // maximum time window tolerance
 
-char     tsHttpIp[TSDB_IPv4ADDR_LEN] = "0.0.0.0";
 uint16_t tsHttpPort = 6020;                 // only tcp, range tcp[6020]
 // uint16_t tsNginxPort = 6060;             //only tcp, range tcp[6060]
 int32_t tsHttpCacheSessions = 100;
@@ -194,7 +190,6 @@ int32_t tsHttpEnableRecordSql = 0;
 int32_t tsTelegrafUseFieldNum = 0;
 
 int32_t  tsTscEnableRecordSql = 0;
-int32_t  tsAnyIp = 1;
 uint32_t tsPublicIpInt = 0;
 
 char tsMonitorDbName[TSDB_DB_NAME_LEN] = "log";
@@ -209,10 +204,20 @@ static pthread_once_t tsInitGlobalCfgOnce = PTHREAD_ONCE_INIT;
 
 void taosSetAllDebugFlag() {
   for (int32_t i = 0; i < tsGlobalConfigNum; ++i) {
-    SGlobalCfg *cfg = &tsGlobalConfig[i];
-    if ((cfg->cfgType & TSDB_CFG_CTYPE_B_LOG) && cfg->cfgType == TAOS_CFG_VTYPE_INT32) {
-      *((int32_t*)cfg->ptr) = debugFlag;
-    }
+    mDebugFlag = debugFlag;
+    sdbDebugFlag = debugFlag;
+    dDebugFlag = debugFlag;
+    vDebugFlag = debugFlag;
+    cDebugFlag = debugFlag;
+    jniDebugFlag = debugFlag;
+    odbcDebugFlag = debugFlag;
+    httpDebugFlag = debugFlag;
+    monitorDebugFlag = debugFlag;
+    rpcDebugFlag = debugFlag;
+    uDebugFlag = debugFlag;
+    sDebugFlag = debugFlag;
+    tsdbDebugFlag = debugFlag;
+    qDebugFlag = debugFlag;    
   }
   uPrint("all debug flag are set to %d", debugFlag);
 }
@@ -274,121 +279,31 @@ static void doInitGlobalConfig() {
   SGlobalCfg cfg = {0};
   
   // ip address
-  cfg.option = "masterIp";
-  cfg.ptr = tsMasterIp;
-  cfg.valType = TAOS_CFG_VTYPE_IPSTR;
+  cfg.option = "first";
+  cfg.ptr = tsFirst;
+  cfg.valType = TAOS_CFG_VTYPE_STRING;
   cfg.cfgType = TSDB_CFG_CTYPE_B_CONFIG | TSDB_CFG_CTYPE_B_CLIENT;
   cfg.minValue = 0;
   cfg.maxValue = 0;
-  cfg.ptrLength = TSDB_IPv4ADDR_LEN;
+  cfg.ptrLength = TSDB_EP_LEN;
   cfg.unitType = TAOS_CFG_UTYPE_NONE;
   taosInitConfigOption(cfg);
 
-  cfg.option = "secondIp";
-  cfg.ptr = tsSecondIp;
-  cfg.valType = TAOS_CFG_VTYPE_IPSTR;
+  cfg.option = "second";
+  cfg.ptr = tsSecond;
+  cfg.valType = TAOS_CFG_VTYPE_STRING;
   cfg.cfgType = TSDB_CFG_CTYPE_B_CONFIG | TSDB_CFG_CTYPE_B_CLIENT;
   cfg.minValue = 0;
   cfg.maxValue = 0;
-  cfg.ptrLength = TSDB_IPv4ADDR_LEN;
-  cfg.unitType = TAOS_CFG_UTYPE_NONE;
-  taosInitConfigOption(cfg);
-
-  cfg.option = "publicIp";
-  cfg.ptr = tsPublicIp;
-  cfg.valType = TAOS_CFG_VTYPE_IPSTR;
-  cfg.cfgType = TSDB_CFG_CTYPE_B_CONFIG;
-  cfg.minValue = 0;
-  cfg.maxValue = 0;
-  cfg.ptrLength = TSDB_IPv4ADDR_LEN;
-  cfg.unitType = TAOS_CFG_UTYPE_NONE;
-  taosInitConfigOption(cfg);
-
-  cfg.option = "privateIp";
-  cfg.ptr = tsPrivateIp;
-  cfg.valType = TAOS_CFG_VTYPE_IPSTR;
-  cfg.cfgType = TSDB_CFG_CTYPE_B_CONFIG;
-  cfg.minValue = 0;
-  cfg.maxValue = 0;
-  cfg.ptrLength = TSDB_IPv4ADDR_LEN;
-  cfg.unitType = TAOS_CFG_UTYPE_NONE;
-  taosInitConfigOption(cfg);
-
-  cfg.option = "localIp";
-  cfg.ptr = tsLocalIp;
-  cfg.valType = TAOS_CFG_VTYPE_IPSTR;
-  cfg.cfgType = TSDB_CFG_CTYPE_B_CONFIG | TSDB_CFG_CTYPE_B_CLIENT;
-  cfg.minValue = 0;
-  cfg.maxValue = 0;
-  cfg.ptrLength = TSDB_IPv4ADDR_LEN;
-  cfg.unitType = TAOS_CFG_UTYPE_NONE;
-  taosInitConfigOption(cfg);
-
-  cfg.option = "httpIp";
-  cfg.ptr = tsHttpIp;
-  cfg.valType = TAOS_CFG_VTYPE_IPSTR;
-  cfg.cfgType = TSDB_CFG_CTYPE_B_CONFIG;
-  cfg.minValue = 0;
-  cfg.maxValue = 0;
-  cfg.ptrLength = TSDB_IPv4ADDR_LEN;
+  cfg.ptrLength = TSDB_EP_LEN;
   cfg.unitType = TAOS_CFG_UTYPE_NONE;
   taosInitConfigOption(cfg);
 
   // port
-  cfg.option = "mnodeShellPort";
-  cfg.ptr = &tsMnodeShellPort;
+  cfg.option = "serverPort";
+  cfg.ptr = &tsServerPort;
   cfg.valType = TAOS_CFG_VTYPE_INT16;
   cfg.cfgType = TSDB_CFG_CTYPE_B_CONFIG | TSDB_CFG_CTYPE_B_SHOW | TSDB_CFG_CTYPE_B_CLIENT;
-  cfg.minValue = 1;
-  cfg.maxValue = 65535;
-  cfg.ptrLength = 0;
-  cfg.unitType = TAOS_CFG_UTYPE_NONE;
-  taosInitConfigOption(cfg);
-
-  cfg.option = "dnodeShellPort";
-  cfg.ptr = &tsDnodeShellPort;
-  cfg.valType = TAOS_CFG_VTYPE_INT16;
-  cfg.cfgType = TSDB_CFG_CTYPE_B_CONFIG | TSDB_CFG_CTYPE_B_SHOW | TSDB_CFG_CTYPE_B_CLIENT;
-  cfg.minValue = 1;
-  cfg.maxValue = 65535;
-  cfg.ptrLength = 0;
-  cfg.unitType = TAOS_CFG_UTYPE_NONE;
-  taosInitConfigOption(cfg);
-
-  cfg.option = "mnodeDnodePort";
-  cfg.ptr = &tsMnodeDnodePort;
-  cfg.valType = TAOS_CFG_VTYPE_INT16;
-  cfg.cfgType = TSDB_CFG_CTYPE_B_CONFIG | TSDB_CFG_CTYPE_B_SHOW;
-  cfg.minValue = 1;
-  cfg.maxValue = 65535;
-  cfg.ptrLength = 0;
-  cfg.unitType = TAOS_CFG_UTYPE_NONE;
-  taosInitConfigOption(cfg);
-
-  cfg.option = "dnodeMnodePort";
-  cfg.ptr = &tsDnodeMnodePort;
-  cfg.valType = TAOS_CFG_VTYPE_INT16;
-  cfg.cfgType = TSDB_CFG_CTYPE_B_CONFIG | TSDB_CFG_CTYPE_B_SHOW;
-  cfg.minValue = 1;
-  cfg.maxValue = 65535;
-  cfg.ptrLength = 0;
-  cfg.unitType = TAOS_CFG_UTYPE_NONE;
-  taosInitConfigOption(cfg);
-
-  // cfg.option = "syncPort";
-  // cfg.ptr = &syncPort;
-  // cfg.valType = TAOS_CFG_VTYPE_INT16;
-  // cfg.cfgType = TSDB_CFG_CTYPE_B_CONFIG | TSDB_CFG_CTYPE_B_SHOW;
-  // cfg.minValue = 1;
-  // cfg.maxValue = 65535;
-  // cfg.ptrLength = 0;
-  // cfg.unitType = TAOS_CFG_UTYPE_NONE;
-  // taosInitConfigOption(cfg);
-
-  cfg.option = "httpPort";
-  cfg.ptr = &tsHttpPort;
-  cfg.valType = TAOS_CFG_VTYPE_INT16;
-  cfg.cfgType = TSDB_CFG_CTYPE_B_CONFIG | TSDB_CFG_CTYPE_B_SHOW;
   cfg.minValue = 1;
   cfg.maxValue = 65535;
   cfg.ptrLength = 0;
@@ -407,7 +322,7 @@ static void doInitGlobalConfig() {
   taosInitConfigOption(cfg);
 
   cfg.option = "logDir";
-  cfg.ptr = logDir;
+  cfg.ptr = tsLogDir;
   cfg.valType = TAOS_CFG_VTYPE_DIRECTORY;
   cfg.cfgType = TSDB_CFG_CTYPE_B_CONFIG | TSDB_CFG_CTYPE_B_CLIENT | TSDB_CFG_CTYPE_B_LOG;
   cfg.minValue = 0;
@@ -417,7 +332,7 @@ static void doInitGlobalConfig() {
   taosInitConfigOption(cfg);
 
   cfg.option = "scriptDir";
-  cfg.ptr = scriptDir;
+  cfg.ptr = tsScriptDir;
   cfg.valType = TAOS_CFG_VTYPE_DIRECTORY;
   cfg.cfgType = TSDB_CFG_CTYPE_B_CONFIG | TSDB_CFG_CTYPE_B_CLIENT;
   cfg.minValue = 0;
@@ -427,12 +342,22 @@ static void doInitGlobalConfig() {
   taosInitConfigOption(cfg);
 
   cfg.option = "dataDir";
-  cfg.ptr = dataDir;
+  cfg.ptr = tsDataDir;
   cfg.valType = TAOS_CFG_VTYPE_DIRECTORY;
   cfg.cfgType = TSDB_CFG_CTYPE_B_CONFIG;
   cfg.minValue = 0;
   cfg.maxValue = 0;
   cfg.ptrLength = TSDB_FILENAME_LEN;
+  cfg.unitType = TAOS_CFG_UTYPE_NONE;
+  taosInitConfigOption(cfg);
+
+  cfg.option = "arbitrator";
+  cfg.ptr = tsArbitrator;
+  cfg.valType = TAOS_CFG_VTYPE_STRING;
+  cfg.cfgType = TSDB_CFG_CTYPE_B_CONFIG | TSDB_CFG_CTYPE_B_CLIENT;
+  cfg.minValue = 0;
+  cfg.maxValue = 0;
+  cfg.ptrLength = TSDB_EP_LEN;
   cfg.unitType = TAOS_CFG_UTYPE_NONE;
   taosInitConfigOption(cfg);
 
@@ -488,7 +413,7 @@ static void doInitGlobalConfig() {
   taosInitConfigOption(cfg);
 
   cfg.option = "balanceInterval";
-  cfg.ptr = &tsBalanceStartInterval;
+  cfg.ptr = &tsBalanceInterval;
   cfg.valType = TAOS_CFG_VTYPE_INT32;
   cfg.cfgType = TSDB_CFG_CTYPE_B_CONFIG | TSDB_CFG_CTYPE_B_SHOW;
   cfg.minValue = 1;
@@ -589,18 +514,8 @@ static void doInitGlobalConfig() {
   cfg.unitType = TAOS_CFG_UTYPE_SECOND;
   taosInitConfigOption(cfg);
 
-  cfg.option = "meterMetaKeepTimer";
-  cfg.ptr = &tsMeterMetaKeepTimer;
-  cfg.valType = TAOS_CFG_VTYPE_INT32;
-  cfg.cfgType = TSDB_CFG_CTYPE_B_CONFIG | TSDB_CFG_CTYPE_B_CLIENT;
-  cfg.minValue = 1;
-  cfg.maxValue = 8640000;
-  cfg.ptrLength = 0;
-  cfg.unitType = TAOS_CFG_UTYPE_SECOND;
-  taosInitConfigOption(cfg);
-
-  cfg.option = "metricMetaKeepTimer";
-  cfg.ptr = &tsMetricMetaKeepTimer;
+  cfg.option = "tableMetaKeepTimer";
+  cfg.ptr = &tsTableMetaKeepTimer;
   cfg.valType = TAOS_CFG_VTYPE_INT32;
   cfg.cfgType = TSDB_CFG_CTYPE_B_CONFIG | TSDB_CFG_CTYPE_B_CLIENT;
   cfg.minValue = 1;
@@ -670,8 +585,8 @@ static void doInitGlobalConfig() {
   taosInitConfigOption(cfg);
 
   // database configs
-  cfg.option = "tables";
-  cfg.ptr = &tsTablesPerVnode;
+  cfg.option = "maxtablesPerVnode";
+  cfg.ptr = &tsMaxTablePerVnode;
   cfg.valType = TAOS_CFG_VTYPE_INT32;
   cfg.cfgType = TSDB_CFG_CTYPE_B_CONFIG | TSDB_CFG_CTYPE_B_SHOW;
   cfg.minValue = TSDB_MIN_TABLES;
@@ -691,7 +606,7 @@ static void doInitGlobalConfig() {
   taosInitConfigOption(cfg);
 
   cfg.option = "blocks";
-  cfg.ptr = &tsTotalBlocks;
+  cfg.ptr = &tsBlocksPerVnode;
   cfg.valType = TAOS_CFG_VTYPE_INT32;
   cfg.cfgType = TSDB_CFG_CTYPE_B_CONFIG | TSDB_CFG_CTYPE_B_SHOW;
   cfg.minValue = TSDB_MIN_TOTAL_BLOCKS;
@@ -760,12 +675,12 @@ static void doInitGlobalConfig() {
   cfg.unitType = TAOS_CFG_UTYPE_NONE;
   taosInitConfigOption(cfg);
 
-  cfg.option = "clog";
-  cfg.ptr = &tsCommitLog;
+  cfg.option = "wallevel";
+  cfg.ptr = &tsWAL;
   cfg.valType = TAOS_CFG_VTYPE_INT16;
   cfg.cfgType = TSDB_CFG_CTYPE_B_CONFIG | TSDB_CFG_CTYPE_B_SHOW;
-  cfg.minValue = TSDB_MIN_CLOG_LEVEL;
-  cfg.maxValue = TSDB_MAX_CLOG_LEVEL;
+  cfg.minValue = TSDB_MIN_WAL_LEVEL;
+  cfg.maxValue = TSDB_MAX_WAL_LEVEL;
   cfg.ptrLength = 0;
   cfg.unitType = TAOS_CFG_UTYPE_NONE;
   taosInitConfigOption(cfg);
@@ -1088,7 +1003,7 @@ static void doInitGlobalConfig() {
   taosInitConfigOption(cfg);
 
   cfg.option = "mDebugFlag";
-  cfg.ptr = &mdebugFlag;
+  cfg.ptr = &mDebugFlag;
   cfg.valType = TAOS_CFG_VTYPE_INT32;
   cfg.cfgType = TSDB_CFG_CTYPE_B_CONFIG | TSDB_CFG_CTYPE_B_LOG;
   cfg.minValue = 0;
@@ -1098,7 +1013,17 @@ static void doInitGlobalConfig() {
   taosInitConfigOption(cfg);
 
   cfg.option = "dDebugFlag";
-  cfg.ptr = &ddebugFlag;
+  cfg.ptr = &dDebugFlag;
+  cfg.valType = TAOS_CFG_VTYPE_INT32;
+  cfg.cfgType = TSDB_CFG_CTYPE_B_CONFIG | TSDB_CFG_CTYPE_B_LOG;
+  cfg.minValue = 0;
+  cfg.maxValue = 255;
+  cfg.ptrLength = 0;
+  cfg.unitType = TAOS_CFG_UTYPE_NONE;
+  taosInitConfigOption(cfg);
+
+  cfg.option = "sDebugFlag";
+  cfg.ptr = &sDebugFlag;
   cfg.valType = TAOS_CFG_VTYPE_INT32;
   cfg.cfgType = TSDB_CFG_CTYPE_B_CONFIG | TSDB_CFG_CTYPE_B_LOG;
   cfg.minValue = 0;
@@ -1138,7 +1063,7 @@ static void doInitGlobalConfig() {
   taosInitConfigOption(cfg);
 
   cfg.option = "cDebugFlag";
-  cfg.ptr = &cdebugFlag;
+  cfg.ptr = &cDebugFlag;
   cfg.valType = TAOS_CFG_VTYPE_INT32;
   cfg.cfgType = TSDB_CFG_CTYPE_B_CONFIG | TSDB_CFG_CTYPE_B_LOG | TSDB_CFG_CTYPE_B_CLIENT;
   cfg.minValue = 0;
@@ -1148,7 +1073,7 @@ static void doInitGlobalConfig() {
   taosInitConfigOption(cfg);
 
   cfg.option = "jniDebugFlag";
-  cfg.ptr = &jnidebugFlag;
+  cfg.ptr = &jniDebugFlag;
   cfg.valType = TAOS_CFG_VTYPE_INT32;
   cfg.cfgType = TSDB_CFG_CTYPE_B_CONFIG | TSDB_CFG_CTYPE_B_LOG | TSDB_CFG_CTYPE_B_CLIENT;
   cfg.minValue = 0;
@@ -1158,7 +1083,7 @@ static void doInitGlobalConfig() {
   taosInitConfigOption(cfg);
 
   cfg.option = "odbcDebugFlag";
-  cfg.ptr = &odbcdebugFlag;
+  cfg.ptr = &odbcDebugFlag;
   cfg.valType = TAOS_CFG_VTYPE_INT32;
   cfg.cfgType = TSDB_CFG_CTYPE_B_CONFIG | TSDB_CFG_CTYPE_B_LOG | TSDB_CFG_CTYPE_B_CLIENT;
   cfg.minValue = 0;
@@ -1198,7 +1123,17 @@ static void doInitGlobalConfig() {
   taosInitConfigOption(cfg);
 
   cfg.option = "qDebugFlag";
-  cfg.ptr = &qdebugFlag;
+  cfg.ptr = &qDebugFlag;
+  cfg.valType = TAOS_CFG_VTYPE_INT32;
+  cfg.cfgType = TSDB_CFG_CTYPE_B_CONFIG | TSDB_CFG_CTYPE_B_LOG | TSDB_CFG_CTYPE_B_CLIENT;
+  cfg.minValue = 0;
+  cfg.maxValue = 255;
+  cfg.ptrLength = 0;
+  cfg.unitType = TAOS_CFG_UTYPE_NONE;
+  taosInitConfigOption(cfg);
+
+  cfg.option = "tsdbDebugFlag";
+  cfg.ptr = &tsdbDebugFlag;
   cfg.valType = TAOS_CFG_VTYPE_INT32;
   cfg.cfgType = TSDB_CFG_CTYPE_B_CONFIG | TSDB_CFG_CTYPE_B_LOG | TSDB_CFG_CTYPE_B_CLIENT;
   cfg.minValue = 0;
@@ -1219,16 +1154,6 @@ static void doInitGlobalConfig() {
 
   cfg.option = "enableCoreFile";
   cfg.ptr = &tsEnableCoreFile;
-  cfg.valType = TAOS_CFG_VTYPE_INT32;
-  cfg.cfgType = TSDB_CFG_CTYPE_B_CONFIG;
-  cfg.minValue = 0;
-  cfg.maxValue = 1;
-  cfg.ptrLength = 0;
-  cfg.unitType = TAOS_CFG_UTYPE_NONE;
-  taosInitConfigOption(cfg);
-
-  cfg.option = "anyIp";
-  cfg.ptr = &tsAnyIp;
   cfg.valType = TAOS_CFG_VTYPE_INT32;
   cfg.cfgType = TSDB_CFG_CTYPE_B_CONFIG;
   cfg.minValue = 0;
@@ -1284,25 +1209,20 @@ void taosInitGlobalCfg() {
 }
 
 bool taosCheckGlobalCfg() {
-  if (tsPrivateIp[0] == 0) {
-    taosGetPrivateIp(tsPrivateIp);
+  if (debugFlag == 135 || debugFlag == 199) {
+    taosSetAllDebugFlag();
+  }
+  
+  taosGetFqdn(tsLocalEp);
+  sprintf(tsLocalEp + strlen(tsLocalEp), ":%d", tsServerPort);
+  uPrint("localEp is %s", tsLocalEp);
+
+  if (tsFirst[0] == 0) {
+    strcpy(tsFirst, tsLocalEp);
   }
 
-  if (tsPublicIp[0] == 0) {
-    strcpy(tsPublicIp, tsPrivateIp);
-  }
-  tsPublicIpInt = inet_addr(tsPublicIp);
-
-  if (tsLocalIp[0] == 0) {
-    strcpy(tsLocalIp, tsPrivateIp);
-  }
-
-  if (tsMasterIp[0] == 0) {
-    strcpy(tsMasterIp, tsPrivateIp);
-  }
-
-  if (tsSecondIp[0] == 0) {
-    strcpy(tsSecondIp, tsMasterIp);
+  if (tsSecond[0] == 0) {
+    strcpy(tsSecond, tsLocalEp);
   }
   
   taosGetSystemInfo();
@@ -1324,15 +1244,6 @@ bool taosCheckGlobalCfg() {
     tsNumOfTotalVnodes = tsNumOfTotalVnodes < TSDB_MIN_VNODES ? TSDB_MIN_VNODES : tsNumOfTotalVnodes;     
   }
 
-  if (strlen(tsPrivateIp) == 0) {
-    uError("privateIp is null");
-    return false;
-  }
-
-  if (tscEmbedded) {
-    strcpy(tsLocalIp, tsPrivateIp);
-  }
-
   // todo refactor
   tsVersion = 0;
   for (int i = 0; i < 10; i++) {
@@ -1345,5 +1256,24 @@ bool taosCheckGlobalCfg() {
   
   tsVersion = 10 * tsVersion;
 
+  tsDnodeShellPort = tsServerPort + TSDB_PORT_DNODESHELL;  // udp[6035-6039] tcp[6035]
+  tsDnodeDnodePort = tsServerPort + TSDB_PORT_DNODEDNODE;   // udp/tcp
+  tsSyncPort = tsServerPort + TSDB_PORT_SYNC;
+
   return true;
+}
+
+int taosGetFqdnPortFromEp(const char *ep, char *fqdn, uint16_t *port) {
+  *port = 0;
+  strcpy(fqdn, ep);
+
+  char *temp = strchr(fqdn, ':');
+  if (temp) {   
+    *temp = 0;
+    *port = atoi(temp+1);
+  } 
+  
+  if (*port == 0) *port = tsServerPort;
+
+  return 0; 
 }

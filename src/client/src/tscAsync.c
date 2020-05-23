@@ -14,17 +14,18 @@
  */
 
 #include "os.h"
+#include "tutil.h"
+
+#include "tnote.h"
 #include "trpc.h"
 #include "tscLog.h"
 #include "tscProfile.h"
+#include "tscSubquery.h"
 #include "tscSecondaryMerge.h"
 #include "tscUtil.h"
-#include "tsclient.h"
-#include "tsocket.h"
-#include "tutil.h"
-#include "tnote.h"
 #include "tsched.h"
 #include "tschemautil.h"
+#include "tsclient.h"
 
 static void tscProcessFetchRow(SSchedMsg *pMsg);
 static void tscAsyncQueryRowsForNextVnode(void *param, TAOS_RES *tres, int numOfRows);
@@ -44,9 +45,9 @@ void doAsyncQuery(STscObj* pObj, SSqlObj* pSql, void (*fp)(), void* param, const
   SSqlRes *pRes = &pSql->res;
   
   pSql->signature = pSql;
-  pSql->param = param;
-  pSql->pTscObj = pObj;
-  pSql->maxRetry = TSDB_MAX_REPLICA_NUM;
+  pSql->param     = param;
+  pSql->pTscObj   = pObj;
+  pSql->maxRetry  = TSDB_MAX_REPLICA_NUM;
   pSql->fp = fp;
   
   if (TSDB_CODE_SUCCESS != tscAllocPayload(pCmd, TSDB_DEFAULT_PAYLOAD_SIZE)) {
@@ -144,9 +145,9 @@ static void tscAsyncFetchRowsProxy(void *param, TAOS_RES *tres, int numOfRows) {
     return;
   }
   
-  // local reducer has handle this situation during super table non-projection query.
-  if (pCmd->command != TSDB_SQL_RETRIEVE_METRIC) {
-    pRes->numOfTotalInCurrentClause += pRes->numOfRows;
+  // local merge has handle this situation during super table non-projection query.
+  if (pCmd->command != TSDB_SQL_RETRIEVE_LOCALMERGE) {
+    pRes->numOfClauseTotal += pRes->numOfRows;
   }
 
   (*pSql->fetchFp)(param, tres, numOfRows);
@@ -175,7 +176,7 @@ static void tscProcessAsyncRetrieveImpl(void *param, TAOS_RES *tres, int numOfRo
   }
 
   pSql->fp = fp;
-  if (pCmd->command != TSDB_SQL_RETRIEVE_METRIC && pCmd->command < TSDB_SQL_LOCAL) {
+  if (pCmd->command != TSDB_SQL_RETRIEVE_LOCALMERGE && pCmd->command < TSDB_SQL_LOCAL) {
     pCmd->command = (pCmd->command > TSDB_SQL_MGMT) ? TSDB_SQL_RETRIEVE : TSDB_SQL_FETCH;
   }
   tscProcessSql(pSql);
@@ -219,12 +220,38 @@ void taos_fetch_rows_a(TAOS_RES *taosa, void (*fp)(void *, TAOS_RES *, int), voi
 
   pSql->param = param;
   tscResetForNextRetrieve(pRes);
-
-  if (pCmd->command != TSDB_SQL_RETRIEVE_METRIC && pCmd->command < TSDB_SQL_LOCAL) {
-    pCmd->command = (pCmd->command > TSDB_SQL_MGMT) ? TSDB_SQL_RETRIEVE : TSDB_SQL_FETCH;
+  
+  // handle the sub queries of join query
+  if (pCmd->command == TSDB_SQL_TABLE_JOIN_RETRIEVE) {
+    tscFetchDatablockFromSubquery(pSql);
+  } else if (pRes->completed && pCmd->command == TSDB_SQL_FETCH) {
+    if (hasMoreVnodesToTry(pSql)) { // sequentially retrieve data from remain vnodes.
+      tscTryQueryNextVnode(pSql, tscAsyncQueryRowsForNextVnode);
+      return;
+    } else {
+      /*
+       * all available virtual node has been checked already, now we need to check
+       * for the next subclause queries
+       */
+      if (pCmd->clauseIndex < pCmd->numOfClause - 1) {
+        tscTryQueryNextClause(pSql, tscAsyncQueryRowsForNextVnode);
+        return;
+      }
+    
+      /*
+       * 1. has reach the limitation
+       * 2. no remain virtual nodes to be retrieved anymore
+       */
+      (*pSql->fetchFp)(param, pSql, 0);
+    }
+    return;
+  } else { // current query is not completed, continue retrieve from node
+    if (pCmd->command != TSDB_SQL_RETRIEVE_LOCALMERGE && pCmd->command < TSDB_SQL_LOCAL) {
+      pCmd->command = (pCmd->command > TSDB_SQL_MGMT) ? TSDB_SQL_RETRIEVE : TSDB_SQL_FETCH;
+    }
+  
+    tscProcessSql(pSql);
   }
-
-  tscProcessSql(pSql);
 }
 
 void taos_fetch_row_a(TAOS_RES *taosa, void (*fp)(void *, TAOS_RES *, TAOS_ROW), void *param) {
@@ -251,7 +278,7 @@ void taos_fetch_row_a(TAOS_RES *taosa, void (*fp)(void *, TAOS_RES *, TAOS_ROW),
     tscResetForNextRetrieve(pRes);
     pSql->fp = tscAsyncFetchSingleRowProxy;
     
-    if (pCmd->command != TSDB_SQL_RETRIEVE_METRIC && pCmd->command < TSDB_SQL_LOCAL) {
+    if (pCmd->command != TSDB_SQL_RETRIEVE_LOCALMERGE && pCmd->command < TSDB_SQL_LOCAL) {
       pCmd->command = (pCmd->command > TSDB_SQL_MGMT) ? TSDB_SQL_RETRIEVE : TSDB_SQL_FETCH;
     }
     
@@ -311,7 +338,7 @@ void tscProcessFetchRow(SSchedMsg *pMsg) {
     SFieldSupInfo* pSup = taosArrayGet(pQueryInfo->fieldsInfo.pSupportInfo, i);
 
     if (pSup->pSqlExpr != NULL) {
-      pRes->tsrow[i] = tscGetResultColumnChr(pRes, pQueryInfo, i);
+      tscGetResultColumnChr(pRes, &pQueryInfo->fieldsInfo, i);
     } else {
 //      todo add
     }
@@ -419,6 +446,11 @@ void tscTableMetaCallBack(void *param, TAOS_RES *res, int code) {
   
     if ((pQueryInfo->type & TSDB_QUERY_TYPE_STABLE_SUBQUERY) == TSDB_QUERY_TYPE_STABLE_SUBQUERY) {
       STableMetaInfo* pTableMetaInfo = tscGetMetaInfo(pQueryInfo, 0);
+      if (pTableMetaInfo->pTableMeta == NULL){
+        code = tscGetTableMeta(pSql, pTableMetaInfo);
+        assert(code == TSDB_CODE_SUCCESS);      
+      }     
+      
       assert((tscGetNumOfTags(pTableMetaInfo->pTableMeta) != 0) && pTableMetaInfo->vgroupIndex >= 0 && pSql->param != NULL);
 
       SRetrieveSupport *trs = (SRetrieveSupport *)pSql->param;
@@ -427,12 +459,7 @@ void tscTableMetaCallBack(void *param, TAOS_RES *res, int code) {
       assert(pParObj->signature == pParObj && trs->subqueryIndex == pTableMetaInfo->vgroupIndex &&
           tscGetNumOfTags(pTableMetaInfo->pTableMeta) != 0);
 
-      tscTrace("%p get metricMeta during super table query successfully", pSql);
-      
-      code = tscGetTableMeta(pSql, pTableMetaInfo);
-      pRes->code = code;
-
-      if (code == TSDB_CODE_ACTION_IN_PROGRESS) return;
+      tscTrace("%p get metricMeta during super table query successfully", pSql);      
 
       code = tscGetSTableVgroupInfo(pSql, 0);
       pRes->code = code;
@@ -465,7 +492,7 @@ void tscTableMetaCallBack(void *param, TAOS_RES *res, int code) {
 
     if (code == TSDB_CODE_ACTION_IN_PROGRESS) return;
 
-    if (code == TSDB_CODE_SUCCESS && UTIL_TABLE_IS_SUPERTABLE(pTableMetaInfo)) {
+    if (code == TSDB_CODE_SUCCESS && UTIL_TABLE_IS_SUPER_TABLE(pTableMetaInfo)) {
       code = tscGetSTableVgroupInfo(pSql, pCmd->clauseIndex);
       pRes->code = code;
 

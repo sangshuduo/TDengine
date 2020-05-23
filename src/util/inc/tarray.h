@@ -98,13 +98,19 @@ void taosArrayRemove(SArray* pArray, size_t index);
  * @param pDst
  * @param pSrc
  */
-void taosArrayCopy(SArray* pDst, SArray* pSrc);
+void taosArrayCopy(SArray* pDst, const SArray* pSrc);
 
 /**
  * clone a new array
  * @param pSrc
  */
-SArray* taosArrayClone(SArray* pSrc);
+SArray* taosArrayClone(const SArray* pSrc);
+
+/**
+ * clear the array (remove all element)
+ * @param pArray
+ */
+void taosArrayClear(SArray* pArray);
 
 /**
  * destroy array list

@@ -74,6 +74,7 @@ TAOS_DEFINE_ERROR(TSDB_CODE_INVALID_OPTION,             0, 26, "invalid option")
 TAOS_DEFINE_ERROR(TSDB_CODE_NOT_CONFIGURED,             0, 27, "not configured")
 TAOS_DEFINE_ERROR(TSDB_CODE_NODE_OFFLINE,               0, 28, "node offline")
 TAOS_DEFINE_ERROR(TSDB_CODE_NETWORK_UNAVAIL,            0, 29, "network unavailable")
+TAOS_DEFINE_ERROR(TSDB_CODE_AUTH_REQUIRED,              0, 30, "auth required")
 
 // db
 TAOS_DEFINE_ERROR(TSDB_CODE_DB_NOT_SELECTED,            0, 100, "db not selected")
@@ -115,6 +116,7 @@ TAOS_DEFINE_ERROR(TSDB_CODE_INVALID_QUERY_ID,           0, 255, "invalid query i
 TAOS_DEFINE_ERROR(TSDB_CODE_INVALID_STREAM_ID,          0, 256, "invalid stream id")
 TAOS_DEFINE_ERROR(TSDB_CODE_INVALID_CONNECTION,         0, 257, "invalid connection")
 TAOS_DEFINE_ERROR(TSDB_CODE_SDB_ERROR,                  0, 258, "sdb error")
+TAOS_DEFINE_ERROR(TSDB_CODE_TIMESTAMP_OUT_OF_RANGE,     0, 259, "timestamp is out of range")
 
 // acct
 TAOS_DEFINE_ERROR(TSDB_CODE_ACCT_ALREADY_EXIST,         0, 300, "accounts already exist")
@@ -154,6 +156,7 @@ TAOS_DEFINE_ERROR(TSDB_CODE_SERV_OUT_OF_MEMORY,         0, 405, "server out of m
 TAOS_DEFINE_ERROR(TSDB_CODE_NO_DISK_PERMISSIONS,        0, 406, "no disk permissions")
 TAOS_DEFINE_ERROR(TSDB_CODE_FILE_CORRUPTED,             0, 407, "file corrupted")
 TAOS_DEFINE_ERROR(TSDB_CODE_MEMORY_CORRUPTED,           0, 408, "memory corrupted")
+TAOS_DEFINE_ERROR(TSDB_CODE_NOT_SUCH_FILE_OR_DIR,       0, 409, "no such file or directory")
 
 // client
 TAOS_DEFINE_ERROR(TSDB_CODE_INVALID_CLIENT_VERSION,     0, 451, "invalid client version")
@@ -168,9 +171,13 @@ TAOS_DEFINE_ERROR(TSDB_CODE_INVALID_QHANDLE,            0, 459, "invalid handle"
 TAOS_DEFINE_ERROR(TSDB_CODE_QUERY_CANCELLED,            0, 460, "query cancelled")
 TAOS_DEFINE_ERROR(TSDB_CODE_INVALID_IE,                 0, 461, "invalid ie")
 TAOS_DEFINE_ERROR(TSDB_CODE_INVALID_VALUE,              0, 462, "invalid value")
+TAOS_DEFINE_ERROR(TSDB_CODE_INVALID_FQDN,               0, 463, "invalid FQDN")
 
 // others
 TAOS_DEFINE_ERROR(TSDB_CODE_INVALID_FILE_FORMAT,        0, 500, "invalid file format")
+
+// TSDB
+TAOS_DEFINE_ERROR(TSDB_CODE_INVALID_CONFIG,             0, 550, "invalid TSDB configuration")
 
 
 #ifdef TAOS_ERROR_C

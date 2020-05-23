@@ -38,12 +38,11 @@ typedef enum _TAOS_SYNC_STATUS {
 
 typedef struct {
   uint32_t  nodeId;    // node ID assigned by TDengine
-  uint32_t  nodeIp;    // node IP address
-  char      name[TSDB_FILENAME_LEN]; // external node name 
+  uint16_t  nodePort;  // node sync Port
+  char      nodeFqdn[TSDB_FQDN_LEN]; // node FQDN  
 } SNodeInfo;
 
 typedef struct {
-  uint32_t   arbitratorIp;  // arbitrator IP address
   int8_t     quorum;    // number of confirms required, >=1 
   int8_t     replica;   // number of replications, >=1
   SNodeInfo  nodeInfo[TAOS_SYNC_MAX_REPLICA];
@@ -55,10 +54,10 @@ typedef struct {
   int       role[TAOS_SYNC_MAX_REPLICA];  
 } SNodesRole;
  
-// if name is null, get the file from index or after, used by master
-// if name is provided, get the named file at the specified index, used by unsynced node
+// if name is empty(name[0] is zero), get the file from index or after, used by master
+// if name is provided(name[0] is not zero), get the named file at the specified index, used by unsynced node
 // it returns the file magic number and size, if file not there, magic shall be 0.
-typedef uint32_t (*FGetFileInfo)(void *ahandle, char *name, uint32_t *index, int32_t *size); 
+typedef uint32_t (*FGetFileInfo)(void *ahandle, char *name, uint32_t *index, int32_t *size, uint64_t *fversion); 
 
 // get the wal file from index or after
 // return value, -1: error, 1:more wal files, 0:last WAL. if name[0]==0, no WAL file
@@ -73,6 +72,9 @@ typedef void     (*FConfirmForward)(void *ahandle, void *mhandle, int32_t code);
 // when role is changed, call this to notify app
 typedef void     (*FNotifyRole)(void *ahandle, int8_t role);
 
+// when data file is synced successfully, notity app
+typedef void     (*FNotifyFileSynced)(void *ahandle, uint64_t fversion);
+
 typedef struct {
   int32_t    vgId;      // vgroup ID
   uint64_t   version;   // initial version
@@ -85,7 +87,7 @@ typedef struct {
   FWriteToCache   writeToCache;
   FConfirmForward confirmForward;
   FNotifyRole     notifyRole;
-
+  FNotifyFileSynced notifyFileSynced;
 } SSyncInfo;
 
 typedef void* tsync_h;
@@ -93,7 +95,7 @@ typedef void* tsync_h;
 tsync_h syncStart(const SSyncInfo *);
 void    syncStop(tsync_h shandle);
 int     syncReconfig(tsync_h shandle, const SSyncCfg *);
-int     syncForwardToPeer(tsync_h shandle, void *pHead, void *mhandle);
+int     syncForwardToPeer(tsync_h shandle, void *pHead, void *mhandle, int qtype);
 void    syncConfirmForward(tsync_h shandle, uint64_t version, int32_t code);
 void    syncRecover(tsync_h shandle);      // recover from other nodes:
 int     syncGetNodesRole(tsync_h shandle, SNodesRole *);
@@ -107,6 +109,7 @@ extern  int   tsMaxWatchFiles;
 extern  int   tsSyncTimer;
 extern  int   tsMaxFwdInfo; 
 extern  int   sDebugFlag;
+extern  char  tsArbitrator[];
 extern  uint16_t tsSyncPort;
 
 #ifdef __cplusplus

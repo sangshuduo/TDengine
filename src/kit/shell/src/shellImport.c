@@ -142,6 +142,7 @@ static void shellSourceFile(TAOS *con, char *fptr) {
 
   if (wordexp(fptr, &full_path, 0) != 0) {
     fprintf(stderr, "ERROR: illegal file name\n");
+    free(cmd);
     return;
   }
 
@@ -220,7 +221,7 @@ void* shellImportThreadFp(void *arg)
   return NULL;
 }
 
-static void shellRunImportThreads(struct arguments* args)
+static void shellRunImportThreads(SShellArguments* args)
 {
   pthread_attr_t thattr;
   ShellThreadObj *threadObj = (ShellThreadObj *)calloc(args->threadNum, sizeof(ShellThreadObj));
@@ -228,7 +229,7 @@ static void shellRunImportThreads(struct arguments* args)
     ShellThreadObj *pThread = threadObj + t;
     pThread->threadIndex = t;
     pThread->totalThreads = args->threadNum;
-    pThread->taos = taos_connect(args->host, args->user, args->password, args->database, tsMnodeShellPort);
+    pThread->taos = taos_connect(args->host, args->user, args->password, args->database, tsDnodeShellPort);
     if (pThread->taos == NULL) {
       fprintf(stderr, "ERROR: thread:%d failed connect to TDengine, error:%s\n", pThread->threadIndex, taos_errstr(pThread->taos));
       exit(0);
@@ -253,7 +254,7 @@ static void shellRunImportThreads(struct arguments* args)
   free(threadObj);
 }
 
-void source_dir(TAOS* con, struct arguments* args) {
+void source_dir(TAOS* con, SShellArguments* args) {
   shellGetDirectoryFileList(args->dir);
   int64_t start = taosGetTimestampMs();
 

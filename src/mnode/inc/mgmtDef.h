@@ -31,13 +31,9 @@ struct SMnodeObj;
 
 typedef struct SDnodeObj {
   int32_t    dnodeId;
-  uint32_t   privateIp;
-  uint32_t   publicIp;
-  uint16_t   mnodeShellPort;
-  uint16_t   mnodeDnodePort;
-  uint16_t   dnodeShellPort;
-  uint16_t   dnodeMnodePort;
-  uint16_t   syncPort;
+  uint16_t   dnodePort;
+  char       dnodeFqdn[TSDB_FQDN_LEN + 1];
+  char       dnodeEp[TSDB_EP_LEN + 1];
   int64_t    createdTime;
   uint32_t   lastAccess;
   int32_t    openVnodes;
@@ -47,7 +43,6 @@ typedef struct SDnodeObj {
   int8_t     alternativeRole;  // from dnode status msg, 0-any, 1-mgmt, 2-dnode
   int8_t     status;           // set in balance function
   int8_t     isMgmt;
-  char       dnodeName[TSDB_NODE_NAME_LEN + 1];
   int8_t     reserved[15];
   int8_t     updateEnd[1];
   int32_t    refCount;
@@ -71,8 +66,9 @@ typedef struct SMnodeObj {
   SDnodeObj *pDnode;
 } SMnodeObj;
 
+// todo use dynamic length string
 typedef struct {
-  char   tableId[TSDB_TABLE_ID_LEN + 1];
+  char  *tableId;
   int8_t type;
 } STableObj;
 
@@ -81,6 +77,7 @@ typedef struct SSuperTableObj {
   uint64_t   uid;
   int64_t    createdTime;
   int32_t    sversion;
+  int32_t    tversion;
   int32_t    numOfColumns;
   int32_t    numOfTags;
   int8_t     reserved[15];
@@ -89,8 +86,7 @@ typedef struct SSuperTableObj {
   int32_t    numOfTables;
   int16_t    nextColId;
   SSchema *  schema;
-  int32_t    vgLen;
-  int32_t *  vgList;
+  void *     vgHash;
 } SSuperTableObj;
 
 typedef struct {
@@ -101,7 +97,7 @@ typedef struct {
   int32_t    numOfColumns; //used by normal table
   int32_t    sid;
   int32_t    vgId;
-  char       superTableId[TSDB_TABLE_ID_LEN + 1];
+  uint64_t   suid;
   int32_t    sqlLen;
   int8_t     reserved[1]; 
   int8_t     updateEnd[1];
@@ -123,11 +119,10 @@ typedef struct SVgObj {
   uint32_t       vgId;
   char           dbName[TSDB_DB_NAME_LEN + 1];
   int64_t        createdTime;
-  SVnodeGid      vnodeGid[TSDB_VNODES_SUPPORT];
+  SVnodeGid      vnodeGid[TSDB_MAX_REPLICA];
   int32_t        numOfVnodes;
   int32_t        lbDnodeId;
   int32_t        lbTime;
-  int8_t         status;
   int8_t         inUse;
   int8_t         reserved[13];
   int8_t         updateEnd[1];
@@ -155,7 +150,7 @@ typedef struct {
   int32_t commitTime;
   int8_t  precision;
   int8_t  compression;
-  int8_t  commitLog;
+  int8_t  walLevel;
   int8_t  replications;
   int8_t  reserved[16];
 } SDbCfg;
@@ -228,7 +223,7 @@ typedef struct SAcctObj {
 typedef struct {
   int8_t   type;
   char     db[TSDB_DB_NAME_LEN + 1];
-  void *   pNode;
+  void *   pIter;
   int16_t  numOfColumns;
   int32_t  rowSize;
   int32_t  numOfRows;
@@ -242,7 +237,6 @@ typedef struct {
 
 typedef struct {
   uint8_t  msgType;
-  int8_t   usePublicIp;
   int8_t   received;
   int8_t   successed;
   int8_t   expected;

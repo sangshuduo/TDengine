@@ -68,16 +68,18 @@ extern "C" {
 #define TSDB_FUNC_AVG_RATE     32
 #define TSDB_FUNC_AVG_IRATE    33
 
-#define TSDB_FUNCSTATE_SO           0x1U    // single output
-#define TSDB_FUNCSTATE_MO           0x2U    // dynamic number of output, not multinumber of output e.g., TOP/BOTTOM
-#define TSDB_FUNCSTATE_STREAM       0x4U    // function avail for stream
-#define TSDB_FUNCSTATE_METRIC       0x8U    // function avail for metric
-#define TSDB_FUNCSTATE_OF           0x10U   // outer forward
-#define TSDB_FUNCSTATE_NEED_TS      0x20U   // timestamp is required during query processing
-#define TSDB_FUNCSTATE_SELECTIVITY  0x40U   // selectivity functions, can exists along with tag columns
+#define TSDB_FUNC_TID_TAG      34
 
-#define TSDB_BASE_FUNC_SO TSDB_FUNCSTATE_SO | TSDB_FUNCSTATE_STREAM | TSDB_FUNCSTATE_METRIC | TSDB_FUNCSTATE_OF
-#define TSDB_BASE_FUNC_MO TSDB_FUNCSTATE_MO | TSDB_FUNCSTATE_STREAM | TSDB_FUNCSTATE_METRIC | TSDB_FUNCSTATE_OF
+#define TSDB_FUNCSTATE_SO           0x1u    // single output
+#define TSDB_FUNCSTATE_MO           0x2u    // dynamic number of output, not multinumber of output e.g., TOP/BOTTOM
+#define TSDB_FUNCSTATE_STREAM       0x4u    // function avail for stream
+#define TSDB_FUNCSTATE_STABLE       0x8u    // function avail for metric
+#define TSDB_FUNCSTATE_OF           0x10u   // outer forward
+#define TSDB_FUNCSTATE_NEED_TS      0x20u   // timestamp is required during query processing
+#define TSDB_FUNCSTATE_SELECTIVITY  0x40u   // selectivity functions, can exists along with tag columns
+
+#define TSDB_BASE_FUNC_SO TSDB_FUNCSTATE_SO | TSDB_FUNCSTATE_STREAM | TSDB_FUNCSTATE_STABLE | TSDB_FUNCSTATE_OF
+#define TSDB_BASE_FUNC_MO TSDB_FUNCSTATE_MO | TSDB_FUNCSTATE_STREAM | TSDB_FUNCSTATE_STABLE | TSDB_FUNCSTATE_OF
 
 
 #define TSDB_FUNCTIONS_NAME_MAX_LENGTH 16
@@ -102,23 +104,24 @@ extern "C" {
 
 enum {
   MASTER_SCAN           = 0x0u,
-  SUPPLEMENTARY_SCAN    = 0x1u,
+  REVERSE_SCAN          = 0x1u,
   REPEAT_SCAN           = 0x2u,  //repeat scan belongs to the master scan
   FIRST_STAGE_MERGE     = 0x10u,
   SECONDARY_STAGE_MERGE = 0x20u,
 };
 
-#define QUERY_IS_STABLE_QUERY(type) (((type)&TSDB_QUERY_TYPE_STABLE_QUERY) != 0)
-#define QUERY_IS_JOIN_QUERY(type) (((type)&TSDB_QUERY_TYPE_JOIN_QUERY) != 0)
+#define QUERY_IS_STABLE_QUERY(type)      (((type)&TSDB_QUERY_TYPE_STABLE_QUERY) != 0)
+#define QUERY_IS_JOIN_QUERY(type)        (TSDB_QUERY_HAS_TYPE(type, TSDB_QUERY_TYPE_JOIN_QUERY))
 #define QUERY_IS_PROJECTION_QUERY(type) (((type)&TSDB_QUERY_TYPE_PROJECTION_QUERY) != 0)
-#define QUERY_IS_FREE_RESOURCE(type) (((type)&TSDB_QUERY_TYPE_FREE_RESOURCE) != 0)
+#define QUERY_IS_FREE_RESOURCE(type)     (((type)&TSDB_QUERY_TYPE_FREE_RESOURCE) != 0)
 
 typedef struct SArithmeticSupport {
-  SArithExprInfo   *pArithExpr;
-  int32_t           numOfCols;
-  SColumnInfo*      colList;
-  int32_t           offset;
-  char**            data;
+  SExprInfo   *pArithExpr;
+  int32_t      numOfCols;
+  SColumnInfo *colList;
+  SArray*      exprList;   // client side used
+  int32_t      offset;
+  char**       data;
 } SArithmeticSupport;
 
 typedef struct SQLPreAggVal {
@@ -218,7 +221,7 @@ typedef struct SQLAggFuncElem {
 #define GET_RES_INFO(ctx) ((ctx)->resultInfo)
 
 int32_t getResultDataInfo(int32_t dataType, int32_t dataBytes, int32_t functionId, int32_t param, int16_t *type,
-                          int16_t *len, int16_t *interResBytes, int16_t extLength, bool isSuperTable);
+                          int16_t *len, int16_t *interBytes, int16_t extLength, bool isSuperTable);
 
 #define IS_STREAM_QUERY_VALID(x)  (((x)&TSDB_FUNCSTATE_STREAM) != 0)
 #define IS_MULTIOUTPUT(x)         (((x)&TSDB_FUNCSTATE_MO) != 0)
@@ -242,20 +245,7 @@ enum {
   BLK_DATA_ALL_NEEDED = 0x3,
 };
 
-#define IS_FILE_BLOCK(x) (((x)&BLK_FILE_BLOCK) != 0)
-
-#define SET_FILE_BLOCK_FLAG(x) \
-  do {                         \
-    (x) &= (~BLK_CACHE_BLOCK); \
-    (x) |= BLK_FILE_BLOCK;     \
-  } while (0);
-
-#define SET_CACHE_BLOCK_FLAG(x) ((x) = BLK_CACHE_BLOCK | BLK_BLOCK_LOADED);
-
 #define SET_DATA_BLOCK_NOT_LOADED(x) ((x) &= (~BLK_BLOCK_LOADED));
-
-#define SET_DATA_BLOCK_LOADED(x) ((x) |= BLK_BLOCK_LOADED);
-#define IS_DATA_BLOCK_LOADED(x) (((x)&BLK_BLOCK_LOADED) != 0)
 
 typedef struct STwaInfo {
   TSKEY   lastKey;
@@ -287,7 +277,6 @@ void getStatistics(char *priData, char *data, int32_t size, int32_t numOfRow, in
 bool top_bot_datablock_filter(SQLFunctionCtx *pCtx, int32_t functionId, char *minval, char *maxval);
 
 bool stableQueryFunctChanged(int32_t funcId);
-
 
 void resetResultInfo(SResultInfo *pResInfo);
 void initResultInfo(SResultInfo *pResInfo);

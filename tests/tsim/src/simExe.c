@@ -24,7 +24,7 @@
 void simLogSql(char *sql) {
   static FILE *fp = NULL;
   char filename[256];
-  sprintf(filename, "%s/sim.sql", scriptDir);
+  sprintf(filename, "%s/sim.sql", tsScriptDir);
   if (fp == NULL) {
     fp = fopen(filename, "w");
     if (fp == NULL) {
@@ -36,7 +36,12 @@ void simLogSql(char *sql) {
   fflush(fp);
 }
 
+char *simParseHostName(char *varName);
 char *simGetVariable(SScript *script, char *varName, int varLen) {
+  if (strncmp(varName, "hostname", 8) == 0) {
+    return simParseHostName(varName);
+  }
+
   if (strncmp(varName, "error", varLen) == 0) return script->error;
 
   if (strncmp(varName, "rows", varLen) == 0) return script->rows;
@@ -114,7 +119,7 @@ char *simGetVariable(SScript *script, char *varName, int varLen) {
 int simExecuteExpression(SScript *script, char *exp) {
   char *op1, *op2, *var1, *var2, *var3, *rest;
   int op1Len, op2Len, var1Len, var2Len, var3Len, val0, val1;
-  char t0[512], t1[512], t2[512], t3[512];
+  char t0[512], t1[512], t2[512], t3[1024];
   int result;
 
   rest = paGetToken(exp, &var1, &var1Len);
@@ -270,7 +275,7 @@ bool simExecuteRunBackCmd(SScript *script, char *option) {
 bool simExecuteSystemCmd(SScript *script, char *option) {
   char buf[4096] = {0};
 
-  sprintf(buf, "cd %s; ", scriptDir);
+  sprintf(buf, "cd %s; ", tsScriptDir);
   simVisuallizeOption(script, option, buf + strlen(buf));
 
   int code = system(buf);
@@ -305,14 +310,15 @@ void simStoreSystemContentResult(SScript *script, char *filename) {
 
 bool simExecuteSystemContentCmd(SScript *script, char *option) {
   char buf[4096] = {0};
+  char buf1[4096 + 512] = {0};
   char filename[400] = {0};
-  sprintf(filename, "%s/%s.tmp", scriptDir, script->fileName);
+  sprintf(filename, "%s/%s.tmp", tsScriptDir, script->fileName);
 
-  sprintf(buf, "cd %s; ", scriptDir);
+  sprintf(buf, "cd %s; ", tsScriptDir);
   simVisuallizeOption(script, option, buf + strlen(buf));
-  sprintf(buf, "%s > %s 2>/dev/null", buf, filename);
+  sprintf(buf1, "%s > %s 2>/dev/null", buf, filename);
 
-  sprintf(script->system_exit_code, "%d", system(buf));
+  sprintf(script->system_exit_code, "%d", system(buf1));
   simStoreSystemContentResult(script, filename);
 
   script->linePos++;
@@ -409,6 +415,7 @@ void simCloseNativeConnect(SScript *script) {
 
   simTrace("script:%s, taos:%p closed", script->fileName, script->taos);
   taos_close(script->taos);
+  taosMsleep(1200);
 
   script->taos = NULL;
 }
@@ -578,7 +585,7 @@ bool simCreateNativeConnect(SScript *script, char *user, char *pass) {
   void *taos = NULL;
   taosMsleep(2000);
   for (int attempt = 0; attempt < 10; ++attempt) {
-    taos = taos_connect(NULL, user, pass, NULL, tsMnodeShellPort);
+    taos = taos_connect(NULL, user, pass, NULL, tsDnodeShellPort);
     if (taos == NULL) {
       simTrace("script:%s, user:%s connect taosd failed:%s, attempt:%d", script->fileName, user, taos_errstr(NULL), attempt);
       taosMsleep(1000);
@@ -670,6 +677,8 @@ bool simExecuteNativeSqlCommand(SScript *script, char *rest, bool isSlow) {
     while ((row = taos_fetch_row(result))) {
       if (numOfRows < MAX_QUERY_ROW_NUM) {
         TAOS_FIELD *fields = taos_fetch_fields(result);
+        int* length = taos_fetch_lengths(result);
+        
         for (int i = 0; i < num_fields; i++) {
           char *value = NULL;
           if (i < MAX_QUERY_COL_NUM) {
@@ -680,7 +689,7 @@ bool simExecuteNativeSqlCommand(SScript *script, char *rest, bool isSlow) {
           }
 
           if (row[i] == 0) {
-            strcpy(value, "null");
+            strcpy(value, TSDB_DATA_NULL_STR);
             continue;
           }
 
@@ -727,8 +736,9 @@ bool simExecuteNativeSqlCommand(SScript *script, char *rest, bool isSlow) {
               break;
             case TSDB_DATA_TYPE_BINARY:
             case TSDB_DATA_TYPE_NCHAR:
-              memcpy(value, row[i], fields[i].bytes);
-              value[fields[i].bytes] = 0;
+              memset(value, 0, MAX_QUERY_VALUE_LEN);
+              memcpy(value, row[i], length[i]);
+              value[length[i]] = 0;
               // snprintf(value, fields[i].bytes, "%s", (char *)row[i]);
               break;
             case TSDB_DATA_TYPE_TIMESTAMP:

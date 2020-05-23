@@ -30,10 +30,10 @@ extern "C" {
 #include "tsqlfunction.h"
 #include "tutil.h"
 
+#include "qExecutor.h"
 #include "qsqlparser.h"
 #include "qsqltype.h"
 #include "qtsbuf.h"
-#include "queryExecutor.h"
 
 // forward declaration
 struct SSqlInfo;
@@ -45,13 +45,11 @@ enum {
   DATA_FROM_DATA_FILE = 2,
 };
 
-typedef SCMSTableVgroupRspMsg SVgroupsInfo;
-
 typedef struct STableComInfo {
   uint8_t numOfTags;
   uint8_t precision;
   int16_t numOfColumns;
-  int16_t rowSize;
+  int32_t rowSize;
 } STableComInfo;
 
 typedef struct STableMeta {
@@ -69,12 +67,13 @@ typedef struct STableMeta {
 } STableMeta;
 
 typedef struct STableMetaInfo {
-  STableMeta *  pTableMeta;  // table meta, cached in client side and acquried by name
+  STableMeta *  pTableMeta;      // table meta, cached in client side and acquired by name
   SVgroupsInfo *vgroupList;
-
+  SArray       *pVgroupTables;   // SArray<SVgroupTableInfo>
+  
   /*
-   * 1. keep the vnode index during the multi-vnode super table projection query
-   * 2. keep the vnode index for multi-vnode insertion
+   * 1. keep the vgroup index during the multi-vnode super table projection query
+   * 2. keep the vgroup index for multi-vnode insertion
    */
   int32_t vgroupIndex;
   char    name[TSDB_TABLE_ID_LEN];        // (super) table name
@@ -89,7 +88,7 @@ typedef struct SSqlExpr {
   int16_t   functionId;     // function id in aAgg array
   int16_t   resType;        // return value type
   int16_t   resBytes;       // length of return value
-  int16_t   interResBytes;  // inter result buffer size
+  int16_t   interBytes;  // inter result buffer size
   int16_t   numOfParams;    // argument value of each function
   tVariant  param[3];       // parameters are not more than 3
   int32_t   offset;         // sub result column value of arithmetic expression.
@@ -102,7 +101,7 @@ typedef struct SColumnIndex {
 
 typedef struct SFieldSupInfo {
   bool            visible;
-  SArithExprInfo *pArithExprInfo;
+  SExprInfo      *pArithExprInfo;
   SSqlExpr *      pSqlExpr;
 } SFieldSupInfo;
 
@@ -196,7 +195,7 @@ typedef struct SDataBlockList {  // todo remove
 
 typedef struct SQueryInfo {
   int16_t  command;  // the command may be different for each subclause, so keep it seperately.
-  uint16_t type;     // query/insert/import type
+  uint32_t type;     // query/insert/import type
   char     slidingTimeUnit;
 
   STimeWindow     window;
@@ -206,12 +205,12 @@ typedef struct SQueryInfo {
 
   SArray *         colList;      // SArray<SColumn*>
   SFieldInfo       fieldsInfo;
-  SArray *         exprsInfo;    // SArray<SSqlExpr*>
+  SArray *         exprList;    // SArray<SSqlExpr*>
   SLimitVal        limit;
   SLimitVal        slimit;
   STagCond         tagCond;
   SOrderVal        order;
-  int16_t          interpoType;  // interpolate type
+  int16_t          fillType;  // interpolate type
   int16_t          numOfTables;
   STableMetaInfo **pTableMetaInfo;
   struct STSBuf *  tsBuf;
@@ -264,7 +263,7 @@ typedef struct SResRec {
 typedef struct {
   int64_t               numOfRows;                  // num of results in current retrieved
   int64_t               numOfTotal;                 // num of total results
-  int64_t               numOfTotalInCurrentClause;  // num of total result in current subclause
+  int64_t               numOfClauseTotal;           // num of total result in current subclause
   char *                pRsp;
   int32_t               rspType;
   int32_t               rspLen;
@@ -281,8 +280,11 @@ typedef struct {
   SResRec *             pGroupRec;
   char *                data;
   void **               tsrow;
+  int32_t*              length;  // length for each field for current row
   char **               buffer;  // Buffer used to put multibytes encoded using unicode (wchar_t)
   SColumnIndex *        pColumnIndex;
+  SArithmeticSupport*   pArithSup;   // support the arithmetic expression calculation on agg functions
+  
   struct SLocalReducer *pLocalReducer;
 } SSqlRes;
 
@@ -298,11 +300,11 @@ typedef struct STscObj {
   char               sversion[TSDB_VERSION_LEN];
   char               writeAuth : 1;
   char               superAuth : 1;
-  void*              pMgmtConn;
   struct SSqlObj *   pSql;
   struct SSqlObj *   pHb;
   struct SSqlObj *   sqlList;
   struct SSqlStream *streamList;
+  void*              pDnodeConn;
   pthread_mutex_t    mutex;
 } STscObj;
 
@@ -312,8 +314,6 @@ typedef struct SSqlObj {
   void (*fp)();
   void (*fetchFp)();
   void *           param;
-  uint32_t         ip;
-  short            vnode;
   int64_t          stime;
   uint32_t         queryId;
   void *           pStream;
@@ -360,12 +360,12 @@ typedef struct SSqlStream {
   struct SSqlStream *prev, *next;
 } SSqlStream;
 
-int32_t tscInitRpc(const char *user, const char *secret, void** pMgmtConn);
+int32_t tscInitRpc(const char *user, const char *secret, void** pDnodeConn);
 void    tscInitMsgsFp();
 
 int tsParseSql(SSqlObj *pSql, bool multiVnodeInsertion);
 
-void tscProcessMsgFromServer(SRpcMsg *rpcMsg);
+void tscProcessMsgFromServer(SRpcMsg *rpcMsg, SRpcIpSet *pIpSet);
 int  tscProcessSql(SSqlObj *pSql);
 
 int  tscRenewMeterMeta(SSqlObj *pSql, char *tableId);
@@ -384,7 +384,6 @@ int32_t tscCreateResPointerInfo(SSqlRes *pRes, SQueryInfo *pQueryInfo);
 void    tscDestroyResPointerInfo(SSqlRes *pRes);
 
 void tscResetSqlCmdObj(SSqlCmd *pCmd);
-void tscFreeResData(SSqlObj *pSql);
 
 /**
  * free query result of the sql object
@@ -397,7 +396,7 @@ void tscFreeSqlResult(SSqlObj *pSql);
  * Note: this function is multi-thread safe.
  * @param pObj
  */
-void tscFreeSqlObjPartial(SSqlObj *pObj);
+void tscPartiallyFreeSqlObj(SSqlObj *pObj);
 
 /**
  * free sql object, release allocated resource
@@ -425,9 +424,8 @@ int32_t tscInvalidSQLErrMsg(char *msg, const char *additionalInfo, const char *s
 
 void    tscQueueAsyncFreeResult(SSqlObj *pSql);
 int32_t tscToSQLCmd(SSqlObj *pSql, struct SSqlInfo *pInfo);
-char *  tscGetResultColumnChr(SSqlRes *pRes, SQueryInfo *pQueryInfo, int32_t column);
+void    tscGetResultColumnChr(SSqlRes *pRes, SFieldInfo* pFieldInfo, int32_t column);
 
-extern void *    pVnodeConn;
 extern void *    tscCacheHandle;
 extern void *    tscTmr;
 extern void *    tscQhandle;
@@ -439,6 +437,9 @@ extern SRpcIpSet tscMgmtIpSet;
 extern int (*tscBuildMsg[TSDB_SQL_MAX])(SSqlObj *pSql, SSqlInfo *pInfo);
 
 typedef void (*__async_cb_func_t)(void *param, TAOS_RES *tres, int numOfRows);
+
+int32_t tscCompareTidTags(const void* p1, const void* p2);
+void tscBuildVgroupTableInfo(STableMetaInfo* pTableMetaInfo, SArray* tables);
 
 #ifdef __cplusplus
 }

@@ -19,7 +19,7 @@
 #include "taoserror.h"
 #include "tutil.h"
 #include "mgmtDef.h"
-#include "mgmtLog.h"
+#include "mgmtInt.h"
 #include "mgmtAcct.h"
 #include "mgmtDnode.h"
 #include "mgmtDb.h"
@@ -140,7 +140,7 @@ int32_t mgmtGetQueries(SShowObj *pShow, void *pConn) {
 //
 //  // sorting based on useconds
 //
-//  pShow->pNode = pQueryShow;
+//  pShow->pIter = pQueryShow;
 
   return 0;
 }
@@ -187,7 +187,7 @@ int32_t mgmtGetQueryMeta(STableMetaMsg *pMeta, SShowObj *pShow, void *pConn) {
   for (int32_t i = 1; i < cols; ++i) pShow->offset[i] = pShow->offset[i - 1] + pShow->bytes[i - 1];
 
   pShow->numOfRows = 1000000;
-  pShow->pNode = NULL;
+  pShow->pIter = NULL;
   pShow->rowSize = pShow->offset[cols - 1] + pShow->bytes[cols - 1];
 
   mgmtGetQueries(pShow, pConn);
@@ -252,7 +252,7 @@ int32_t mgmtRetrieveQueries(SShowObj *pShow, char *data, int32_t rows, void *pCo
   char *pWrite;
   int32_t   cols = 0;
 
-  SQueryShow *pQueryShow = (SQueryShow *)pShow->pNode;
+  SQueryShow *pQueryShow = (SQueryShow *)pShow->pIter;
 
   if (rows > pQueryShow->numOfQueries - pQueryShow->index) rows = pQueryShow->numOfQueries - pQueryShow->index;
 
@@ -339,7 +339,7 @@ int32_t mgmtGetStreams(SShowObj *pShow, void *pConn) {
 //
 //  // sorting based on useconds
 //
-//  pShow->pNode = pStreamShow;
+//  pShow->pIter = pStreamShow;
 
   return 0;
 }
@@ -397,7 +397,7 @@ int32_t mgmtGetStreamMeta(STableMetaMsg *pMeta, SShowObj *pShow, void *pConn) {
   for (int32_t i = 1; i < cols; ++i) pShow->offset[i] = pShow->offset[i - 1] + pShow->bytes[i - 1];
 
   pShow->numOfRows = 1000000;
-  pShow->pNode = NULL;
+  pShow->pIter = NULL;
   pShow->rowSize = pShow->offset[cols - 1] + pShow->bytes[cols - 1];
 
   mgmtGetStreams(pShow, pConn);
@@ -409,7 +409,7 @@ int32_t mgmtRetrieveStreams(SShowObj *pShow, char *data, int32_t rows, void *pCo
   char *pWrite;
   int32_t   cols = 0;
 
-  SStreamShow *pStreamShow = (SStreamShow *)pShow->pNode;
+  SStreamShow *pStreamShow = (SStreamShow *)pShow->pIter;
 
   if (rows > pStreamShow->numOfStreams - pStreamShow->index) rows = pStreamShow->numOfStreams - pStreamShow->index;
 
@@ -561,17 +561,6 @@ int32_t mgmtKillConnection(char *qidstr, void *pConn) {
   return TSDB_CODE_INVALID_CONNECTION;
 }
 
-bool mgmtCheckQhandle(uint64_t qhandle) {
-  return true;
-}
-
-void mgmtSaveQhandle(void *qhandle) {
-  mTrace("qhandle:%p is allocated", qhandle);
-}
-
-void mgmtFreeQhandle(void *qhandle) {
-  mTrace("qhandle:%p is freed", qhandle);
-}
 
 int mgmtGetConns(SShowObj *pShow, void *pConn) {
   //  SAcctObj * pAcct = pConn->pAcct;
@@ -603,7 +592,7 @@ int mgmtGetConns(SShowObj *pShow, void *pConn) {
   //
   //  // sorting based on useconds
   //
-  //  pShow->pNode = pConnShow;
+  //  pShow->pIter = pConnShow;
 
   return 0;
 }
@@ -638,7 +627,7 @@ int32_t mgmtGetConnsMeta(STableMetaMsg *pMeta, SShowObj *pShow, void *pConn) {
   for (int i = 1; i < cols; ++i) pShow->offset[i] = pShow->offset[i - 1] + pShow->bytes[i - 1];
 
   pShow->numOfRows = 1000000;
-  pShow->pNode = NULL;
+  pShow->pIter = NULL;
   pShow->rowSize = pShow->offset[cols - 1] + pShow->bytes[cols - 1];
 
   mgmtGetConns(pShow, pConn);
@@ -650,7 +639,7 @@ int32_t mgmtRetrieveConns(SShowObj *pShow, char *data, int32_t rows, void *pConn
   char      *pWrite;
   int32_t   cols = 0;
 
-  SConnShow *pConnShow = (SConnShow *)pShow->pNode;
+  SConnShow *pConnShow = (SConnShow *)pShow->pIter;
 
   if (rows > pConnShow->numOfConns - pConnShow->index) rows = pConnShow->numOfConns - pConnShow->index;
 
@@ -686,7 +675,7 @@ int32_t mgmtRetrieveConns(SShowObj *pShow, char *data, int32_t rows, void *pConn
 void mgmtProcessKillQueryMsg(SQueuedMsg *pMsg) {
   SRpcMsg rpcRsp = {.handle = pMsg->thandle, .pCont = NULL, .contLen = 0, .code = 0, .msgType = 0};
   
-  SUserObj *pUser = mgmtGetUserFromConn(pMsg->thandle, NULL);
+  SUserObj *pUser = mgmtGetUserFromConn(pMsg->thandle);
   if (pUser == NULL) {
     rpcRsp.code = TSDB_CODE_INVALID_USER;
     rpcSendResponse(&rpcRsp);
@@ -710,7 +699,7 @@ void mgmtProcessKillQueryMsg(SQueuedMsg *pMsg) {
 void mgmtProcessKillStreamMsg(SQueuedMsg *pMsg) {
   SRpcMsg rpcRsp = {.handle = pMsg->thandle, .pCont = NULL, .contLen = 0, .code = 0, .msgType = 0};
   
-  SUserObj *pUser = mgmtGetUserFromConn(pMsg->thandle, NULL);
+  SUserObj *pUser = mgmtGetUserFromConn(pMsg->thandle);
   if (pUser == NULL) {
     rpcRsp.code = TSDB_CODE_INVALID_USER;
     rpcSendResponse(&rpcRsp);
@@ -734,7 +723,7 @@ void mgmtProcessKillStreamMsg(SQueuedMsg *pMsg) {
 void mgmtProcessKillConnectionMsg(SQueuedMsg *pMsg) {
   SRpcMsg rpcRsp = {.handle = pMsg->thandle, .pCont = NULL, .contLen = 0, .code = 0, .msgType = 0};
   
-  SUserObj *pUser = mgmtGetUserFromConn(pMsg->thandle, NULL);
+  SUserObj *pUser = mgmtGetUserFromConn(pMsg->thandle);
   if (pUser == NULL) {
     rpcRsp.code = TSDB_CODE_INVALID_USER;
     rpcSendResponse(&rpcRsp);
@@ -770,53 +759,4 @@ int32_t mgmtInitProfile() {
 }
 
 void mgmtCleanUpProfile() {
-}
-
-void *mgmtMallocQueuedMsg(SRpcMsg *rpcMsg) {
-  bool usePublicIp = false;
-  SUserObj *pUser = mgmtGetUserFromConn(rpcMsg->handle, &usePublicIp);
-  if (pUser == NULL) {
-    return NULL;
-  }
-
-  SQueuedMsg *pMsg = calloc(1, sizeof(SQueuedMsg));
-  pMsg->thandle = rpcMsg->handle;
-  pMsg->msgType = rpcMsg->msgType;
-  pMsg->contLen = rpcMsg->contLen;
-  pMsg->pCont = rpcMsg->pCont;
-  pMsg->pUser = pUser;
-  pMsg->usePublicIp = usePublicIp;
-
-  return pMsg;
-}
-
-void mgmtFreeQueuedMsg(SQueuedMsg *pMsg) {
-  if (pMsg != NULL) {
-    rpcFreeCont(pMsg->pCont);
-    if (pMsg->pUser) mgmtDecUserRef(pMsg->pUser);
-    if (pMsg->pDb) mgmtDecDbRef(pMsg->pDb);
-    if (pMsg->pVgroup) mgmtDecVgroupRef(pMsg->pVgroup);
-    if (pMsg->pTable) mgmtDecTableRef(pMsg->pTable);
-    if (pMsg->pAcct) mgmtDecAcctRef(pMsg->pAcct);
-    if (pMsg->pDnode) mgmtDecDnodeRef(pMsg->pDnode);
-    free(pMsg);
-  }
-}
-
-void* mgmtCloneQueuedMsg(SQueuedMsg *pSrcMsg) {
-  SQueuedMsg *pDestMsg = calloc(1, sizeof(SQueuedMsg));
-  
-  pDestMsg->thandle = pSrcMsg->thandle;
-  pDestMsg->msgType = pSrcMsg->msgType;
-  pDestMsg->pCont   = pSrcMsg->pCont;
-  pDestMsg->contLen = pSrcMsg->contLen;
-  pDestMsg->retry   = pSrcMsg->retry;
-  pDestMsg->maxRetry= pSrcMsg->maxRetry;
-  pDestMsg->pUser   = pSrcMsg->pUser;
-  pDestMsg->usePublicIp = pSrcMsg->usePublicIp;
-
-  pSrcMsg->pCont = NULL;
-  pSrcMsg->pUser = NULL;
-  
-  return pDestMsg;
 }

@@ -15,7 +15,6 @@
 
 #define _DEFAULT_SOURCE
 #include "os.h"
-#include "shash.h"
 #include "taos.h"
 #include "tglobal.h"
 #include "tsocket.h"
@@ -48,7 +47,7 @@ int httpInitSystem() {
   memset(httpServer, 0, sizeof(HttpServer));
 
   strcpy(httpServer->label, "rest");
-  strcpy(httpServer->serverIp, tsHttpIp);
+  httpServer->serverIp = 0;
   httpServer->serverPort = tsHttpPort;
   httpServer->cacheContext = tsHttpCacheSessions;
   httpServer->sessionExpire = tsHttpSessionExpire;
@@ -117,7 +116,7 @@ void httpCleanUpSystem() {
   httpPrint("http service cleanup");
   httpStopSystem();
 
-#if 1
+//#if 0
   if (httpServer == NULL) {
     return;
   }
@@ -131,7 +130,13 @@ void httpCleanUpSystem() {
     httpServer->timerHandle = NULL;
   }
 
-  httpCleanUpConnect(httpServer);
+  if (httpServer->pThreads != NULL) {
+    httpCleanUpConnect(httpServer);
+    httpServer->pThreads = NULL;
+  }
+  
+
+#if 0
   httpRemoveAllSessions(httpServer);
 
   if (httpServer->pContextPool != NULL) {

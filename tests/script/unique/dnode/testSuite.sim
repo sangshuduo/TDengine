@@ -7,7 +7,3 @@ run unique/dnode/offline2.sim
 run unique/dnode/remove1.sim
 run unique/dnode/remove2.sim
 run unique/dnode/vnode_clean.sim
-
-
-
-

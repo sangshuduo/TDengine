@@ -15,6 +15,7 @@
 
 #define _DEFAULT_SOURCE
 #include "os.h"
+#include "tsysctl.h"
 #include "tconfig.h"
 #include "tglobal.h"
 #include "tulog.h"
@@ -225,10 +226,11 @@ static void taosGetSystemLocale() {  // get and set default locale
   if (cfg_locale && cfg_locale->cfgStatus < TAOS_CFG_CSTATUS_DEFAULT) {
     locale = setlocale(LC_CTYPE, "");
     if (locale == NULL) {
-      uError("can't get locale from system");
+      uForcePrint("can't get locale from system, set it to en_US.UTF-8");
+      strcpy(tsLocale, "en_US.UTF-8");
     } else {
       strncpy(tsLocale, locale, tListLen(tsLocale));
-      uPrint("locale not configured, set to system default:%s", tsLocale);
+      uForcePrint("locale not configured, set to system default:%s", tsLocale);
     }
   }
 
@@ -243,7 +245,10 @@ static void taosGetSystemLocale() {  // get and set default locale
       strncpy(tsCharset, revisedCharset, tListLen(tsCharset));
 
       free(revisedCharset);
-      uPrint("charset not configured, set to system default:%s", tsCharset);
+      uForcePrint("charset not configured, set to system default:%s", tsCharset);
+    } else {
+      strcpy(tsCharset, "UTF-8");
+      uForcePrint("can't get locale and charset from system, set it to UTF-8");
     }
   }
 }
@@ -290,11 +295,12 @@ bool taosGetCpuUsage(float *sysCpuUsage, float *procCpuUsage) {
 bool taosGetDisk() {
   struct statvfs info;
   const double   unit = 1024 * 1024 * 1024;
-
+  
   if (tscEmbedded) {
-    if (statvfs(dataDir, &info)) {
-      tsTotalDataDirGB = 0;
-      tsAvailDataDirGB = 0;
+    if (statvfs(tsDataDir, &info)) {
+      //tsTotalDataDirGB = 0;
+      //tsAvailDataDirGB = 0;
+      uError("failed to get disk size, dataDir:%s errno:%s", tsDataDir, strerror(errno));
       return false;
     } else {
       tsTotalDataDirGB = (float)((double)info.f_blocks * (double)info.f_frsize / unit);
@@ -302,9 +308,10 @@ bool taosGetDisk() {
     }
   }
 
-  if (statvfs(logDir, &info)) {
-    tsTotalLogDirGB = 0;
-    tsAvailLogDirGB = 0;
+  if (statvfs(tsLogDir, &info)) {
+    //tsTotalLogDirGB = 0;
+    //tsAvailLogDirGB = 0;
+    uError("failed to get disk size, logDir:%s errno:%s", tsLogDir, strerror(errno));
     return false;
   } else {
     tsTotalLogDirGB = (float)((double)info.f_blocks * (double)info.f_frsize / unit);
@@ -312,8 +319,9 @@ bool taosGetDisk() {
   }
 
   if (statvfs("/tmp", &info)) {
-    tsTotalTmpDirGB = 0;
-    tsAvailTmpDirGB = 0;
+    //tsTotalTmpDirGB = 0;
+    //tsAvailTmpDirGB = 0;
+    uError("failed to get disk size, tmpDir:/tmp errno:%s", strerror(errno));
     return false;
   } else {
     tsTotalTmpDirGB = (float)((double)info.f_blocks * (double)info.f_frsize / unit);
@@ -349,10 +357,15 @@ static bool taosGetCardName(char *ip, char *name) {
       break;
     }
 
-    if (strcmp(host, ip) == 0) {
-      strcpy(name, ifa->ifa_name);
-      ret = true;
+    if (strcmp(host, "127.0.0.1") == 0) {
+      continue;
     }
+
+    // TODO: the ip not config
+    // if (strcmp(host, ip) == 0) {
+    strcpy(name, ifa->ifa_name);
+    ret = true;
+    // }
   }
 
   freeifaddrs(ifaddr);
@@ -361,6 +374,8 @@ static bool taosGetCardName(char *ip, char *name) {
 
 static bool taosGetCardInfo(int64_t *bytes) {
   static char tsPublicCard[1000] = {0};
+  static char tsPrivateIp[40];
+
   if (tsPublicCard[0] == 0) {
     if (!taosGetCardName(tsPrivateIp, tsPublicCard)) {
       uError("can't get card name from ip:%s", tsPrivateIp);

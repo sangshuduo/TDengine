@@ -1,6 +1,7 @@
 system sh/stop_dnodes.sh
-system sh/deploy.sh -n dnode1 -m 192.168.0.1 -i 192.168.0.1
+system sh/deploy.sh -n dnode1 -i 1
 system sh/exec.sh -n dnode1 -s start
+sleep 3000
 sql connect
 
 print =============== create database d1
@@ -42,9 +43,6 @@ endi
 if $data01 != 4 then 
   return -1
 endi
-if $data02 != ready then 
-  return -1
-endi
 
 print =============== drop table 
 sql drop table d1.t1
@@ -81,9 +79,6 @@ endi
 if $data01 != 3 then 
   return -1
 endi
-if $data02 != ready then 
-  return -1
-endi
 
 print =============== drop all table 
 sql drop table d1.t2
@@ -116,3 +111,5 @@ sql show d1.vgroups
 if $rows != 0 then 
   return -1
 endi
+
+system sh/exec.sh -n dnode1 -s stop -x SIGINT

@@ -1,22 +1,13 @@
 system sh/stop_dnodes.sh
 
-system sh/ip.sh -i 1 -s up
-system sh/ip.sh -i 2 -s up
-
-system sh/deploy.sh -n dnode1 -m 192.168.0.1 -i 192.168.0.1
-system sh/deploy.sh -n dnode2 -m 192.168.0.1 -i 192.168.0.2
-
-system sh/cfg.sh -n dnode1 -c balanceMonitorInterval -v 1
-system sh/cfg.sh -n dnode2 -c balanceMonitorInterval -v 1
-
-system sh/cfg.sh -n dnode1 -c balanceStartInterval -v 10
-system sh/cfg.sh -n dnode2 -c balanceStartInterval -v 10
+system sh/deploy.sh -n dnode1 -i 1
+system sh/deploy.sh -n dnode2 -i 2
 
 system sh/cfg.sh -n dnode1 -c mgmtEqualVnodeNum -v 4
 system sh/cfg.sh -n dnode2 -c mgmtEqualVnodeNum -v 4
 
-system sh/cfg.sh -n dnode1 -c clog -v 1
-system sh/cfg.sh -n dnode2 -c clog -v 1
+system sh/cfg.sh -n dnode1 -c wallevel -v 1
+system sh/cfg.sh -n dnode2 -c wallevel -v 1
 
 system sh/cfg.sh -n dnode1 -c monitor -v 1
 system sh/cfg.sh -n dnode2 -c monitor -v 0
@@ -27,13 +18,13 @@ sql connect
 sleep 5000
 
 sql show dnodes
-print 192.168.0.1 openVnodes $data3_1
+print dnode1 openVnodes $data3_1
 if $data3_1 != 3 then
 	return -1
 endi
 
 print ========== step2
-sql create dnode 192.168.0.2
+sql create dnode $hostname2
 system sh/exec_up.sh -n dnode2 -s start
 
 $x = 0
@@ -45,8 +36,8 @@ show2:
 	endi
 	
 sql show dnodes
-print 192.168.0.1 openVnodes $data3_1
-print 192.168.0.2 openVnodes $data3_2
+print dnode1 openVnodes $data3_1
+print dnode2 openVnodes $data3_2
 if $data3_1 != 4 then
 	goto show2
 endi

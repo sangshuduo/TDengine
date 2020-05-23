@@ -23,6 +23,7 @@
 #include "tutil.h"
 #include "tsched.h"
 #include "tscLog.h"
+#include "tscUtil.h"
 #include "tsclient.h"
 #include "tglobal.h"
 #include "tconfig.h"
@@ -30,7 +31,6 @@
 #include "tlocale.h"
 
 // global, not configurable
-void *  pVnodeConn;
 void *  tscCacheHandle;
 void *  tscTmr;
 void *  tscQhandle;
@@ -48,16 +48,15 @@ void tscCheckDiskUsage(void *UNUSED_PARAM(para), void* UNUSED_PARAM(param)) {
   taosTmrReset(tscCheckDiskUsage, 1000, NULL, tscTmr, &tscCheckDiskUsageTmr);
 }
 
-int32_t tscInitRpc(const char *user, const char *secret, void** pMgmtConn) {
+int32_t tscInitRpc(const char *user, const char *secret, void** pDnodeConn) {
   SRpcInit rpcInit;
   char secretEncrypt[32] = {0};
   taosEncryptPass((uint8_t *)secret, strlen(secret), secretEncrypt);
 
-  if (pVnodeConn == NULL) {
+  if (*pDnodeConn == NULL) {
     memset(&rpcInit, 0, sizeof(rpcInit));
-    rpcInit.localIp = tsLocalIp;
     rpcInit.localPort = 0;
-    rpcInit.label = "TSC-vnode";
+    rpcInit.label = "TSC";
     rpcInit.numOfThreads = tscNumOfThreads;
     rpcInit.cfp = tscProcessMsgFromServer;
     rpcInit.sessions = tsMaxVnodeConnections;
@@ -65,35 +64,15 @@ int32_t tscInitRpc(const char *user, const char *secret, void** pMgmtConn) {
     rpcInit.user = (char*)user;
     rpcInit.idleTime = 2000;
     rpcInit.ckey = "key";
-    rpcInit.secret = secretEncrypt;
-
-    pVnodeConn = rpcOpen(&rpcInit);
-    if (pVnodeConn == NULL) {
-      tscError("failed to init connection to vnode");
-      return -1;
-    }
-  }
-
-  if (*pMgmtConn == NULL) {
-    memset(&rpcInit, 0, sizeof(rpcInit));
-    rpcInit.localIp = tsLocalIp;
-    rpcInit.localPort = 0;
-    rpcInit.label = "TSC-mgmt";
-    rpcInit.numOfThreads = 1;
-    rpcInit.cfp = tscProcessMsgFromServer;
-    rpcInit.ufp = tscUpdateIpSet;
-    rpcInit.sessions = tsMaxMgmtConnections;
-    rpcInit.connType = TAOS_CONN_CLIENT;
-    rpcInit.idleTime = 2000;
-    rpcInit.user = (char*)user;
-    rpcInit.ckey = "key";
     rpcInit.spi = 1;
     rpcInit.secret = secretEncrypt;
 
-    *pMgmtConn = rpcOpen(&rpcInit);
-    if (*pMgmtConn == NULL) {
-      tscError("failed to init connection to mgmt");
+    *pDnodeConn = rpcOpen(&rpcInit);
+    if (*pDnodeConn == NULL) {
+      tscError("failed to init connection to TDengine");
       return -1;
+    } else {
+      tscTrace("dnodeConn:%p is created, user:%s", *pDnodeConn, user);
     }
   }
 
@@ -109,23 +88,17 @@ void taos_init_imp() {
   deltaToUtcInitOnce();
 
   if (tscEmbedded == 0) {
-    /*
-     * set localIp = 0
-     * means unset tsLocalIp in client
-     * except read from config file
-     */
-    strcpy(tsLocalIp, "0.0.0.0");
 
     // Read global configuration.
     taosInitGlobalCfg();
     taosReadGlobalLogCfg();
 
     // For log directory
-    if (stat(logDir, &dirstat) < 0) mkdir(logDir, 0755);
+    if (stat(tsLogDir, &dirstat) < 0) mkdir(tsLogDir, 0755);
 
-    sprintf(temp, "%s/taoslog", logDir);
+    sprintf(temp, "%s/taoslog", tsLogDir);
     if (taosInitLog(temp, tsNumOfLogLines, 10) < 0) {
-      printf("failed to open log file in directory:%s\n", logDir);
+      printf("failed to open log file in directory:%s\n", tsLogDir);
     }
 
     taosReadGlobalCfg();
@@ -133,7 +106,7 @@ void taos_init_imp() {
     taosPrintGlobalCfg();
 
     tscTrace("starting to initialize TAOS client ...");
-    tscTrace("Local IP address is:%s", tsLocalIp);
+    tscTrace("Local End Point is:%s", tsLocalEp);
   }
 
   taosSetCoreDump();
@@ -142,15 +115,10 @@ void taos_init_imp() {
     taosInitNote(tsNumOfLogLines / 10, 1, (char*)"tsc_note");
   }
 
-  tscMgmtIpSet.inUse = 0;
-  tscMgmtIpSet.port = tsMnodeShellPort;
-  tscMgmtIpSet.numOfIps = 1;
-  tscMgmtIpSet.ip[0] = inet_addr(tsMasterIp);
-
-  if (tsSecondIp[0] && strcmp(tsSecondIp, tsMasterIp) != 0) {
-    tscMgmtIpSet.numOfIps = 2;
-    tscMgmtIpSet.ip[1] = inet_addr(tsSecondIp);
-  }
+  if (tscSetMgmtIpListFromCfg(tsFirst, tsSecond) < 0) {
+    tscError("failed to init mgmt IP list");
+    return;
+  } 
 
   tscInitMsgsFp();
   int queueSize = tsMaxVnodeConnections + tsMaxMeterConnections + tsMaxMgmtConnections + tsMaxMgmtConnections;
@@ -174,7 +142,7 @@ void taos_init_imp() {
     taosTmrReset(tscCheckDiskUsage, 10, NULL, tscTmr, &tscCheckDiskUsageTmr);      
   }
   
-  int64_t refreshTime = tsMetricMetaKeepTimer < tsMeterMetaKeepTimer ? tsMetricMetaKeepTimer : tsMeterMetaKeepTimer;
+  int64_t refreshTime = tsTableMetaKeepTimer;
   refreshTime = refreshTime > 2 ? 2 : refreshTime;
   refreshTime = refreshTime < 1 ? 1 : refreshTime;
 
@@ -198,11 +166,6 @@ void taos_cleanup() {
   }
   
   taosCloseLog();
-  
-  if (pVnodeConn != NULL) {
-    rpcClose(pVnodeConn);
-    pVnodeConn = NULL;
-  }
   
   taosTmrCleanUp(tscTmr);
 }

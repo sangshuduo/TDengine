@@ -26,6 +26,11 @@ void    mgmtCleanUpSystem();
 void    mgmtStopSystem();
 void    sdbUpdateSync();
 
+int32_t mgmtRetriveAuth(char *user, char *spi, char *encrypt, char *secret, char *ckey);
+void    mgmtProcessMsgFromShell(SRpcMsg *rpcMsg);
+void    mgmtProcessReqMsgFromDnode(SRpcMsg *rpcMsg);
+
+
 #ifdef __cplusplus
 }
 #endif

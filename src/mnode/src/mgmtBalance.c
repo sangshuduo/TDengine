@@ -19,9 +19,10 @@
 #include "tbalance.h"
 #include "tglobal.h"
 #include "mgmtDef.h"
-#include "mgmtLog.h"
+#include "mgmtInt.h"
 #include "mgmtMnode.h"
 #include "mgmtDnode.h"
+#include "mgmtSdb.h"
 #include "mgmtVgroup.h"
 
 #ifndef _SYNC
@@ -29,16 +30,17 @@
 int32_t balanceInit() { return TSDB_CODE_SUCCESS; }
 void    balanceCleanUp() {}
 void    balanceNotify() {}
+void    balanceUpdateMgmt() {}
 void    balanceReset() {}
 
 int32_t balanceAllocVnodes(SVgObj *pVgroup) {
-  void *     pNode = NULL;
+  void *     pIter = NULL;
   SDnodeObj *pDnode = NULL;
   SDnodeObj *pSelDnode = NULL;
-  float      vnodeUsage = 1.0;
+  float      vnodeUsage = 1000.0;
 
   while (1) {
-    pNode = mgmtGetNextDnode(pNode, &pDnode);
+    pIter = mgmtGetNextDnode(pIter, &pDnode);
     if (pDnode == NULL) break;
 
     if (pDnode->totalVnodes > 0 && pDnode->openVnodes < pDnode->totalVnodes) {
@@ -53,6 +55,8 @@ int32_t balanceAllocVnodes(SVgObj *pVgroup) {
     }
     mgmtDecDnodeRef(pDnode);
   }
+
+  sdbFreeIter(pIter);
 
   if (pSelDnode == NULL) {
     mError("failed to alloc vnode to vgroup");

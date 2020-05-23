@@ -20,10 +20,6 @@
 extern "C" {
 #endif
 
-#define TAOS_QTYPE_RPC      0
-#define TAOS_QTYPE_FWD      1
-#define TAOS_QTYPE_WAL      2 
-
 typedef void* taos_queue;
 typedef void* taos_qset;
 typedef void* taos_qall;
@@ -43,6 +39,7 @@ void       taosResetQitems(taos_qall);
 
 taos_qset  taosOpenQset();
 void       taosCloseQset();
+void       taosQsetThreadResume(taos_qset param);
 int        taosAddIntoQset(taos_qset, taos_queue, void *ahandle);
 void       taosRemoveFromQset(taos_qset, taos_queue);
 int        taosGetQueueNumber(taos_qset);

@@ -52,6 +52,8 @@ int32_t tSQLParse(SSqlInfo *pSQLInfo, const char *pStr) {
         Parse(pParser, 0, t0, pSQLInfo);
         goto abort_parse;
       }
+      
+      case TK_QUESTION:
       case TK_ILLEGAL: {
         snprintf(pSQLInfo->pzErrMsg, tListLen(pSQLInfo->pzErrMsg), "unrecognized token: \"%s\"", t0.z);
         pSQLInfo->valid = false;
@@ -463,7 +465,8 @@ int32_t getTimestampInUsFromStrImpl(int64_t val, char unit, int64_t *result) {
 
 void tSQLSetColumnInfo(TAOS_FIELD *pField, SSQLToken *pName, TAOS_FIELD *pType) {
   int32_t maxLen = sizeof(pField->name) / sizeof(pField->name[0]);
-  /* truncate the column name */
+  
+  // truncate the column name
   if (pName->n >= maxLen) {
     pName->n = maxLen - 1;
   }
@@ -478,7 +481,9 @@ void tSQLSetColumnInfo(TAOS_FIELD *pField, SSQLToken *pName, TAOS_FIELD *pType) 
 void tSQLSetColumnType(TAOS_FIELD *pField, SSQLToken *type) {
   pField->type = -1;
 
-  for (int8_t i = 0; i < sizeof(tDataTypeDesc) / sizeof(tDataTypeDesc[0]); ++i) {
+  int32_t LENGTH_SIZE_OF_STR = 2;  // in case of nchar and binary, there two bytes to keep the length of binary|nchar.
+  
+  for (int8_t i = 0; i < tListLen(tDataTypeDesc); ++i) {
     if ((strncasecmp(type->z, tDataTypeDesc[i].aName, tDataTypeDesc[i].nameLen) == 0) &&
         (type->n == tDataTypeDesc[i].nameLen)) {
       pField->type = i;
@@ -490,10 +495,10 @@ void tSQLSetColumnType(TAOS_FIELD *pField, SSQLToken *type) {
          * number of bytes in UCS-4 format, which is 4 times larger than the
          * number of characters
          */
-        pField->bytes = -(int32_t)type->type * TSDB_NCHAR_SIZE;
+        pField->bytes = -(int32_t)type->type * TSDB_NCHAR_SIZE + LENGTH_SIZE_OF_STR;
       } else if (i == TSDB_DATA_TYPE_BINARY) {
         /* for binary, the TOKENTYPE is the length of binary */
-        pField->bytes = -(int32_t)type->type;
+        pField->bytes = -(int32_t) type->type + LENGTH_SIZE_OF_STR;
       }
       break;
     }
@@ -675,7 +680,7 @@ void SQLInfoDestroy(SSqlInfo *pInfo) {
       free(pInfo->pDCLInfo->a);
     }
 
-    if (pInfo->type == TSDB_SQL_CREATE_DB) {
+    if (pInfo->pDCLInfo != NULL && pInfo->type == TSDB_SQL_CREATE_DB) {
       tVariantListDestroy(pInfo->pDCLInfo->dbOpt.keep);
     }
 
@@ -731,7 +736,7 @@ SSubclauseInfo* appendSelectClause(SSubclauseInfo *pQueryInfo, void *pSubclause)
   return pQueryInfo;
 }
 
-void setCreatedMeterName(SSqlInfo *pInfo, SSQLToken *pMeterName, SSQLToken *pIfNotExists) {
+void setCreatedTableName(SSqlInfo *pInfo, SSQLToken *pMeterName, SSQLToken *pIfNotExists) {
   pInfo->pCreateTableInfo->name = *pMeterName;
   pInfo->pCreateTableInfo->existCheck = (pIfNotExists->n != 0);
 }
@@ -815,7 +820,7 @@ void setCreateDBSQL(SSqlInfo *pInfo, int32_t type, SSQLToken *pToken, SCreateDBI
 
   pInfo->pDCLInfo->dbOpt = *pDB;
   pInfo->pDCLInfo->dbOpt.dbname = *pToken;
-  pInfo->pDCLInfo->dbOpt.ignoreExists = (pIgExists != NULL);
+  pInfo->pDCLInfo->dbOpt.ignoreExists = pIgExists->n; // sql.y has: ifnotexists(X) ::= IF NOT EXISTS.   {X.n = 1;}
 }
 
 void setCreateAcctSQL(SSqlInfo *pInfo, int32_t type, SSQLToken *pName, SSQLToken *pPwd, SCreateAcctSQL *pAcctInfo) {
@@ -883,16 +888,16 @@ void setKillSQL(SSqlInfo *pInfo, int32_t type, SSQLToken *ip) {
 }
 
 void setDefaultCreateDbOption(SCreateDBInfo *pDBInfo) {
-  pDBInfo->numOfBlocksPerTable = 50;
   pDBInfo->compressionLevel = -1;
 
-  pDBInfo->commitLog = -1;
+  pDBInfo->walLevel = -1;
   pDBInfo->commitTime = -1;
-  pDBInfo->tablesPerVnode = -1;
-  pDBInfo->numOfAvgCacheBlocks = -1;
+  pDBInfo->maxTablesPerVnode = -1;
 
   pDBInfo->cacheBlockSize = -1;
-  pDBInfo->rowPerFileBlock = -1;
+  pDBInfo->numOfBlocks = -1;
+  pDBInfo->maxRowsPerBlock = -1;
+  pDBInfo->minRowsPerBlock = -1;
   pDBInfo->daysPerFile = -1;
 
   pDBInfo->replica = -1;
