@@ -34,7 +34,8 @@ char*   mgmtGetDnodeStatusStr(int32_t dnodeStatus);
 void    mgmtMonitorDnodeModule();
 
 int32_t mgmtGetDnodesNum();
-void *  mgmtGetNextDnode(void *pNode, SDnodeObj **pDnode);
+int32_t mgmtGetOnlinDnodesNum();
+void *  mgmtGetNextDnode(void *pIter, SDnodeObj **pDnode);
 void    mgmtIncDnodeRef(SDnodeObj *pDnode);
 void    mgmtDecDnodeRef(SDnodeObj *pDnode);
 void *  mgmtGetDnode(int32_t dnodeId);

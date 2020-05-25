@@ -27,10 +27,11 @@ void    mgmtCleanUpTables();
 void *  mgmtGetTable(char *tableId);
 void    mgmtIncTableRef(void *pTable);
 void    mgmtDecTableRef(void *pTable);
-void *  mgmtGetNextChildTable(void *pNode, SChildTableObj **pTable);
-void *  mgmtGetNextSuperTable(void *pNode, SSuperTableObj **pTable);
+void *  mgmtGetNextChildTable(void *pIter, SChildTableObj **pTable);
+void *  mgmtGetNextSuperTable(void *pIter, SSuperTableObj **pTable);
 void    mgmtDropAllChildTables(SDbObj *pDropDb);
 void    mgmtDropAllSuperTables(SDbObj *pDropDb);
+void    mgmtDropAllChildTablesInVgroups(SVgObj *pVgroup);
 
 #ifdef __cplusplus
 }

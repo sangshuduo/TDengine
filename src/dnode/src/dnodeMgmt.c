@@ -16,7 +16,6 @@
 #define _DEFAULT_SOURCE
 #include "os.h"
 #include "cJSON.h"
-#include "ihash.h"
 #include "taoserror.h"
 #include "taosmsg.h"
 #include "ttime.h"
@@ -266,9 +265,12 @@ static int32_t dnodeProcessConfigDnodeMsg(SRpcMsg *pMsg) {
   return taosCfgDynamicOptions(pCfg->config);
 }
 
+void dnodeUpdateIpSet(SRpcIpSet *pIpSet) {
+  dPrint("mnode IP list is changed, numOfIps:%d inUse:%d", pIpSet->numOfIps, pIpSet->inUse);
+  for (int i = 0; i < pIpSet->numOfIps; ++i) {
+    dPrint("mnode index:%d %s:%u", i, pIpSet->fqdn[i], pIpSet->port[i])
+  }
 
-void dnodeUpdateIpSet(void *ahandle, SRpcIpSet *pIpSet) {
-  dTrace("mgmt IP list is changed for ufp is called");
   tsMnodeIpSet = *pIpSet;
 }
 
@@ -409,7 +411,7 @@ static bool dnodeReadMnodeInfos() {
       dError("failed to read mnode mgmtIpList.json, nodeName not found");
       goto PARSE_OVER;
     }
-    strncpy(tsMnodeInfos.nodeInfos[i].nodeEp, nodeEp->valuestring, TSDB_FQDN_LEN);
+    strncpy(tsMnodeInfos.nodeInfos[i].nodeEp, nodeEp->valuestring, TSDB_EP_LEN);
  }
 
   ret = true;

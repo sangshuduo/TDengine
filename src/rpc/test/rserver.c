@@ -113,7 +113,7 @@ int retrieveAuthInfo(char *meterId, char *spi, char *encrypt, char *secret, char
   return ret;
 }
 
-void processRequestMsg(SRpcMsg *pMsg) {
+void processRequestMsg(SRpcMsg *pMsg, SRpcIpSet *pIpSet) {
   SRpcMsg *pTemp;
 
   pTemp = taosAllocateQitem(sizeof(SRpcMsg));
@@ -126,6 +126,8 @@ void processRequestMsg(SRpcMsg *pMsg) {
 int main(int argc, char *argv[]) {
   SRpcInit rpcInit;
   char     dataName[20] = "server.data";
+
+  taosBlockSIGPIPE();
 
   memset(&rpcInit, 0, sizeof(rpcInit));
   rpcInit.localPort    = 7000;

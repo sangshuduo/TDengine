@@ -21,7 +21,7 @@ extern "C" {
 #endif
 
 #include "qextbuffer.h"
-#include "qinterpolation.h"
+#include "qfill.h"
 #include "taosmsg.h"
 #include "tlosertree.h"
 #include "tsclient.h"
@@ -60,7 +60,7 @@ typedef struct SLocalReducer {
   char *                 prevRowOfInput;
   tFilePage *            pResultBuf;
   int32_t                nResultBufSize;
-  char *                 pBufForInterpo;  // intermediate buffer for interpolation
+//  char *                 pBufForInterpo;  // intermediate buffer for interpolation
   tFilePage *            pTempBuffer;
   struct SQLFunctionCtx *pCtx;
   int32_t                rowSize;     // size of each intermediate result.
@@ -68,9 +68,9 @@ typedef struct SLocalReducer {
   bool                   hasPrevRow;  // cannot be released
   bool                   hasUnprocessedRow;
   tOrderDescriptor *     pDesc;
-  SColumnModel *            resColModel;
+  SColumnModel *         resColModel;
   tExtMemBuffer **       pExtMemBuffer;      // disk-based buffer
-  SInterpolationInfo     interpolationInfo;  // interpolation support structure
+  SFillInfo*             pFillInfo;         // interpolation support structure
   char *                 pFinalRes;          // result data after interpo
   tFilePage *            discardData;
   SResultInfo *          pResInfo;
@@ -116,7 +116,7 @@ int32_t tscFlushTmpBuffer(tExtMemBuffer *pMemoryBuf, tOrderDescriptor *pDesc, tF
  * create local reducer to launch the second-stage reduce process at client site
  */
 void tscCreateLocalReducer(tExtMemBuffer **pMemBuffer, int32_t numOfBuffer, tOrderDescriptor *pDesc,
-                           SColumnModel *finalModel, SSqlCmd *pSqlCmd, SSqlRes *pRes);
+                           SColumnModel *finalModel, SSqlObj* pSql);
 
 void tscDestroyLocalReducer(SSqlObj *pSql);
 

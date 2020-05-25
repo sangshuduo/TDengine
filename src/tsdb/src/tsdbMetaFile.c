@@ -23,12 +23,12 @@
 #define TSDB_META_FILE_HEADER_SIZE 512
 
 typedef struct {
-  int32_t offset;
-  int32_t size;
-  int64_t uid;
+  int32_t  offset;
+  int32_t  size;
+  uint64_t uid;
 } SRecordInfo;
 
-static int32_t tsdbGetMetaFileName(char *rootDir, char *fname);
+// static int32_t tsdbGetMetaFileName(char *rootDir, char *fname);
 // static int32_t tsdbCheckMetaHeader(int fd);
 static int32_t tsdbWriteMetaHeader(int fd);
 static int     tsdbCreateMetaFile(char *fname);
@@ -76,7 +76,7 @@ SMetaFile *tsdbInitMetaFile(char *rootDir, int32_t maxTables, iterFunc iFunc, af
   return mfh;
 }
 
-int32_t tsdbInsertMetaRecord(SMetaFile *mfh, int64_t uid, void *cont, int32_t contLen) {
+int32_t tsdbInsertMetaRecord(SMetaFile *mfh, uint64_t uid, void *cont, int32_t contLen) {
   if (taosHashGet(mfh->map, (char *)(&uid), sizeof(uid)) != NULL) {
     return -1;
   }
@@ -112,7 +112,7 @@ int32_t tsdbInsertMetaRecord(SMetaFile *mfh, int64_t uid, void *cont, int32_t co
   return 0;
 }
 
-int32_t tsdbDeleteMetaRecord(SMetaFile *mfh, int64_t uid) {
+int32_t tsdbDeleteMetaRecord(SMetaFile *mfh, uint64_t uid) {
   char *ptr = taosHashGet(mfh->map, (char *)(&uid), sizeof(uid));
   if (ptr == NULL) return -1;
 
@@ -139,7 +139,7 @@ int32_t tsdbDeleteMetaRecord(SMetaFile *mfh, int64_t uid) {
   return 0;
 }
 
-int32_t tsdbUpdateMetaRecord(SMetaFile *mfh, int64_t uid, void *cont, int32_t contLen) {
+int32_t tsdbUpdateMetaRecord(SMetaFile *mfh, uint64_t uid, void *cont, int32_t contLen) {
   char *ptr = taosHashGet(mfh->map, (char *)(&uid), sizeof(uid));
   if (ptr == NULL) return -1;
 
@@ -180,7 +180,7 @@ void tsdbCloseMetaFile(SMetaFile *mfh) {
   tfree(mfh);
 }
 
-static int32_t tsdbGetMetaFileName(char *rootDir, char *fname) {
+int32_t tsdbGetMetaFileName(char *rootDir, char *fname) {
   if (rootDir == NULL) return -1;
   sprintf(fname, "%s/%s", rootDir, TSDB_META_FILE_NAME);
   return 0;

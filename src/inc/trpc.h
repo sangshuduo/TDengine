@@ -48,6 +48,7 @@ typedef struct {
   int     contLen;
   int32_t code;
   void   *handle;
+  void   *ahandle;  //app handle set by client, for debug purpose
 } SRpcMsg;
 
 typedef struct {
@@ -66,10 +67,7 @@ typedef struct {
   char *ckey;         // ciphering key
 
   // call back to process incoming msg, code shall be ignored by server app
-  void (*cfp)(SRpcMsg *);  
-
-  // call back to process notify the ipSet changes, for client app only
-  void (*ufp)(void *ahandle, SRpcIpSet *pIpSet);
+  void (*cfp)(SRpcMsg *, SRpcIpSet *);  
 
   // call back to retrieve the client auth info, for server app only 
   int  (*afp)(char *tableId, char *spi, char *encrypt, char *secret, char *ckey);

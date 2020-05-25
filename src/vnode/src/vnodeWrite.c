@@ -51,10 +51,7 @@ int32_t vnodeProcessWrite(void *param1, int qtype, void *param2, void *item) {
   if (vnodeProcessWriteMsgFp[pHead->msgType] == NULL) 
     return TSDB_CODE_MSG_NOT_PROCESSED; 
 
-  if (pVnode->status != TAOS_VN_STATUS_READY && qtype == TAOS_QTYPE_RPC) 
-    return TSDB_CODE_NOT_ACTIVE_VNODE; 
-
-  if (pHead->version == 0) { // from client 
+  if (pHead->version == 0) { // from client or CQ 
     if (pVnode->status != TAOS_VN_STATUS_READY) 
       return TSDB_CODE_NOT_ACTIVE_VNODE;
 
@@ -64,12 +61,10 @@ int32_t vnodeProcessWrite(void *param1, int qtype, void *param2, void *item) {
     // assign version
     pVnode->version++;
     pHead->version = pVnode->version;
-  } else {  
+  } else { // from wal or forward 
     // for data from WAL or forward, version may be smaller
     if (pHead->version <= pVnode->version) return 0;
   }
-   
-  // more status and role checking here
 
   pVnode->version = pHead->version;
 
@@ -77,9 +72,12 @@ int32_t vnodeProcessWrite(void *param1, int qtype, void *param2, void *item) {
   code = walWrite(pVnode->wal, pHead);
   if (code < 0) return code;
 
-  int32_t syncCode = syncForwardToPeer(pVnode->sync, pHead, item);
+  // forward to peers, even it is WAL/FWD, it shall be called to update version in sync 
+  int32_t syncCode = 0;
+  syncCode = syncForwardToPeer(pVnode->sync, pHead, item, qtype);
   if (syncCode < 0) return syncCode;
 
+  // write data locally 
   code = (*vnodeProcessWriteMsgFp[pHead->msgType])(pVnode, pHead->cont, item);
   if (code < 0) return code;
 
@@ -92,17 +90,16 @@ static int32_t vnodeProcessSubmitMsg(SVnodeObj *pVnode, void *pCont, SRspRet *pR
   // save insert result into item
 
   vTrace("vgId:%d, submit msg is processed", pVnode->vgId);
-  code = tsdbInsertData(pVnode->tsdb, pCont);
-
+  
   pRet->len = sizeof(SShellSubmitRspMsg);
   pRet->rsp = rpcMallocCont(pRet->len);
   SShellSubmitRspMsg *pRsp = pRet->rsp;
-
+  code = tsdbInsertData(pVnode->tsdb, pCont, pRsp);
+  pRsp->numOfFailedBlocks = 0; //TODO
+  //pRet->len += pRsp->numOfFailedBlocks * sizeof(SShellSubmitRspBlock); //TODO
   pRsp->code              = 0;
   pRsp->numOfRows         = htonl(1);
-  pRsp->affectedRows      = htonl(1);
-  pRsp->numOfFailedBlocks = 0;
-
+  
   return code;
 }
 

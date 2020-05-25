@@ -33,7 +33,7 @@ typedef struct SDnodeObj {
   int32_t    dnodeId;
   uint16_t   dnodePort;
   char       dnodeFqdn[TSDB_FQDN_LEN + 1];
-  char       dnodeEp[TSDB_FQDN_LEN + 1];
+  char       dnodeEp[TSDB_EP_LEN + 1];
   int64_t    createdTime;
   uint32_t   lastAccess;
   int32_t    openVnodes;
@@ -63,12 +63,10 @@ typedef struct SMnodeObj {
   int8_t     updateEnd[1];
   int32_t    refCount;
   int8_t     role;
-  SDnodeObj *pDnode;
 } SMnodeObj;
 
-// todo use dynamic length string
 typedef struct {
-  char   tableId[TSDB_TABLE_ID_LEN + 1];
+  char  *tableId;
   int8_t type;
 } STableObj;
 
@@ -77,6 +75,7 @@ typedef struct SSuperTableObj {
   uint64_t   uid;
   int64_t    createdTime;
   int32_t    sversion;
+  int32_t    tversion;
   int32_t    numOfColumns;
   int32_t    numOfTags;
   int8_t     reserved[15];
@@ -85,8 +84,7 @@ typedef struct SSuperTableObj {
   int32_t    numOfTables;
   int16_t    nextColId;
   SSchema *  schema;
-  int32_t    vgLen;
-  int32_t *  vgList;
+  void *     vgHash;
 } SSuperTableObj;
 
 typedef struct {
@@ -123,7 +121,6 @@ typedef struct SVgObj {
   int32_t        numOfVnodes;
   int32_t        lbDnodeId;
   int32_t        lbTime;
-  int8_t         status;
   int8_t         inUse;
   int8_t         reserved[13];
   int8_t         updateEnd[1];
@@ -224,7 +221,7 @@ typedef struct SAcctObj {
 typedef struct {
   int8_t   type;
   char     db[TSDB_DB_NAME_LEN + 1];
-  void *   pNode;
+  void *   pIter;
   int16_t  numOfColumns;
   int32_t  rowSize;
   int32_t  numOfRows;

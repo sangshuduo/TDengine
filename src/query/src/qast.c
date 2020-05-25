@@ -476,44 +476,6 @@ typedef struct {
   SEndPoint* end;
 } SQueryCond;
 
-//static void setInitialValueForRangeQueryCondition(tSKipListQueryCond *q, int8_t type) {
-//  q->lowerBndRelOptr = TSDB_RELATION_GREATER;
-//  q->upperBndRelOptr = TSDB_RELATION_LESS;
-//
-//  switch (type) {
-//    case TSDB_DATA_TYPE_BOOL:
-//    case TSDB_DATA_TYPE_TINYINT:
-//    case TSDB_DATA_TYPE_SMALLINT:
-//    case TSDB_DATA_TYPE_INT:
-//    case TSDB_DATA_TYPE_BIGINT: {
-//      q->upperBnd.nType = TSDB_DATA_TYPE_BIGINT;
-//      q->lowerBnd.nType = TSDB_DATA_TYPE_BIGINT;
-//
-//      q->upperBnd.i64Key = INT64_MAX;
-//      q->lowerBnd.i64Key = INT64_MIN;
-//      break;
-//    };
-//    case TSDB_DATA_TYPE_FLOAT:
-//    case TSDB_DATA_TYPE_DOUBLE: {
-//      q->upperBnd.nType = TSDB_DATA_TYPE_DOUBLE;
-//      q->lowerBnd.nType = TSDB_DATA_TYPE_DOUBLE;
-//      q->upperBnd.dKey = DBL_MAX;
-//      q->lowerBnd.dKey = -DBL_MIN;
-//      break;
-//    };
-//    case TSDB_DATA_TYPE_NCHAR:
-//    case TSDB_DATA_TYPE_BINARY: {
-//      q->upperBnd.nType = type;
-//      q->upperBnd.pz = NULL;
-//      q->upperBnd.nLen = -1;
-//
-//      q->lowerBnd.nType = type;
-//      q->lowerBnd.pz = NULL;
-//      q->lowerBnd.nLen = -1;
-//    }
-//  }
-//}
-
 // todo check for malloc failure
 static int32_t setQueryCond(tQueryInfo *queryColInfo, SQueryCond* pCond) {
   int32_t optr = queryColInfo->optr;
@@ -760,7 +722,7 @@ static bool filterItem(tExprNode *pExpr, const void *pItem, SExprTraverseSupp *p
   assert(pLeft->nodeType == TSQL_NODE_COL && pRight->nodeType == TSQL_NODE_VALUE);
   param->setupInfoFn(pExpr, param->pExtInfo);
 
-  return param->fp(pItem, pExpr->_node.info);
+  return param->nodeFilterFn(pItem, pExpr->_node.info);
 }
 
 /**
@@ -792,7 +754,6 @@ static void exprTreeTraverseImpl(tExprNode *pExpr, SArray *pResult, SExprTravers
   free(array);
 }
 
-
 static void tSQLBinaryTraverseOnSkipList(tExprNode *pExpr, SArray *pResult, SSkipList *pSkipList, SExprTraverseSupp *param ) {
   SSkipListIterator* iter = tSkipListCreateIter(pSkipList);
 
@@ -805,40 +766,35 @@ static void tSQLBinaryTraverseOnSkipList(tExprNode *pExpr, SArray *pResult, SSki
   tSkipListDestroyIter(iter);
 }
 
-static void tQueryIndexlessColumn(SSkipList* pSkipList, tQueryInfo* pQueryInfo, SArray* result) {
+static void tQueryIndexlessColumn(SSkipList* pSkipList, tQueryInfo* pQueryInfo, SArray* res, __result_filter_fn_t filterFp) {
   SSkipListIterator* iter = tSkipListCreateIter(pSkipList);
 
   while (tSkipListIterNext(iter)) {
     bool addToResult = false;
 
     SSkipListNode *pNode = tSkipListIterGet(iter);
-    char* pTable = SL_GET_NODE_DATA(pNode);
-    
-    //todo refactor:
-    tstr* name = ((STableIndexElem*) pTable)->pTable->name;
-//    char* name = NULL;
-//    tsdbGetTableName(tsdb, pTable, &name);
+    char *         pData = SL_GET_NODE_DATA(pNode);
 
+    // todo refactor:
+    tstr *name = ((STableIndexElem *)pData)->pTable->name;
     // todo speed up by using hash
     if (pQueryInfo->colIndex == TSDB_TBNAME_COLUMN_INDEX) {
       if (pQueryInfo->optr == TSDB_RELATION_IN) {
         addToResult = pQueryInfo->compare(name, pQueryInfo->q);
-      } else if(pQueryInfo->optr == TSDB_RELATION_LIKE) {
+      } else if (pQueryInfo->optr == TSDB_RELATION_LIKE) {
         addToResult = !pQueryInfo->compare(name, pQueryInfo->q);
       }
     } else {
-      // TODO: other columns
+      addToResult = filterFp(pNode, pQueryInfo);
     }
 
     if (addToResult) {
-      taosArrayPush(result, pTable);
+      taosArrayPush(res, pData);
     }
   }
 
   tSkipListDestroyIter(iter);
 }
-
-
 
 // post-root order traverse syntax tree
 void tExprTreeTraverse(tExprNode *pExpr, SSkipList *pSkipList, SArray *result, SExprTraverseSupp *param) {
@@ -855,7 +811,7 @@ void tExprTreeTraverse(tExprNode *pExpr, SSkipList *pSkipList, SArray *result, S
 
     param->setupInfoFn(pExpr, param->pExtInfo);
     if (pSkipList == NULL) {
-      tArrayTraverse(pExpr, param->fp, result);
+      tArrayTraverse(pExpr, param->nodeFilterFn, result);
       return;
     }
 
@@ -863,7 +819,7 @@ void tExprTreeTraverse(tExprNode *pExpr, SSkipList *pSkipList, SArray *result, S
     if (pQueryInfo->colIndex == 0 && pQueryInfo->optr != TSDB_RELATION_LIKE) {
       tQueryIndexColumn(pSkipList, pQueryInfo, result);
     } else {
-      tQueryIndexlessColumn(pSkipList, pQueryInfo, result);
+      tQueryIndexlessColumn(pSkipList, pQueryInfo, result, param->nodeFilterFn);
     }
 
     return;
@@ -1096,14 +1052,13 @@ static void* exception_malloc(size_t size) {
   return p;
 }
 
-static char* exception_strdup(const char* str) {
+static UNUSED_FUNC char* exception_strdup(const char* str) {
   char* p = strdup(str);
   if (p == NULL) {
     THROW(TSDB_CODE_SERV_OUT_OF_MEMORY);
   }
   return p;
 }
-
 
 static tExprNode* exprTreeFromBinaryImpl(SBufferReader* br) {
   int32_t anchor = CLEANUP_GET_ANCHOR();
@@ -1200,28 +1155,33 @@ tExprNode* exprTreeFromTableName(const char* tbnameCond) {
     tVariant* pVal = exception_calloc(1, sizeof(tVariant));
     right->pVal = pVal;
     pVal->nType = TSDB_DATA_TYPE_ARRAY;
-    pVal->arr = taosArrayInit(2, sizeof(char*));
+    pVal->arr = taosArrayInit(2, POINTER_BYTES);
 
     const char* cond = tbnameCond + QUERY_COND_REL_PREFIX_IN_LEN;
     for (const char *e = cond; *e != 0; e++) {
       if (*e == TS_PATH_DELIMITER[0]) {
         cond = e + 1;
       } else if (*e == ',') {
-        size_t len = e - cond + 1;
-        char* p = exception_malloc( len );
-        memcpy(p, cond, len);
-        p[len - 1] = 0;
+        size_t len = e - cond + VARSTR_HEADER_SIZE;
+        char* p = exception_malloc(len);
+        varDataSetLen(p, len - VARSTR_HEADER_SIZE);
+        memcpy(varDataVal(p), cond, len);
         cond += len;
         taosArrayPush(pVal->arr, &p);
       }
     }
 
     if (*cond != 0) {
-        char* p = exception_strdup( cond );
-        taosArrayPush(pVal->arr, &p);
+      size_t len = strlen(cond) + VARSTR_HEADER_SIZE;
+      
+      char* p = exception_malloc(len);
+      varDataSetLen(p, len - VARSTR_HEADER_SIZE);
+      memcpy(varDataVal(p), cond, len);
+      
+      taosArrayPush(pVal->arr, &p);
     }
 
-    taosArraySortString(pVal->arr);
+    taosArraySortString(pVal->arr, taosArrayCompareString);
   }
 
   CLEANUP_EXECUTE_TO(anchor, false);

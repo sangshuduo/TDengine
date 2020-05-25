@@ -22,11 +22,6 @@ extern "C" {
 
 #include "mgmtDef.h"
 
-enum _TSDB_VG_STATUS {
-  TSDB_VG_STATUS_READY,
-  TSDB_VG_STATUS_UPDATE
-};
-
 int32_t mgmtInitVgroups();
 void    mgmtCleanUpVgroups();
 SVgObj *mgmtGetVgroup(int32_t vgId);
@@ -34,8 +29,9 @@ void    mgmtIncVgroupRef(SVgObj *pVgroup);
 void    mgmtDecVgroupRef(SVgObj *pVgroup);
 void    mgmtDropAllDbVgroups(SDbObj *pDropDb, bool sendMsg);
 void    mgmtDropAllDnodeVgroups(SDnodeObj *pDropDnode);
+void    mgmtUpdateAllDbVgroups(SDbObj *pAlterDb);
 
-void *  mgmtGetNextVgroup(void *pNode, SVgObj **pVgroup);
+void *  mgmtGetNextVgroup(void *pIter, SVgObj **pVgroup);
 void    mgmtUpdateVgroup(SVgObj *pVgroup);
 void    mgmtUpdateVgroupStatus(SVgObj *pVgroup, SDnodeObj *dnodeId, SVnodeLoad *pVload);
 

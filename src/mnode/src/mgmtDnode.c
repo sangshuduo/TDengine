@@ -129,7 +129,7 @@ int32_t mgmtInitDnodes() {
   SSdbTableDesc tableDesc = {
     .tableId      = SDB_TABLE_DNODE,
     .tableName    = "dnodes",
-    .hashSessions = TSDB_MAX_DNODES,
+    .hashSessions = TSDB_DEFAULT_DNODES_HASH_SIZE,
     .maxRowSize   = tsDnodeUpdateSize,
     .refCountPos  = (int8_t *)(&tObj.refCount) - (int8_t *)&tObj,
     .keyType      = SDB_KEY_AUTO,
@@ -170,12 +170,29 @@ void mgmtCleanupDnodes() {
   sdbCloseTable(tsDnodeSdb);
 }
 
-void *mgmtGetNextDnode(void *pNode, SDnodeObj **pDnode) { 
-  return sdbFetchRow(tsDnodeSdb, pNode, (void **)pDnode); 
+void *mgmtGetNextDnode(void *pIter, SDnodeObj **pDnode) { 
+  return sdbFetchRow(tsDnodeSdb, pIter, (void **)pDnode); 
 }
 
 int32_t mgmtGetDnodesNum() {
   return sdbGetNumOfRows(tsDnodeSdb);
+}
+
+int32_t mgmtGetOnlinDnodesNum(char *ep) {
+  SDnodeObj *pDnode = NULL;
+  void *     pIter = NULL;
+  int32_t    onlineDnodes = 0;
+
+  while (1) {
+    pIter = mgmtGetNextDnode(pIter, &pDnode);
+    if (pDnode == NULL) break;
+    if (pDnode->status != TAOS_DN_STATUS_OFFLINE) onlineDnodes++;
+    mgmtDecDnodeRef(pDnode);
+  }
+
+  sdbFreeIter(pIter);
+
+  return onlineDnodes;
 }
 
 void *mgmtGetDnode(int32_t dnodeId) {
@@ -184,16 +201,19 @@ void *mgmtGetDnode(int32_t dnodeId) {
 
 void *mgmtGetDnodeByEp(char *ep) {
   SDnodeObj *pDnode = NULL;
-  void *     pNode = NULL;
+  void *     pIter = NULL;
 
   while (1) {
-    pNode = mgmtGetNextDnode(pNode, &pDnode);
+    pIter = mgmtGetNextDnode(pIter, &pDnode);
     if (pDnode == NULL) break;
     if (strcmp(ep, pDnode->dnodeEp) == 0) {
+      sdbFreeIter(pIter);
       return pDnode;
     }
     mgmtDecDnodeRef(pDnode);
   }
+
+  sdbFreeIter(pIter);
 
   return NULL;
 }
@@ -393,7 +413,6 @@ static int32_t mgmtCreateDnode(char *ep) {
   return code;
 }
 
-//TODO drop others tables
 int32_t mgmtDropDnode(SDnodeObj *pDnode) {
   SSdbOper oper = {
     .type = SDB_OPER_GLOBAL,
@@ -406,7 +425,7 @@ int32_t mgmtDropDnode(SDnodeObj *pDnode) {
     code = TSDB_CODE_SDB_ERROR;
   }
 
-  mLPrint("dnode:%d is dropped from cluster, result:%s", pDnode->dnodeId, tstrerror(code));
+  mLPrint("dnode:%d, is dropped from cluster, result:%s", pDnode->dnodeId, tstrerror(code));
   return code;
 }
 
@@ -530,7 +549,7 @@ static int32_t mgmtGetDnodeMeta(STableMetaMsg *pMeta, SShowObj *pShow, void *pCo
 
   pShow->numOfRows = mgmtGetDnodesNum();
   pShow->rowSize = pShow->offset[cols - 1] + pShow->bytes[cols - 1];
-  pShow->pNode = NULL;
+  pShow->pIter = NULL;
 
   mgmtDecUserRef(pUser);
 
@@ -544,7 +563,7 @@ static int32_t mgmtRetrieveDnodes(SShowObj *pShow, char *data, int32_t rows, voi
   char      *pWrite;
 
   while (numOfRows < rows) {
-    pShow->pNode = mgmtGetNextDnode(pShow->pNode, &pDnode);
+    pShow->pIter = mgmtGetNextDnode(pShow->pIter, &pDnode);
     if (pDnode == NULL) break;
 
     cols = 0;
@@ -636,7 +655,7 @@ static int32_t mgmtGetModuleMeta(STableMetaMsg *pMeta, SShowObj *pShow, void *pC
 
   pShow->numOfRows = mgmtGetDnodesNum() * TSDB_MOD_MAX;
   pShow->rowSize = pShow->offset[cols - 1] + pShow->bytes[cols - 1];
-  pShow->pNode = NULL;
+  pShow->pIter = NULL;
   mgmtDecUserRef(pUser);
 
   return 0;
@@ -648,7 +667,7 @@ int32_t mgmtRetrieveModules(SShowObj *pShow, char *data, int32_t rows, void *pCo
 
   while (numOfRows < rows) {
     SDnodeObj *pDnode = NULL;
-    pShow->pNode = mgmtGetNextDnode(pShow->pNode, (SDnodeObj **)&pDnode);
+    pShow->pIter = mgmtGetNextDnode(pShow->pIter, (SDnodeObj **)&pDnode);
     if (pDnode == NULL) break;
 
     for (int32_t moduleType = 0; moduleType < TSDB_MOD_MAX; ++moduleType) {
@@ -738,7 +757,7 @@ static int32_t mgmtGetConfigMeta(STableMetaMsg *pMeta, SShowObj *pShow, void *pC
   }
 
   pShow->rowSize = pShow->offset[cols - 1] + pShow->bytes[cols - 1];
-  pShow->pNode = NULL;
+  pShow->pIter = NULL;
   mgmtDecUserRef(pUser);
 
   return 0;
@@ -821,7 +840,8 @@ static int32_t mgmtGetVnodeMeta(STableMetaMsg *pMeta, SShowObj *pShow, void *pCo
   if (pShow->payloadLen > 0 ) {
     pDnode = mgmtGetDnodeByEp(pShow->payload);
   } else {
-    mgmtGetNextDnode(NULL, (SDnodeObj **)&pDnode);
+    void *pIter = mgmtGetNextDnode(NULL, (SDnodeObj **)&pDnode);
+    sdbFreeIter(pIter);
   }
 
   if (pDnode != NULL) {
@@ -830,7 +850,7 @@ static int32_t mgmtGetVnodeMeta(STableMetaMsg *pMeta, SShowObj *pShow, void *pCo
   }
 
   pShow->rowSize = pShow->offset[cols - 1] + pShow->bytes[cols - 1];
-  pShow->pNode = pDnode;
+  pShow->pIter = pDnode;
   mgmtDecUserRef(pUser);
 
   return 0;
@@ -844,12 +864,12 @@ static int32_t mgmtRetrieveVnodes(SShowObj *pShow, char *data, int32_t rows, voi
 
   if (0 == rows) return 0;
 
-  pDnode = (SDnodeObj *)(pShow->pNode);
+  pDnode = (SDnodeObj *)(pShow->pIter);
   if (pDnode != NULL) {
-    void *pNode = NULL;
+    void *pIter = NULL;
     SVgObj *pVgroup;
     while (1) {
-      pNode = mgmtGetNextVgroup(pNode, &pVgroup);
+      pIter = mgmtGetNextVgroup(pIter, &pVgroup);
       if (pVgroup == NULL) break;
 
       for (int32_t i = 0; i < pVgroup->numOfVnodes; ++i) {
@@ -869,6 +889,7 @@ static int32_t mgmtRetrieveVnodes(SShowObj *pShow, char *data, int32_t rows, voi
 
       mgmtDecVgroupRef(pVgroup);
     }
+    sdbFreeIter(pIter);
   } else {
     numOfRows = 0;
   }

@@ -57,7 +57,7 @@ typedef struct {
 // if name is empty(name[0] is zero), get the file from index or after, used by master
 // if name is provided(name[0] is not zero), get the named file at the specified index, used by unsynced node
 // it returns the file magic number and size, if file not there, magic shall be 0.
-typedef uint32_t (*FGetFileInfo)(void *ahandle, char *name, uint32_t *index, int32_t *size); 
+typedef uint32_t (*FGetFileInfo)(void *ahandle, char *name, uint32_t *index, int32_t *size, uint64_t *fversion); 
 
 // get the wal file from index or after
 // return value, -1: error, 1:more wal files, 0:last WAL. if name[0]==0, no WAL file
@@ -73,7 +73,7 @@ typedef void     (*FConfirmForward)(void *ahandle, void *mhandle, int32_t code);
 typedef void     (*FNotifyRole)(void *ahandle, int8_t role);
 
 // when data file is synced successfully, notity app
-typedef void     (*FNotifyFileSynced)(void *ahandle);
+typedef void     (*FNotifyFileSynced)(void *ahandle, uint64_t fversion);
 
 typedef struct {
   int32_t    vgId;      // vgroup ID
@@ -94,8 +94,8 @@ typedef void* tsync_h;
 
 tsync_h syncStart(const SSyncInfo *);
 void    syncStop(tsync_h shandle);
-int     syncReconfig(tsync_h shandle, const SSyncCfg *);
-int     syncForwardToPeer(tsync_h shandle, void *pHead, void *mhandle);
+int32_t syncReconfig(tsync_h shandle, const SSyncCfg *);
+int32_t syncForwardToPeer(tsync_h shandle, void *pHead, void *mhandle, int qtype);
 void    syncConfirmForward(tsync_h shandle, uint64_t version, int32_t code);
 void    syncRecover(tsync_h shandle);      // recover from other nodes:
 int     syncGetNodesRole(tsync_h shandle, SNodesRole *);

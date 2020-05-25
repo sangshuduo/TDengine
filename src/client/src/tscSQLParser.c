@@ -1297,10 +1297,6 @@ SSqlExpr* doAddProjectCol(SQueryInfo* pQueryInfo, int32_t outputIndex, int32_t c
       pSchema->bytes, functionId == TSDB_FUNC_TAGPRJ);
 }
 
-void addRequiredTagColumn(STableMetaInfo* pTableMetaInfo, SColumnIndex* index) {
-
-}
-
 static void addProjectQueryCol(SQueryInfo* pQueryInfo, int32_t startPos, SColumnIndex* pIndex, tSQLExprItem* pItem) {
   SSqlExpr* pExpr = doAddProjectCol(pQueryInfo, startPos, pIndex->columnIndex, pIndex->tableIndex);
 
@@ -1352,7 +1348,7 @@ static int32_t doAddProjectionExprAndResultFields(SQueryInfo* pQueryInfo, SColum
 
   STableComInfo tinfo = tscGetTableInfo(pTableMeta);
   
-  if (UTIL_TABLE_IS_SUPERTABLE(pTableMetaInfo)) {
+  if (UTIL_TABLE_IS_SUPER_TABLE(pTableMetaInfo)) {
     numOfTotalColumns = tinfo.numOfColumns + tinfo.numOfTags;
   } else {
     numOfTotalColumns = tinfo.numOfColumns;
@@ -1412,7 +1408,7 @@ int32_t addProjectionExprAndResultField(SQueryInfo* pQueryInfo, tSQLExprItem* pI
       STableMetaInfo* pTableMetaInfo = tscGetMetaInfo(pQueryInfo, index.tableIndex);
       STableMeta*     pTableMeta = pTableMetaInfo->pTableMeta;
 
-      if (index.columnIndex >= tscGetNumOfColumns(pTableMeta) && UTIL_TABLE_IS_NOMRAL_TABLE(pTableMetaInfo)) {
+      if (index.columnIndex >= tscGetNumOfColumns(pTableMeta) && UTIL_TABLE_IS_NORMAL_TABLE(pTableMetaInfo)) {
         return invalidSqlErrMsg(pQueryInfo->msg, msg1);
       }
 
@@ -1866,7 +1862,7 @@ int32_t addExprAndResultField(SQueryInfo* pQueryInfo, int32_t colIndex, tSQLExpr
     
     case TK_TBID: {
       pTableMetaInfo = tscGetMetaInfo(pQueryInfo, 0);
-      if (UTIL_TABLE_IS_NOMRAL_TABLE(pTableMetaInfo)) {
+      if (UTIL_TABLE_IS_NORMAL_TABLE(pTableMetaInfo)) {
         return invalidSqlErrMsg(pQueryInfo->msg, msg7);
       }
     
@@ -2283,7 +2279,7 @@ bool validateIpAddress(const char* ip, size_t size) {
 int32_t tscTansformSQLFuncForSTableQuery(SQueryInfo* pQueryInfo) {
   STableMetaInfo* pTableMetaInfo = tscGetMetaInfo(pQueryInfo, 0);
 
-  if (pTableMetaInfo->pTableMeta == NULL || !UTIL_TABLE_IS_SUPERTABLE(pTableMetaInfo)) {
+  if (pTableMetaInfo->pTableMeta == NULL || !UTIL_TABLE_IS_SUPER_TABLE(pTableMetaInfo)) {
     return TSDB_CODE_INVALID_SQL;
   }
 
@@ -2322,7 +2318,7 @@ int32_t tscTansformSQLFuncForSTableQuery(SQueryInfo* pQueryInfo) {
 /* transfer the field-info back to original input format */
 void tscRestoreSQLFuncForSTableQuery(SQueryInfo* pQueryInfo) {
   STableMetaInfo* pTableMetaInfo = tscGetMetaInfo(pQueryInfo, 0);
-  if (!UTIL_TABLE_IS_SUPERTABLE(pTableMetaInfo)) {
+  if (!UTIL_TABLE_IS_SUPER_TABLE(pTableMetaInfo)) {
     return;
   }
   
@@ -2546,7 +2542,7 @@ int32_t parseGroupbyClause(SQueryInfo* pQueryInfo, tVariantList* pList, SSqlCmd*
     }
     
     if (groupTag) {
-      if (!UTIL_TABLE_IS_SUPERTABLE(pTableMetaInfo)) {
+      if (!UTIL_TABLE_IS_SUPER_TABLE(pTableMetaInfo)) {
         return invalidSqlErrMsg(pQueryInfo->msg, msg9);
       }
 
@@ -3258,7 +3254,7 @@ static bool validateJoinExprNode(SQueryInfo* pQueryInfo, tSQLExpr* pExpr, SColum
   }
 
   // table to table/ super table to super table are allowed
-  if (UTIL_TABLE_IS_SUPERTABLE(pLeftMeterMeta) != UTIL_TABLE_IS_SUPERTABLE(pRightMeterMeta)) {
+  if (UTIL_TABLE_IS_SUPER_TABLE(pLeftMeterMeta) != UTIL_TABLE_IS_SUPER_TABLE(pRightMeterMeta)) {
     invalidSqlErrMsg(pQueryInfo->msg, msg5);
     return false;
   }
@@ -3294,14 +3290,15 @@ static int32_t setExprToCond(tSQLExpr** parent, tSQLExpr* pExpr, const char* msg
 
 static int32_t handleExprInQueryCond(SQueryInfo* pQueryInfo, tSQLExpr** pExpr, SCondExpr* pCondExpr, int32_t* type,
                                      int32_t parentOptr) {
-  const char* msg1 = "meter query cannot use tags filter";
+  const char* msg1 = "table query cannot use tags filter";
   const char* msg2 = "illegal column name";
   const char* msg3 = "only one query time range allowed";
   const char* msg4 = "only one join condition allowed";
   const char* msg5 = "not support ordinary column join";
   const char* msg6 = "only one query condition on tbname allowed";
   const char* msg7 = "only in/like allowed in filter table name";
-
+  const char* msg8 = "wildcard string should be less than 20 characters";
+  
   tSQLExpr* pLeft = (*pExpr)->pLeft;
   tSQLExpr* pRight = (*pExpr)->pRight;
 
@@ -3341,14 +3338,14 @@ static int32_t handleExprInQueryCond(SQueryInfo* pQueryInfo, tSQLExpr** pExpr, S
   } else if (index.columnIndex >= tscGetNumOfColumns(pTableMeta) ||
              index.columnIndex == TSDB_TBNAME_COLUMN_INDEX) {  // query on tags
     // check for tag query condition
-    if (UTIL_TABLE_IS_NOMRAL_TABLE(pTableMetaInfo)) {
+    if (UTIL_TABLE_IS_NORMAL_TABLE(pTableMetaInfo)) {
       return invalidSqlErrMsg(pQueryInfo->msg, msg1);
     }
 
     // check for like expression
     if ((*pExpr)->nSQLOptr == TK_LIKE) {
       if (pRight->val.nLen > TSDB_PATTERN_STRING_MAX_LEN) {
-        return TSDB_CODE_INVALID_SQL;
+        return invalidSqlErrMsg(pQueryInfo->msg, msg8);
       }
 
       SSchema* pSchema = tscGetTableSchema(pTableMetaInfo->pTableMeta);
@@ -3363,6 +3360,10 @@ static int32_t handleExprInQueryCond(SQueryInfo* pQueryInfo, tSQLExpr** pExpr, S
     if (index.columnIndex == TSDB_TBNAME_COLUMN_INDEX) {
       if (!validTableNameOptr(*pExpr)) {
         return invalidSqlErrMsg(pQueryInfo->msg, msg7);
+      }
+  
+      if (!UTIL_TABLE_IS_SUPER_TABLE(pTableMetaInfo)) {
+        return invalidSqlErrMsg(pQueryInfo->msg, msg1);
       }
 
       if (pCondExpr->pTableCond == NULL) {
@@ -3562,7 +3563,7 @@ static int32_t setTableCondForSTableQuery(SQueryInfo* pQueryInfo, const char* ac
     return TSDB_CODE_SUCCESS;
   }
 
-  SStringBuilder sb1 = {0};
+  SStringBuilder sb1; memset(&sb1, 0, sizeof(sb1));
   taosStringBuilderAppendStringLen(&sb1, QUERY_COND_REL_PREFIX_IN, QUERY_COND_REL_PREFIX_IN_LEN);
 
   char db[TSDB_TABLE_ID_LEN] = {0};
@@ -3701,7 +3702,7 @@ static int32_t validateJoinExpr(SQueryInfo* pQueryInfo, SCondExpr* pCondExpr) {
   }
 
   STableMetaInfo* pTableMetaInfo = tscGetMetaInfo(pQueryInfo, 0);
-  if (UTIL_TABLE_IS_SUPERTABLE(pTableMetaInfo)) {  // for stable join, tag columns
+  if (UTIL_TABLE_IS_SUPER_TABLE(pTableMetaInfo)) {  // for stable join, tag columns
                                                    // must be present for join
     if (pCondExpr->pJoinExpr == NULL) {
       return invalidSqlErrMsg(pQueryInfo->msg, msg1);
@@ -3739,7 +3740,7 @@ static void cleanQueryExpr(SCondExpr* pCondExpr) {
 
 static void doAddJoinTagsColumnsIntoTagList(SQueryInfo* pQueryInfo, SCondExpr* pCondExpr) {
   STableMetaInfo* pTableMetaInfo = tscGetMetaInfo(pQueryInfo, 0);
-  if (QUERY_IS_JOIN_QUERY(pQueryInfo->type) && UTIL_TABLE_IS_SUPERTABLE(pTableMetaInfo)) {
+  if (QUERY_IS_JOIN_QUERY(pQueryInfo->type) && UTIL_TABLE_IS_SUPER_TABLE(pTableMetaInfo)) {
     SColumnIndex index = {0};
 
     getColumnIndexByName(&pCondExpr->pJoinExpr->pLeft->colInfo, pQueryInfo, &index);
@@ -3796,6 +3797,8 @@ static int32_t getTagQueryCondExpr(SQueryInfo* pQueryInfo, SCondExpr* pCondExpr,
     
     tSQLExprDestroy(p1);
     tExprTreeDestroy(&p, NULL);
+    
+    taosArrayDestroy(colList);
   }
 
   pCondExpr->pTagCond = NULL;
@@ -3810,12 +3813,10 @@ int32_t parseWhereClause(SQueryInfo* pQueryInfo, tSQLExpr** pExpr, SSqlObj* pSql
   const char* msg2 = "invalid filter expression";
 
   int32_t ret = TSDB_CODE_SUCCESS;
-
-  pQueryInfo->window.skey = 0;
-  pQueryInfo->window.ekey = INT64_MAX;
+  pQueryInfo->window = TSWINDOW_INITIALIZER;
 
   // tags query condition may be larger than 512bytes, therefore, we need to prepare enough large space
-  SStringBuilder sb = {0};
+  SStringBuilder sb; memset(&sb, 0, sizeof(sb));
   SCondExpr      condExpr = {0};
 
   if ((*pExpr)->pLeft == NULL || (*pExpr)->pRight == NULL) {
@@ -4022,19 +4023,19 @@ int32_t parseFillClause(SQueryInfo* pQueryInfo, SQuerySQL* pQuerySQL) {
   }
 
   if (strncasecmp(pItem->pVar.pz, "none", 4) == 0 && pItem->pVar.nLen == 4) {
-    pQueryInfo->interpoType = TSDB_INTERPO_NONE;
+    pQueryInfo->fillType = TSDB_FILL_NONE;
   } else if (strncasecmp(pItem->pVar.pz, "null", 4) == 0 && pItem->pVar.nLen == 4) {
-    pQueryInfo->interpoType = TSDB_INTERPO_NULL;
+    pQueryInfo->fillType = TSDB_FILL_NULL;
     for (int32_t i = START_INTERPO_COL_IDX; i < size; ++i) {
       TAOS_FIELD* pFields = tscFieldInfoGetField(&pQueryInfo->fieldsInfo, i);
       setNull((char*)&pQueryInfo->defaultVal[i], pFields->type, pFields->bytes);
     }
   } else if (strncasecmp(pItem->pVar.pz, "prev", 4) == 0 && pItem->pVar.nLen == 4) {
-    pQueryInfo->interpoType = TSDB_INTERPO_PREV;
+    pQueryInfo->fillType = TSDB_FILL_PREV;
   } else if (strncasecmp(pItem->pVar.pz, "linear", 6) == 0 && pItem->pVar.nLen == 6) {
-    pQueryInfo->interpoType = TSDB_INTERPO_LINEAR;
+    pQueryInfo->fillType = TSDB_FILL_LINEAR;
   } else if (strncasecmp(pItem->pVar.pz, "value", 5) == 0 && pItem->pVar.nLen == 5) {
-    pQueryInfo->interpoType = TSDB_INTERPO_SET_VALUE;
+    pQueryInfo->fillType = TSDB_FILL_SET_VALUE;
 
     if (pFillToken->nExpr == 1) {
       return invalidSqlErrMsg(pQueryInfo->msg, msg1);
@@ -4104,7 +4105,7 @@ static void setDefaultOrderInfo(SQueryInfo* pQueryInfo) {
   }
 
   /* for super table query, set default ascending order for group output */
-  if (UTIL_TABLE_IS_SUPERTABLE(pTableMetaInfo)) {
+  if (UTIL_TABLE_IS_SUPER_TABLE(pTableMetaInfo)) {
     pQueryInfo->groupbyExpr.orderType = TSDB_ORDER_ASC;
   }
 }
@@ -4130,7 +4131,7 @@ int32_t parseOrderbyClause(SQueryInfo* pQueryInfo, SQuerySQL* pQuerySql, SSchema
    *
    * for super table query, the order option must be less than 3.
    */
-  if (UTIL_TABLE_IS_NOMRAL_TABLE(pTableMetaInfo)) {
+  if (UTIL_TABLE_IS_NORMAL_TABLE(pTableMetaInfo)) {
     if (pSortorder->nExpr > 1) {
       return invalidSqlErrMsg(pQueryInfo->msg, msg0);
     }
@@ -4151,7 +4152,7 @@ int32_t parseOrderbyClause(SQueryInfo* pQueryInfo, SQuerySQL* pQuerySql, SSchema
   SSQLToken    columnName = {pVar->nLen, pVar->nType, pVar->pz};
   SColumnIndex index = {0};
 
-  if (UTIL_TABLE_IS_SUPERTABLE(pTableMetaInfo)) {  // super table query
+  if (UTIL_TABLE_IS_SUPER_TABLE(pTableMetaInfo)) {  // super table query
     if (getColumnIndexByName(&columnName, pQueryInfo, &index) != TSDB_CODE_SUCCESS) {
       return invalidSqlErrMsg(pQueryInfo->msg, msg1);
     }
@@ -4304,10 +4305,10 @@ int32_t setAlterTableInfo(SSqlObj* pSql, struct SSqlInfo* pInfo) {
 
   if (pAlterSQL->type == TSDB_ALTER_TABLE_ADD_TAG_COLUMN || pAlterSQL->type == TSDB_ALTER_TABLE_DROP_TAG_COLUMN ||
       pAlterSQL->type == TSDB_ALTER_TABLE_CHANGE_TAG_COLUMN) {
-    if (UTIL_TABLE_IS_NOMRAL_TABLE(pTableMetaInfo)) {
+    if (UTIL_TABLE_IS_NORMAL_TABLE(pTableMetaInfo)) {
       return invalidSqlErrMsg(pQueryInfo->msg, msg3);
     }
-  } else if ((pAlterSQL->type == TSDB_ALTER_TABLE_UPDATE_TAG_VAL) && (UTIL_TABLE_IS_SUPERTABLE(pTableMetaInfo))) {
+  } else if ((pAlterSQL->type == TSDB_ALTER_TABLE_UPDATE_TAG_VAL) && (UTIL_TABLE_IS_SUPER_TABLE(pTableMetaInfo))) {
     return invalidSqlErrMsg(pQueryInfo->msg, msg4);
   } else if ((pAlterSQL->type == TSDB_ALTER_TABLE_ADD_COLUMN || pAlterSQL->type == TSDB_ALTER_TABLE_DROP_COLUMN) &&
              UTIL_TABLE_IS_CHILD_TABLE(pTableMetaInfo)) {
@@ -4418,6 +4419,7 @@ int32_t setAlterTableInfo(SSqlObj* pSql, struct SSqlInfo* pInfo) {
         TSDB_CODE_SUCCESS) {
       return invalidSqlErrMsg(pQueryInfo->msg, msg13);
     }
+    pAlterSQL->tagData.dataLen = pTagsSchema->bytes;
 
     // validate the length of binary
     if ((pTagsSchema->type == TSDB_DATA_TYPE_BINARY || pTagsSchema->type == TSDB_DATA_TYPE_NCHAR) &&
@@ -4541,11 +4543,13 @@ int32_t validateDNodeConfig(tDCLSQL* pOptions) {
     return TSDB_CODE_INVALID_SQL;
   }
 
-  const SDNodeDynConfOption DNODE_DYNAMIC_CFG_OPTIONS[14] = {
-      {"resetLog", 8},      {"resetQueryCache", 15}, {"dDebugFlag", 10},       {"rpcDebugFlag", 12},
-      {"tmrDebugFlag", 12}, {"cDebugFlag", 10},      {"uDebugFlag", 10},       {"mDebugFlag", 10},
-      {"sdbDebugFlag", 12}, {"httpDebugFlag", 13},   {"monitorDebugFlag", 16}, {"qDebugflag", 10},
-      {"debugFlag", 9},     {"monitor", 7}};
+  const int DNODE_DYNAMIC_CFG_OPTIONS_SIZE = 17;
+  const SDNodeDynConfOption DNODE_DYNAMIC_CFG_OPTIONS[] = {
+      {"resetLog", 8},       {"resetQueryCache", 15},  {"debugFlag", 9},     {"mDebugFlag", 10},
+      {"dDebugFlag", 10},    {"sdbDebugFlag", 12},     {"vDebugFlag", 10},   {"cDebugFlag", 10},
+      {"httpDebugFlag", 13}, {"monitorDebugFlag", 16}, {"rpcDebugFlag", 12}, {"uDebugFlag", 10},
+      {"tmrDebugFlag", 12},  {"qDebugflag", 10},       {"sDebugflag", 10},   {"tsdbDebugFlag", 13},
+      {"monitor", 7}};
 
   SSQLToken* pOptionToken = &pOptions->a[1];
 
@@ -4557,8 +4561,8 @@ int32_t validateDNodeConfig(tDCLSQL* pOptions) {
         return TSDB_CODE_SUCCESS;
       }
     }
-  } else if ((strncasecmp(DNODE_DYNAMIC_CFG_OPTIONS[13].name, pOptionToken->z, pOptionToken->n) == 0) &&
-             (DNODE_DYNAMIC_CFG_OPTIONS[13].len == pOptionToken->n)) {
+  } else if ((strncasecmp(DNODE_DYNAMIC_CFG_OPTIONS[DNODE_DYNAMIC_CFG_OPTIONS_SIZE - 1].name, pOptionToken->z, pOptionToken->n) == 0) &&
+             (DNODE_DYNAMIC_CFG_OPTIONS[DNODE_DYNAMIC_CFG_OPTIONS_SIZE - 1].len == pOptionToken->n)) {
     SSQLToken* pValToken = &pOptions->a[2];
     int32_t    val = strtol(pValToken->z, NULL, 10);
     if (val != 0 && val != 1) {
@@ -4574,7 +4578,7 @@ int32_t validateDNodeConfig(tDCLSQL* pOptions) {
       return TSDB_CODE_INVALID_SQL;
     }
 
-    for (int32_t i = 2; i < tListLen(DNODE_DYNAMIC_CFG_OPTIONS) - 1; ++i) {
+    for (int32_t i = 2; i < DNODE_DYNAMIC_CFG_OPTIONS_SIZE - 1; ++i) {
       const SDNodeDynConfOption* pOption = &DNODE_DYNAMIC_CFG_OPTIONS[i];
 
       if ((strncasecmp(pOption->name, pOptionToken->z, pOptionToken->n) == 0) && (pOption->len == pOptionToken->n)) {
@@ -4693,7 +4697,7 @@ int32_t parseLimitClause(SQueryInfo* pQueryInfo, int32_t clauseIndex, SQuerySQL*
   }
 
   // todo refactor
-  if (UTIL_TABLE_IS_SUPERTABLE(pTableMetaInfo)) {
+  if (UTIL_TABLE_IS_SUPER_TABLE(pTableMetaInfo)) {
     if (!tscQueryTags(pQueryInfo)) {  // local handle the super table tag query
       if (tscIsProjectionQueryOnSTable(pQueryInfo, 0)) {
         if (pQueryInfo->slimit.limit > 0 || pQueryInfo->slimit.offset > 0) {
@@ -4825,7 +4829,7 @@ static int32_t setTimePrecision(SSqlCmd* pCmd, SCMCreateDbMsg* pMsg, SCreateDBIn
 static void setCreateDBOption(SCMCreateDbMsg* pMsg, SCreateDBInfo* pCreateDb) {
   pMsg->maxTables = htonl(pCreateDb->maxTablesPerVnode);
   pMsg->cacheBlockSize = htonl(pCreateDb->cacheBlockSize);
-  pMsg->numOfBlocks = htonl(pCreateDb->numOfBlocks);
+  pMsg->totalBlocks = htonl(pCreateDb->numOfBlocks);
   pMsg->daysPerFile = htonl(pCreateDb->daysPerFile);
   pMsg->commitTime = htonl(pCreateDb->commitTime);
   pMsg->minRowsPerFileBlock = htonl(pCreateDb->minRowsPerBlock);
@@ -5333,13 +5337,6 @@ int32_t doLocalQueryProcess(SQueryInfo* pQueryInfo, SQuerySQL* pQuerySql) {
     }
   }
 
-  SColumnIndex ind = {0};
-  SSqlExpr* pExpr1 = tscSqlExprAppend(pQueryInfo, TSDB_FUNC_TAG_DUMMY, &ind, TSDB_DATA_TYPE_INT,
-      tDataTypeDesc[TSDB_DATA_TYPE_INT].nSize, tDataTypeDesc[TSDB_DATA_TYPE_INT].nSize, false);
-  
-  const char* name = (pExprList->a[0].aliasName != NULL)? pExprList->a[0].aliasName:functionsInfo[index].name;
-  strncpy(pExpr1->aliasName, name, tListLen(pExpr1->aliasName));
-
   switch (index) {
     case 0:
       pQueryInfo->command = TSDB_SQL_CURRENT_DB;
@@ -5358,6 +5355,13 @@ int32_t doLocalQueryProcess(SQueryInfo* pQueryInfo, SQuerySQL* pQuerySql) {
       return TSDB_CODE_SUCCESS;
     default: { return invalidSqlErrMsg(pQueryInfo->msg, msg3); }
   }
+  
+  SColumnIndex ind = {0};
+  SSqlExpr* pExpr1 = tscSqlExprAppend(pQueryInfo, TSDB_FUNC_TAG_DUMMY, &ind, TSDB_DATA_TYPE_INT,
+                                      tDataTypeDesc[TSDB_DATA_TYPE_INT].nSize, tDataTypeDesc[TSDB_DATA_TYPE_INT].nSize, false);
+  
+  const char* name = (pExprList->a[0].aliasName != NULL)? pExprList->a[0].aliasName:functionsInfo[index].name;
+  strncpy(pExpr1->aliasName, name, tListLen(pExpr1->aliasName));
 }
 
 // can only perform the parameters based on the macro definitation
@@ -5552,11 +5556,11 @@ int32_t doCheckForCreateFromStable(SSqlObj* pSql, SSqlInfo* pInfo) {
   // too long tag values will return invalid sql, not be truncated automatically
   SSchema* pTagSchema = tscGetTableTagSchema(pStableMeterMetaInfo->pTableMeta);
 
-  char* tagVal = pCreateTable->usingInfo.tagdata.data;
+  STagData* pTag = &pCreateTable->usingInfo.tagdata;
+  char* tagVal = pTag->data;
   int32_t ret = TSDB_CODE_SUCCESS;
   
   for (int32_t i = 0; i < pList->nExpr; ++i) {
-    
     if (pTagSchema[i].type == TSDB_DATA_TYPE_BINARY || pTagSchema[i].type == TSDB_DATA_TYPE_NCHAR) {
       // validate the length of binary
       if (pList->a[i].pVar.nLen + VARSTR_HEADER_SIZE > pTagSchema[i].bytes) {
@@ -5564,7 +5568,15 @@ int32_t doCheckForCreateFromStable(SSqlObj* pSql, SSqlInfo* pInfo) {
       }
       
       ret = tVariantDump(&(pList->a[i].pVar), varDataVal(tagVal), pTagSchema[i].type);
-      varDataSetLen(tagVal, pList->a[i].pVar.nLen);
+      if (pList->a[i].pVar.nType == TSDB_DATA_TYPE_NULL) {
+        if (pTagSchema[i].type == TSDB_DATA_TYPE_BINARY) {
+          varDataSetLen(tagVal, sizeof(uint8_t));
+        } else {
+          varDataSetLen(tagVal, sizeof(uint32_t));
+        }
+      } else { // todo refactor
+        varDataSetLen(tagVal, pList->a[i].pVar.nLen);
+      }
     } else {
       ret = tVariantDump(&(pList->a[i].pVar), tagVal, pTagSchema[i].type);
     }
@@ -5587,6 +5599,7 @@ int32_t doCheckForCreateFromStable(SSqlObj* pSql, SSqlInfo* pInfo) {
     return ret;
   }
 
+  pTag->dataLen = tagVal - pTag->data;
   return TSDB_CODE_SUCCESS;
 }
 
@@ -5596,7 +5609,8 @@ int32_t doCheckForStream(SSqlObj* pSql, SSqlInfo* pInfo) {
   const char* msg3 = "fill only available for interval query";
   const char* msg4 = "fill option not supported in stream computing";
   const char* msg5 = "sql too long";  // todo ADD support
-
+  const char* msg6 = "from missing in subclause";
+  
   SSqlCmd*    pCmd = &pSql->cmd;
   SQueryInfo* pQueryInfo = tscGetQueryInfoDetail(pCmd, 0);
   assert(pQueryInfo->numOfTables == 1);
@@ -5611,10 +5625,13 @@ int32_t doCheckForStream(SSqlObj* pSql, SSqlInfo* pInfo) {
   if (tscValidateName(pzTableName) != TSDB_CODE_SUCCESS) {
     return invalidSqlErrMsg(tscGetErrorMsgPayload(pCmd), msg1);
   }
-
+  
   tVariantList* pSrcMeterName = pInfo->pCreateTableInfo->pSelect->from;
-  tVariant*     pVar = &pSrcMeterName->a[0].pVar;
-
+  if (pSrcMeterName == NULL || pSrcMeterName->nExpr == 0) {
+    return invalidSqlErrMsg(tscGetErrorMsgPayload(pCmd), msg6);
+  }
+  
+  tVariant* pVar = &pSrcMeterName->a[0].pVar;
   SSQLToken srcToken = {.z = pVar->pz, .n = pVar->nLen, .type = TK_STRING};
   if (tscValidateName(&srcToken) != TSDB_CODE_SUCCESS) {
     return invalidSqlErrMsg(pQueryInfo->msg, msg1);
@@ -5629,7 +5646,7 @@ int32_t doCheckForStream(SSqlObj* pSql, SSqlInfo* pInfo) {
     return code;
   }
 
-  bool isSTable = UTIL_TABLE_IS_SUPERTABLE(pTableMetaInfo);
+  bool isSTable = UTIL_TABLE_IS_SUPER_TABLE(pTableMetaInfo);
   if (parseSelectClause(&pSql->cmd, 0, pQuerySql->pSelection, isSTable) != TSDB_CODE_SUCCESS) {
     return TSDB_CODE_INVALID_SQL;
   }
@@ -5773,7 +5790,7 @@ int32_t doCheckForQuery(SSqlObj* pSql, SQuerySQL* pQuerySql, int32_t index) {
   assert(pQueryInfo->numOfTables == pQuerySql->from->nExpr);
   bool isSTable = false;
   
-  if (UTIL_TABLE_IS_SUPERTABLE(pTableMetaInfo)) {
+  if (UTIL_TABLE_IS_SUPER_TABLE(pTableMetaInfo)) {
     isSTable = true;
     code = tscGetSTableVgroupInfo(pSql, index);
     if (code != TSDB_CODE_SUCCESS) {
