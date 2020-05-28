@@ -307,19 +307,13 @@ void *shellLoopQuery(void *arg) {
     return NULL;
   }
   
-  while (1) {
+  do {
     // Read command from shell.
-
     memset(command, 0, MAX_COMMAND_SIZE);
     set_terminal_mode();
     shellReadCommand(con, command);
     reset_terminal_mode();
-
-    // Run the command
-    if (shellRunCommand(con, command) != 0) {
-      break;
-    }
-  }
+  } while (shellRunCommand(con, command) == 0);
   
   tfree(command);
   exitShell();
@@ -327,30 +321,6 @@ void *shellLoopQuery(void *arg) {
   pthread_cleanup_pop(1);
   
   return NULL;
-}
-
-void shellPrintNChar(const char *str, int length, int width) {
-  int pos = 0, cols = 0;
-  while (pos < length) {
-    wchar_t wc;
-    pos += mbtowc(&wc, str + pos, MB_CUR_MAX);
-    if (pos > length) {
-      break;
-    }
-
-    int w = wcwidth(wc);
-    if (w > 0) {
-      if (width > 0 && cols + w > width) {
-        break;
-      }
-      printf("%lc", wc);
-      cols += w;
-    }
-  }
-
-  for (; cols < width; cols++) {
-    putchar(' ');
-  }
 }
 
 int get_old_terminal_mode(struct termios *tio) {
