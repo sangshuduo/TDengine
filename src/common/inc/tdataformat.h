@@ -106,8 +106,27 @@ typedef void *SDataRow;
 SDataRow tdNewDataRowFromSchema(STSchema *pSchema);
 void     tdFreeDataRow(SDataRow row);
 void     tdInitDataRow(SDataRow row, STSchema *pSchema);
-int      tdAppendColVal(SDataRow row, void *value, int8_t type, int32_t bytes, int32_t offset);
 SDataRow tdDataRowDup(SDataRow row);
+
+static FORCE_INLINE int tdAppendColVal(SDataRow row, void *value, int8_t type, int32_t bytes, int32_t offset) {
+  ASSERT(value != NULL);
+  int32_t toffset = offset + TD_DATA_ROW_HEAD_SIZE;
+  char *  ptr = (char *)POINTER_SHIFT(row, dataRowLen(row));
+
+  switch (type) {
+    case TSDB_DATA_TYPE_BINARY:
+    case TSDB_DATA_TYPE_NCHAR:
+      *(VarDataOffsetT *)POINTER_SHIFT(row, toffset) = dataRowLen(row);
+      memcpy(ptr, value, varDataTLen(value));
+      dataRowLen(row) += varDataTLen(value);
+      break;
+    default:
+      memcpy(POINTER_SHIFT(row, toffset), value, TYPE_BYTES[type]);
+      break;
+  }
+
+  return 0;
+}
 
 // NOTE: offset here including the header size
 static FORCE_INLINE void *tdGetRowDataOfCol(SDataRow row, int8_t type, int32_t offset) {
@@ -135,8 +154,8 @@ typedef struct SDataCol {
 static FORCE_INLINE void dataColReset(SDataCol *pDataCol) { pDataCol->len = 0; }
 
 void dataColInit(SDataCol *pDataCol, STColumn *pCol, void **pBuf, int maxPoints);
-void dataColAppendVal(SDataCol *pCol, void *value, int numOfPoints, int maxPoints);
-void dataColPopPoints(SDataCol *pCol, int pointsToPop, int numOfPoints);
+void dataColAppendVal(SDataCol *pCol, void *value, int numOfRows, int maxPoints);
+void dataColPopPoints(SDataCol *pCol, int pointsToPop, int numOfRows);
 void dataColSetOffset(SDataCol *pCol, int nEle);
 
 bool isNEleNull(SDataCol *pCol, int nEle);
@@ -176,7 +195,7 @@ typedef struct {
   int      maxPoints;  // max number of points
   int      bufSize;
 
-  int      numOfPoints;
+  int      numOfRows;
   int      numOfCols;  // Total number of cols
   int      sversion;   // TODO: set sversion
   void *   buf;
@@ -186,7 +205,7 @@ typedef struct {
 #define keyCol(pCols) (&((pCols)->cols[0]))  // Key column
 #define dataColsKeyAt(pCols, idx) ((TSKEY *)(keyCol(pCols)->pData))[(idx)]
 #define dataColsKeyFirst(pCols) dataColsKeyAt(pCols, 0)
-#define dataColsKeyLast(pCols) ((pCols->numOfPoints == 0) ? 0 : dataColsKeyAt(pCols, (pCols)->numOfPoints - 1))
+#define dataColsKeyLast(pCols) ((pCols->numOfRows == 0) ? 0 : dataColsKeyAt(pCols, (pCols)->numOfRows - 1))
 
 SDataCols *tdNewDataCols(int maxRowSize, int maxCols, int maxRows);
 void       tdResetDataCols(SDataCols *pCols);
@@ -197,6 +216,59 @@ void       tdAppendDataRowToDataCol(SDataRow row, SDataCols *pCols);
 void       tdPopDataColsPoints(SDataCols *pCols, int pointsToPop); //!!!!
 int        tdMergeDataCols(SDataCols *target, SDataCols *src, int rowsToMerge);
 void       tdMergeTwoDataCols(SDataCols *target, SDataCols *src1, int *iter1, SDataCols *src2, int *iter2, int tRows);
+
+
+// ----------------- Tag row structure
+
+/* A tag row, the format is like below:
++----------+----------------------------------------------------------------+
+| STagRow  | STagCol | STagCol | STagCol | STagCol | ...| STagCol | STagCol | 
++----------+----------------------------------------------------------------+
+
+pData
++----------+----------------------------------------------------------------+
+| value 1     | value 2 |  value 3     | value 4       | ....|value n       |
++----------+----------------------------------------------------------------+
+
+ */
+
+
+#define TD_TAG_ROW_HEAD_SIZE sizeof(int16_t)
+
+#define tagRowNum(r) (*(int16_t *)(r))
+#define tagRowArray(r) POINTER_SHIFT(r, TD_TAG_ROW_HEAD_SIZE)
+//#define dataRowKey(r) (*(TSKEY *)(dataRowTuple(r)))
+//#define dataRowSetLen(r, l) (dataRowLen(r) = (l))
+//#define dataRowCpy(dst, r) memcpy((dst), (r), dataRowLen(r))
+//#define dataRowMaxBytesFromSchema(s) (schemaTLen(s) + TD_DATA_ROW_HEAD_SIZE)
+
+typedef struct {
+  int16_t colId;   // column ID
+  int16_t colType;
+  uint16_t offset;  //to store value for numeric col or offset for binary/Nchar
+} STagCol;
+
+typedef struct {
+  int32_t    len;    
+  void *     pData;  // Space to store the tag value   
+  uint16_t   dataLen;
+  int16_t    ncols;  // Total columns allocated
+  STagCol    tagCols[];
+} STagRow;
+
+
+#define tagColSize(r) (sizeof(STagCol) + r.colLen)
+
+int tdSetTagCol(SDataRow row, void *value, int16_t len, int8_t type, int16_t colId);  //insert tag value and update all the information
+int tdDeleteTagCol(SDataRow row, int16_t colId);  // delete tag value and update all the information
+void * tdQueryTagByID(SDataRow row, int16_t colId, int16_t *type);   //if find tag, 0, else return -1;
+int tdAppendTagColVal(SDataRow row, void *value, int8_t type, int32_t bytes, int16_t colId);  
+SDataRow tdTagRowDup(SDataRow row);
+void tdFreeTagRow(SDataRow row); 
+SDataRow tdTagRowDecode(SDataRow row);
+int tdTagRowCpy(SDataRow dst, SDataRow src);
+void * tdNewTagRowFromSchema(STSchema *pSchema, int16_t numofTags);
+STSchema *tdGetSchemaFromData(SDataRow *row);
 
 #ifdef __cplusplus
 }

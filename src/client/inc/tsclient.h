@@ -30,10 +30,10 @@ extern "C" {
 #include "tsqlfunction.h"
 #include "tutil.h"
 
+#include "qExecutor.h"
 #include "qsqlparser.h"
 #include "qsqltype.h"
 #include "qtsbuf.h"
-#include "queryExecutor.h"
 
 // forward declaration
 struct SSqlInfo;
@@ -49,15 +49,11 @@ typedef struct STableComInfo {
   uint8_t numOfTags;
   uint8_t precision;
   int16_t numOfColumns;
-  int16_t rowSize;
+  int32_t rowSize;
 } STableComInfo;
 
 typedef struct STableMeta {
-  // super table if it is created according to super table, otherwise, tableInfo is used
-  union {
-    struct STableMeta *pSTable;
-    STableComInfo      tableInfo;
-  };
+  STableComInfo tableInfo;
   uint8_t       tableType;
   int16_t       sversion;
   SCMVgroupInfo vgroupInfo;
@@ -210,11 +206,11 @@ typedef struct SQueryInfo {
   SLimitVal        slimit;
   STagCond         tagCond;
   SOrderVal        order;
-  int16_t          interpoType;  // interpolate type
+  int16_t          fillType;  // interpolate type
   int16_t          numOfTables;
   STableMetaInfo **pTableMetaInfo;
   struct STSBuf *  tsBuf;
-  int64_t *        defaultVal;   // default value for interpolation
+  int64_t *        fillVal;      // default value for interpolation
   char *           msg;          // pointer to the pCmd->payload to keep error message temporarily
   int64_t          clauseLimit;  // limit for current sub clause
 
@@ -226,11 +222,8 @@ typedef struct {
   int     command;
   uint8_t msgType;
 
-  union {
-    bool   existsCheck;     // check if the table exists or not
-    bool   autoCreated;     // if the table is missing, on-the-fly create it. during getmeterMeta
-    int8_t dataSourceType;  // load data from file or not
-  };
+  bool   autoCreated;        // if the table is missing, on-the-fly create it. during getmeterMeta
+  int8_t dataSourceType;     // load data from file or not
 
   union {
     int32_t count;
@@ -263,7 +256,7 @@ typedef struct SResRec {
 typedef struct {
   int64_t               numOfRows;                  // num of results in current retrieved
   int64_t               numOfTotal;                 // num of total results
-  int64_t               numOfTotalInCurrentClause;  // num of total result in current subclause
+  int64_t               numOfClauseTotal;           // num of total result in current subclause
   char *                pRsp;
   int32_t               rspType;
   int32_t               rspLen;

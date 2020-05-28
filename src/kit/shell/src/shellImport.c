@@ -13,6 +13,7 @@
  * along with this program. If not, see <http://www.gnu.org/licenses/>.
  */
 
+#define _GNU_SOURCE
 #define _XOPEN_SOURCE
 #define _DEFAULT_SOURCE
 
@@ -221,7 +222,7 @@ void* shellImportThreadFp(void *arg)
   return NULL;
 }
 
-static void shellRunImportThreads(struct arguments* args)
+static void shellRunImportThreads(SShellArguments* args)
 {
   pthread_attr_t thattr;
   ShellThreadObj *threadObj = (ShellThreadObj *)calloc(args->threadNum, sizeof(ShellThreadObj));
@@ -254,7 +255,7 @@ static void shellRunImportThreads(struct arguments* args)
   free(threadObj);
 }
 
-void source_dir(TAOS* con, struct arguments* args) {
+void source_dir(TAOS* con, SShellArguments* args) {
   shellGetDirectoryFileList(args->dir);
   int64_t start = taosGetTimestampMs();
 

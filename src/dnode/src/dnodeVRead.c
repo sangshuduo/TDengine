@@ -17,6 +17,7 @@
 #include "os.h"
 #include "taoserror.h"
 #include "taosmsg.h"
+#include "tutil.h"
 #include "tqueue.h"
 #include "trpc.h"
 #include "twal.h"
@@ -71,11 +72,16 @@ int32_t dnodeInitRead() {
 }
 
 void dnodeCleanupRead() {
+  for (int i=0; i < readPool.max; ++i) {
+    SReadWorker *pWorker = readPool.readWorker + i;
+    if (pWorker->thread) {
+      taosQsetThreadResume(readQset);
+    }
+  }
 
   for (int i=0; i < readPool.max; ++i) {
     SReadWorker *pWorker = readPool.readWorker + i;
     if (pWorker->thread) {
-      pthread_cancel(pWorker->thread);
       pthread_join(pWorker->thread, NULL);
     }
   }
@@ -91,8 +97,6 @@ void dnodeDispatchToVnodeReadQueue(SRpcMsg *pMsg) {
   int32_t     leftLen      = pMsg->contLen;
   char        *pCont       = (char *) pMsg->pCont;
   void        *pVnode;  
-
-  dTrace("dnode %s msg incoming, thandle:%p", taosMsg[pMsg->msgType], pMsg->handle);
 
   while (leftLen > 0) {
     SMsgHead *pHead = (SMsgHead *) pCont;
@@ -203,17 +207,17 @@ void dnodeSendRpcReadRsp(void *pVnode, SReadMsg *pRead, int32_t code) {
 }
 
 static void *dnodeProcessReadQueue(void *param) {
-  SReadWorker *pWorker = param;
   SReadMsg    *pReadMsg;
   int          type;
   void        *pVnode;
 
   while (1) {
     if (taosReadQitemFromQset(readQset, &type, (void **)&pReadMsg, &pVnode) == 0) {
-      dnodeHandleIdleReadWorker(pWorker);
-      continue;
+      dTrace("dnodeProcessReadQueee: got no message from qset, exiting...");
+      break;
     }
 
+    dTrace("%p, msg:%s will be processed", pReadMsg->rpcMsg.ahandle, taosMsg[pReadMsg->rpcMsg.msgType]);
     int32_t code = vnodeProcessRead(pVnode, pReadMsg->rpcMsg.msgType, pReadMsg->pCont, pReadMsg->contLen, &pReadMsg->rspRet);
     dnodeSendRpcReadRsp(pVnode, pReadMsg, code);
     taosFreeQitem(pReadMsg);
@@ -222,6 +226,8 @@ static void *dnodeProcessReadQueue(void *param) {
   return NULL;
 }
 
+
+UNUSED_FUNC
 static void dnodeHandleIdleReadWorker(SReadWorker *pWorker) {
   int32_t num = taosGetQueueNumber(readQset);
 

@@ -8,9 +8,9 @@ from util.sql import *
 
 
 class TDTestCase:
-    def init(self, conn):
+    def init(self, conn, logSql):
         tdLog.debug("start to execute %s" % __file__)
-        tdSql.init(conn.cursor())
+        tdSql.init(conn.cursor(), logSql)
 
     def run(self):
         tdSql.prepare()
@@ -76,7 +76,7 @@ class TDTestCase:
         tdSql.checkRows(2)
 
         data = "now"
-        for x in range(0, boundary-1):
+        for x in range(0, boundary - 1):
             data = data + ", %d" % x
         tdLog.info("insert into tb1 values (%s)" % data)
         tdSql.execute("insert into tb1 values (%s)" % data)

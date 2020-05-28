@@ -29,6 +29,11 @@ extern "C" {
 static const int32_t TNUMBER = 1;
 #define IS_LITTLE_ENDIAN() (*(uint8_t *)(&TNUMBER) != 0)
 
+static FORCE_INLINE void *taosEncodeFixed8(void *buf, uint8_t value) {
+  ((uint8_t *)buf)[0] = value;
+  return POINTER_SHIFT(buf, sizeof(value));
+}
+
 static FORCE_INLINE void *taosEncodeFixed16(void *buf, uint16_t value) {
   if (IS_LITTLE_ENDIAN()) {
     memcpy(buf, &value, sizeof(value));
@@ -68,6 +73,11 @@ static FORCE_INLINE void *taosEncodeFixed64(void *buf, uint64_t value) {
   }
 
   return POINTER_SHIFT(buf, sizeof(value));
+}
+
+static FORCE_INLINE void *taosDecodeFixed8(void *buf, uint8_t *value) {
+  *value = ((uint8_t *)buf)[0];
+  return POINTER_SHIFT(buf, sizeof(*value));
 }
 
 static FORCE_INLINE void *taosDecodeFixed16(void *buf, uint16_t *value) {
@@ -205,6 +215,28 @@ static FORCE_INLINE void *taosDecodeVariant64(void *buf, uint64_t *value) {
   }
 
   return NULL;  // error happened
+}
+
+static FORCE_INLINE void *taosEncodeString(void *buf, char *value) {
+  size_t size = strlen(value);
+
+  buf = taosEncodeVariant64(buf, size);
+  memcpy(buf, value, size);
+
+  return POINTER_SHIFT(buf, size);
+}
+
+static FORCE_INLINE void *taosDecodeString(void *buf, char **value) {
+  uint64_t size = 0;
+
+  buf = taosDecodeVariant64(buf, &size);
+  *value = (char *)malloc(size + 1);
+  if (*value == NULL) return NULL;
+  memcpy(*value, buf, size);
+
+  (*value)[size] = '\0';
+
+  return POINTER_SHIFT(buf, size);
 }
 
 #ifdef __cplusplus

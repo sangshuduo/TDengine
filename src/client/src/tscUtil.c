@@ -280,8 +280,8 @@ void tscClearInterpInfo(SQueryInfo* pQueryInfo) {
     return;
   }
 
-  pQueryInfo->interpoType = TSDB_INTERPO_NONE;
-  tfree(pQueryInfo->defaultVal);
+  pQueryInfo->fillType = TSDB_FILL_NONE;
+  tfree(pQueryInfo->fillVal);
 }
 
 int32_t tscCreateResPointerInfo(SSqlRes* pRes, SQueryInfo* pQueryInfo) {
@@ -423,6 +423,8 @@ void tscFreeSqlObj(SSqlObj* pSql) {
   tfree(pCmd->payload);
 
   pCmd->allocSize = 0;
+  
+  tfree(pSql->sqlstr);
   free(pSql);
 }
 
@@ -1616,7 +1618,7 @@ static void freeQueryInfoImpl(SQueryInfo* pQueryInfo) {
   
   pQueryInfo->tsBuf = tsBufDestory(pQueryInfo->tsBuf);
 
-  tfree(pQueryInfo->defaultVal);
+  tfree(pQueryInfo->fillVal);
 }
 
 void tscClearSubqueryInfo(SSqlCmd* pCmd) {
@@ -1768,7 +1770,7 @@ SSqlObj* createSubqueryObj(SSqlObj* pSql, int16_t tableIndex, void (*fp)(), void
   pNewQueryInfo->order  = pQueryInfo->order;
   pNewQueryInfo->clauseLimit = pQueryInfo->clauseLimit;
   pNewQueryInfo->pTableMetaInfo = NULL;
-  pNewQueryInfo->defaultVal  = NULL;
+  pNewQueryInfo->fillVal  = NULL;
   pNewQueryInfo->numOfTables = 0;
   pNewQueryInfo->tsBuf = NULL;
   
@@ -1779,9 +1781,9 @@ SSqlObj* createSubqueryObj(SSqlObj* pSql, int16_t tableIndex, void (*fp)(), void
   
   tscTagCondCopy(&pNewQueryInfo->tagCond, &pQueryInfo->tagCond);
 
-  if (pQueryInfo->interpoType != TSDB_INTERPO_NONE) {
-    pNewQueryInfo->defaultVal = malloc(pQueryInfo->fieldsInfo.numOfOutput * sizeof(int64_t));
-    memcpy(pNewQueryInfo->defaultVal, pQueryInfo->defaultVal, pQueryInfo->fieldsInfo.numOfOutput * sizeof(int64_t));
+  if (pQueryInfo->fillType != TSDB_FILL_NONE) {
+    pNewQueryInfo->fillVal = malloc(pQueryInfo->fieldsInfo.numOfOutput * sizeof(int64_t));
+    memcpy(pNewQueryInfo->fillVal, pQueryInfo->fillVal, pQueryInfo->fieldsInfo.numOfOutput * sizeof(int64_t));
   }
 
   if (tscAllocPayload(pnCmd, TSDB_DEFAULT_PAYLOAD_SIZE) != TSDB_CODE_SUCCESS) {
@@ -1989,7 +1991,7 @@ int32_t tscInvalidSQLErrMsg(char* msg, const char* additionalInfo, const char* s
 
 bool tscHasReachLimitation(SQueryInfo* pQueryInfo, SSqlRes* pRes) {
   assert(pQueryInfo != NULL && pQueryInfo->clauseLimit != 0);
-  return (pQueryInfo->clauseLimit > 0 && pRes->numOfTotalInCurrentClause >= pQueryInfo->clauseLimit);
+  return (pQueryInfo->clauseLimit > 0 && pRes->numOfClauseTotal >= pQueryInfo->clauseLimit);
 }
 
 char* tscGetErrorMsgPayload(SSqlCmd* pCmd) { return pCmd->payload; }
@@ -2037,7 +2039,7 @@ void tscTryQueryNextVnode(SSqlObj* pSql, __async_cb_func_t fp) {
   int32_t totalVgroups = pTableMetaInfo->vgroupList->numOfVgroups;
   while (++pTableMetaInfo->vgroupIndex < totalVgroups) {
     tscTrace("%p current vnode:%d exhausted, try next:%d. total vnode:%d. current numOfRes:%d", pSql,
-             pTableMetaInfo->vgroupIndex - 1, pTableMetaInfo->vgroupIndex, totalVgroups, pRes->numOfTotalInCurrentClause);
+             pTableMetaInfo->vgroupIndex - 1, pTableMetaInfo->vgroupIndex, totalVgroups, pRes->numOfClauseTotal);
 
     /*
      * update the limit and offset value for the query on the next vnode,
@@ -2045,11 +2047,11 @@ void tscTryQueryNextVnode(SSqlObj* pSql, __async_cb_func_t fp) {
      *
      * NOTE:
      * if the pRes->offset is larger than 0, the start returned position has not reached yet.
-     * Therefore, the pRes->numOfRows, as well as pRes->numOfTotalInCurrentClause, must be 0.
+     * Therefore, the pRes->numOfRows, as well as pRes->numOfClauseTotal, must be 0.
      * The pRes->offset value will be updated by virtual node, during query execution.
      */
     if (pQueryInfo->clauseLimit >= 0) {
-      pQueryInfo->limit.limit = pQueryInfo->clauseLimit - pRes->numOfTotalInCurrentClause;
+      pQueryInfo->limit.limit = pQueryInfo->clauseLimit - pRes->numOfClauseTotal;
     }
 
     pQueryInfo->limit.offset = pRes->offset;
@@ -2092,7 +2094,7 @@ void tscTryQueryNextClause(SSqlObj* pSql, void (*queryFp)()) {
   pSql->cmd.command = pQueryInfo->command;
 
   //backup the total number of result first
-  int64_t num = pRes->numOfTotal + pRes->numOfTotalInCurrentClause;
+  int64_t num = pRes->numOfTotal + pRes->numOfClauseTotal;
   tscFreeSqlResult(pSql);
   
   pRes->numOfTotal = num;
@@ -2126,16 +2128,26 @@ void tscGetResultColumnChr(SSqlRes* pRes, SFieldInfo* pFieldInfo, int32_t column
     int32_t realLen = varDataLen(pData);
     assert(realLen <= bytes - VARSTR_HEADER_SIZE);
     
+    if (isNull(pData, type)) {
+      pRes->tsrow[columnIndex] = NULL;
+    } else {
+      pRes->tsrow[columnIndex] = pData + VARSTR_HEADER_SIZE;
+    }
+  
     if (realLen < pInfo->pSqlExpr->resBytes - VARSTR_HEADER_SIZE) { // todo refactor
       *(char*) (pData + realLen + VARSTR_HEADER_SIZE) = 0;
     }
     
-    pRes->tsrow[columnIndex] = pData + VARSTR_HEADER_SIZE;
     pRes->length[columnIndex] = realLen;
   } else {
     assert(bytes == tDataTypeDesc[type].nSize);
     
-    pRes->tsrow[columnIndex] = pData;
+    if (isNull(pData, type)) {
+      pRes->tsrow[columnIndex] = NULL;
+    } else {
+      pRes->tsrow[columnIndex] = pData;
+    }
+    
     pRes->length[columnIndex] = bytes;
   }
 }
@@ -2162,4 +2174,34 @@ char* strdup_throw(const char* str) {
     THROW(TSDB_CODE_CLI_OUT_OF_MEMORY);
   }
   return p;
+}
+
+int tscSetMgmtIpListFromCfg(const char *first, const char *second) {
+  tscMgmtIpSet.numOfIps = 0;
+  tscMgmtIpSet.inUse = 0;
+
+  if (first && first[0] != 0) {
+    if (strlen(first) >= TSDB_EP_LEN) {
+      terrno = TSDB_CODE_INVALID_FQDN;
+      return -1;
+    }
+    taosGetFqdnPortFromEp(first, tscMgmtIpSet.fqdn[tscMgmtIpSet.numOfIps], &tscMgmtIpSet.port[tscMgmtIpSet.numOfIps]);
+    tscMgmtIpSet.numOfIps++;
+  }
+
+  if (second && second[0] != 0) {
+    if (strlen(second) >= TSDB_EP_LEN) {
+      terrno = TSDB_CODE_INVALID_FQDN;
+      return -1;
+    }
+    taosGetFqdnPortFromEp(second, tscMgmtIpSet.fqdn[tscMgmtIpSet.numOfIps], &tscMgmtIpSet.port[tscMgmtIpSet.numOfIps]);
+    tscMgmtIpSet.numOfIps++;
+  }
+
+  if ( tscMgmtIpSet.numOfIps == 0) {
+    terrno = TSDB_CODE_INVALID_FQDN;
+    return -1;
+  }
+
+  return 0;
 }

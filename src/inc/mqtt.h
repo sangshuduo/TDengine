@@ -13,18 +13,20 @@
  * along with this program. If not, see <http://www.gnu.org/licenses/>.
  */
 
-#ifndef _rpc_hash_ip_header_
-#define _rpc_hash_ip_header_
+#ifndef TDENGINE_MQTT_H
+#define TDENGINE_MQTT_H
 
 #ifdef __cplusplus
 extern "C" {
 #endif
 
-void *rpcOpenIpHash(int maxSessions);
-void  rpcCloseIpHash(void *handle);
-void *rpcAddIpHash(void *handle, void *pData, uint32_t ip, uint16_t port);
-void  rpcDeleteIpHash(void *handle, uint32_t ip, uint16_t port);
-void *rpcGetIpHash(void *handle, uint32_t ip, uint16_t port);
+#include <stdint.h>
+
+int32_t mqttGetReqCount();
+int32_t mqttInitSystem();
+int32_t mqttStartSystem();
+void mqttStopSystem();
+void mqttCleanUpSystem();
 
 #ifdef __cplusplus
 }

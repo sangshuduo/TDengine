@@ -20,7 +20,6 @@
 
 TAOS*     con;
 pthread_t pid;
-int32_t   TIMESTAMP_OUTPUT_LENGTH = 22;
 
 // TODO: IMPLEMENT INTERRUPT HANDLER.
 void interruptHandler(int signum) {
@@ -62,7 +61,7 @@ int checkVersion() {
 }
 
 // Global configurations
-struct arguments args = {
+SShellArguments args = {
   .host = NULL,
   .password = NULL,
   .user = NULL,

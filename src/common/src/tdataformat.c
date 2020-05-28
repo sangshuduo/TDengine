@@ -14,6 +14,7 @@
  */
 #include "tdataformat.h"
 #include "wchar.h"
+#include "talgo.h"
 
 /**
  * Create a SSchema object with nCols columns
@@ -151,37 +152,156 @@ SDataRow tdNewDataRowFromSchema(STSchema *pSchema) {
   return row;
 }
 
+int tdSetTagCol(SDataRow row, void *value, int16_t len, int8_t type, int16_t colId){ //insert/update tag value and update all the information
+  ASSERT(((STagRow *)row)->pData != NULL);
+  //STagCol * stCol = tdQueryTagColByID()
+
+  return 0;
+};  
+
+int tdDeleteTagCol(SDataRow row, int16_t colId){   // delete tag value and update all the information
+  //todo
+  return 0;
+};  
+
+static int compTagId(const void *key1, const void *key2) {
+  if (((STagCol *)key1)->colId > ((STagCol *)key2)->colId) {
+    return 1;
+  } else if (((STagCol *)key1)->colId == ((STagCol *)key2)->colId) {
+    return 0;
+  } else {
+    return -1;
+  }
+}
+
+/**
+ * Find tag structure by colId, if find, return tag structure, else return NULL;
+ */
+STagCol * tdQueryTagColByID(SDataRow row, int16_t colId, int flags) {  //if find tag, 0, else return -1; 
+  ASSERT(((STagRow *)row)->pData != NULL);
+  STagCol *pBase = ((STagRow *)row)->tagCols;
+  int16_t nCols = ((STagRow *)row)->ncols;
+  STagCol key = {colId,0,0};
+  STagCol * stCol = taosbsearch(&key, pBase, nCols, sizeof(STagCol), compTagId, flags);
+  return stCol;
+};   
+
+/**
+* Find tag value by colId, if find, return tag value, else return NULL;
+*/
+void * tdQueryTagByID(SDataRow row, int16_t colId, int16_t *type) {
+  ASSERT(((STagRow *)row)->pData != NULL);
+  STagCol *pBase = ((STagRow *)row)->tagCols;
+  int16_t nCols = ((STagRow *)row)->ncols;
+  STagCol key = {colId,0,0};
+  STagCol * stCol = taosbsearch(&key, pBase, nCols, sizeof(STagCol), compTagId, TD_EQ);
+  if (NULL == stCol) {
+    return NULL;
+  }
+  
+  void * pData = ((STagRow *)row)->pData;
+  *type = stCol->colType;
+
+  return pData + stCol->offset;
+};   
+
+int tdAppendTagColVal(SDataRow row, void *value, int8_t type, int32_t bytes, int16_t colId){
+  ASSERT(value != NULL);
+  //ASSERT(bytes-2 == varDataTLen(value));
+  ASSERT(row != NULL);
+  STagRow *pTagrow = row;
+  pTagrow->tagCols[pTagrow->ncols].colId = colId;
+  pTagrow->tagCols[pTagrow->ncols].colType = type;
+  pTagrow->tagCols[pTagrow->ncols].offset = pTagrow->dataLen;
+  
+  switch (type) {
+    case TSDB_DATA_TYPE_BINARY:
+    case TSDB_DATA_TYPE_NCHAR:
+      memcpy((char *)pTagrow->pData + pTagrow->dataLen, value, varDataTLen(value));
+      pTagrow->dataLen += varDataTLen(value);
+      break;
+    default:
+      memcpy((char *)pTagrow->pData + pTagrow->dataLen, value, TYPE_BYTES[type]);
+      pTagrow->dataLen += TYPE_BYTES[type];
+      break;
+  } 
+  
+  pTagrow->ncols++;   
+
+  return 0;
+};  
+
+void * tdNewTagRowFromSchema(STSchema *pSchema, int16_t numofTags) {
+  int32_t size = sizeof(STagRow) + numofTags * sizeof(STagCol);
+
+  STagRow *row = malloc(size);
+  if (row == NULL) return NULL;
+
+  int32_t datasize = pSchema->tlen;
+  row->pData = malloc(datasize);
+  if (NULL == row->pData) {
+    free(row);
+    return NULL;
+  }
+
+  row->len = size;
+  row->dataLen = 0; 
+  row->ncols = 0; 
+  return row;   
+}
+/**
+ * free tag row 
+ */
+ 
+void tdFreeTagRow(SDataRow row) {
+  if (row) {
+    free(((STagRow *)row)->pData);
+    free(row);
+  }  
+}
+
+SDataRow tdTagRowDup(SDataRow row) {
+  STagRow *trow = malloc(dataRowLen(row));
+  if (trow == NULL) return NULL;
+  
+  dataRowCpy(trow, row);
+  trow->pData = malloc(trow->dataLen);
+  if (NULL == trow->pData) {
+    free(trow);
+    return NULL;
+  }
+  memcpy(trow->pData, ((STagRow *)row)->pData, trow->dataLen);
+  return trow;
+}
+
+SDataRow tdTagRowDecode(SDataRow row) {
+  STagRow *trow = malloc(dataRowLen(row));
+  if (trow == NULL) return NULL;
+  
+  dataRowCpy(trow, row);
+  trow->pData = malloc(trow->dataLen);
+  if (NULL == trow->pData) {
+    free(trow);
+    return NULL;
+  }
+  char * pData = (char *)row + dataRowLen(row);
+  memcpy(trow->pData, pData, trow->dataLen);
+  return trow;
+}
+
+int tdTagRowCpy(SDataRow dst, SDataRow src) {
+  if (src == NULL) return -1;
+  
+  dataRowCpy(dst, src);
+  void * pData = dst + dataRowLen(src);
+  memcpy(pData, ((STagRow *)src)->pData, ((STagRow *)src)->dataLen);
+  return 0;
+}
 /**
  * Free the SDataRow object
  */
 void tdFreeDataRow(SDataRow row) {
   if (row) free(row);
-}
-
-/**
- * Append a column value to the data row
- * @param type: column type
- * @param bytes: column bytes
- * @param offset: offset in the data row tuple, not including the data row header
- */
-int tdAppendColVal(SDataRow row, void *value, int8_t type, int32_t bytes, int32_t offset) {
-  ASSERT(value != NULL);
-  int32_t toffset = offset + TD_DATA_ROW_HEAD_SIZE;
-  char *  ptr = POINTER_SHIFT(row, dataRowLen(row));
-
-  switch (type) {
-    case TSDB_DATA_TYPE_BINARY:
-    case TSDB_DATA_TYPE_NCHAR:
-      *(VarDataOffsetT *)POINTER_SHIFT(row, toffset) = dataRowLen(row);
-      memcpy(ptr, value, varDataTLen(value));
-      dataRowLen(row) += varDataTLen(value);
-      break;
-    default:
-      memcpy(POINTER_SHIFT(row, toffset), value, TYPE_BYTES[type]);
-      break;
-  }
-
-  return 0;
 }
 
 SDataRow tdDataRowDup(SDataRow row) {
@@ -213,29 +333,29 @@ void dataColInit(SDataCol *pDataCol, STColumn *pCol, void **pBuf, int maxPoints)
 
 }
 
-void dataColAppendVal(SDataCol *pCol, void *value, int numOfPoints, int maxPoints) {
+void dataColAppendVal(SDataCol *pCol, void *value, int numOfRows, int maxPoints) {
   ASSERT(pCol != NULL && value != NULL);
 
   switch (pCol->type) {
     case TSDB_DATA_TYPE_BINARY:
     case TSDB_DATA_TYPE_NCHAR:
       // set offset
-      pCol->dataOff[numOfPoints] = pCol->len;
+      pCol->dataOff[numOfRows] = pCol->len;
       // Copy data
       memcpy(POINTER_SHIFT(pCol->pData, pCol->len), value, varDataTLen(value));
       // Update the length
       pCol->len += varDataTLen(value);
       break;
     default:
-      ASSERT(pCol->len == TYPE_BYTES[pCol->type] * numOfPoints);
+      ASSERT(pCol->len == TYPE_BYTES[pCol->type] * numOfRows);
       memcpy(POINTER_SHIFT(pCol->pData, pCol->len), value, pCol->bytes);
       pCol->len += pCol->bytes;
       break;
   }
 }
 
-void dataColPopPoints(SDataCol *pCol, int pointsToPop, int numOfPoints) {
-  int pointsLeft = numOfPoints - pointsToPop;
+void dataColPopPoints(SDataCol *pCol, int pointsToPop, int numOfRows) {
+  int pointsLeft = numOfRows - pointsToPop;
 
   ASSERT(pointsLeft > 0);
 
@@ -247,7 +367,7 @@ void dataColPopPoints(SDataCol *pCol, int pointsToPop, int numOfPoints) {
     memmove(pCol->pData, POINTER_SHIFT(pCol->pData, toffset), pCol->len);
     dataColSetOffset(pCol, pointsLeft);
   } else {
-    ASSERT(pCol->len == TYPE_BYTES[pCol->type] * numOfPoints);
+    ASSERT(pCol->len == TYPE_BYTES[pCol->type] * numOfRows);
     pCol->len = TYPE_BYTES[pCol->type] * pointsLeft;
     memmove(pCol->pData, POINTER_SHIFT(pCol->pData, TYPE_BYTES[pCol->type] * pointsToPop), pCol->len);
   }
@@ -348,7 +468,7 @@ SDataCols *tdDupDataCols(SDataCols *pDataCols, bool keepData) {
 
   pRet->numOfCols = pDataCols->numOfCols;
   pRet->sversion = pDataCols->sversion;
-  if (keepData) pRet->numOfPoints = pDataCols->numOfPoints;
+  if (keepData) pRet->numOfRows = pDataCols->numOfRows;
 
   for (int i = 0; i < pDataCols->numOfCols; i++) {
     pRet->cols[i].type = pDataCols->cols[i].type;
@@ -378,7 +498,7 @@ SDataCols *tdDupDataCols(SDataCols *pDataCols, bool keepData) {
 }
 
 void tdResetDataCols(SDataCols *pCols) {
-  pCols->numOfPoints = 0;
+  pCols->numOfRows = 0;
   for (int i = 0; i < pCols->maxCols; i++) {
     dataColReset(pCols->cols + i);
   }
@@ -391,14 +511,14 @@ void tdAppendDataRowToDataCol(SDataRow row, SDataCols *pCols) {
     SDataCol *pCol = pCols->cols + i;
     void *    value = tdGetRowDataOfCol(row, pCol->type, pCol->offset);
 
-    dataColAppendVal(pCol, value, pCols->numOfPoints, pCols->maxPoints);
+    dataColAppendVal(pCol, value, pCols->numOfRows, pCols->maxPoints);
   }
-  pCols->numOfPoints++;
+  pCols->numOfRows++;
 }
 
 // Pop pointsToPop points from the SDataCols
 void tdPopDataColsPoints(SDataCols *pCols, int pointsToPop) {
-  int pointsLeft = pCols->numOfPoints - pointsToPop;
+  int pointsLeft = pCols->numOfRows - pointsToPop;
   if (pointsLeft <= 0) {
     tdResetDataCols(pCols);
     return;
@@ -406,14 +526,14 @@ void tdPopDataColsPoints(SDataCols *pCols, int pointsToPop) {
 
   for (int iCol = 0; iCol < pCols->numOfCols; iCol++) {
     SDataCol *pCol = pCols->cols + iCol;
-    dataColPopPoints(pCol, pointsToPop, pCols->numOfPoints);
+    dataColPopPoints(pCol, pointsToPop, pCols->numOfRows);
   }
-  pCols->numOfPoints = pointsLeft;
+  pCols->numOfRows = pointsLeft;
 }
 
 int tdMergeDataCols(SDataCols *target, SDataCols *source, int rowsToMerge) {
-  ASSERT(rowsToMerge > 0 && rowsToMerge <= source->numOfPoints);
-  ASSERT(target->numOfPoints + rowsToMerge <= target->maxPoints);
+  ASSERT(rowsToMerge > 0 && rowsToMerge <= source->numOfRows);
+  ASSERT(target->numOfRows + rowsToMerge <= target->maxPoints);
   ASSERT(target->numOfCols == source->numOfCols);
 
   SDataCols *pTarget = NULL;
@@ -421,10 +541,10 @@ int tdMergeDataCols(SDataCols *target, SDataCols *source, int rowsToMerge) {
   if (dataColsKeyLast(target) < dataColsKeyFirst(source)) {  // No overlap
     for (int i = 0; i < rowsToMerge; i++) {
       for (int j = 0; j < source->numOfCols; j++) {
-        dataColAppendVal(target->cols + j, tdGetColDataOfRow(source->cols + j, i), target->numOfPoints,
+        dataColAppendVal(target->cols + j, tdGetColDataOfRow(source->cols + j, i), target->numOfRows,
                          target->maxPoints);
       }
-      target->numOfPoints++;
+      target->numOfRows++;
     }
   } else {
     pTarget = tdDupDataCols(target, true);
@@ -432,7 +552,7 @@ int tdMergeDataCols(SDataCols *target, SDataCols *source, int rowsToMerge) {
 
     int iter1 = 0;
     int iter2 = 0;
-    tdMergeTwoDataCols(target, pTarget, &iter1, source, &iter2, pTarget->numOfPoints + rowsToMerge);
+    tdMergeTwoDataCols(target, pTarget, &iter1, source, &iter2, pTarget->numOfRows + rowsToMerge);
   }
 
   tdFreeDataCols(pTarget);
@@ -447,33 +567,31 @@ void tdMergeTwoDataCols(SDataCols *target, SDataCols *src1, int *iter1, SDataCol
   // TODO: add resolve duplicate key here
   tdResetDataCols(target);
 
-  while (target->numOfPoints < tRows) {
-    if (*iter1 >= src1->numOfPoints && *iter2 >= src2->numOfPoints) break;
+  while (target->numOfRows < tRows) {
+    if (*iter1 >= src1->numOfRows && *iter2 >= src2->numOfRows) break;
 
-    TSKEY key1 = (*iter1 >= src1->numOfPoints) ? INT64_MAX : ((TSKEY *)(src1->cols[0].pData))[*iter1];
-    TSKEY key2 = (*iter2 >= src2->numOfPoints) ? INT64_MAX : ((TSKEY *)(src2->cols[0].pData))[*iter2];
+    TSKEY key1 = (*iter1 >= src1->numOfRows) ? INT64_MAX : ((TSKEY *)(src1->cols[0].pData))[*iter1];
+    TSKEY key2 = (*iter2 >= src2->numOfRows) ? INT64_MAX : ((TSKEY *)(src2->cols[0].pData))[*iter2];
 
-    if (key1 < key2) {
+    if (key1 <= key2) {
       for (int i = 0; i < src1->numOfCols; i++) {
         ASSERT(target->cols[i].type == src1->cols[i].type);
-        dataColAppendVal(target->cols[i].pData, tdGetColDataOfRow(src1->cols + i, *iter1), target->numOfPoints,
+        dataColAppendVal(&(target->cols[i]), tdGetColDataOfRow(src1->cols + i, *iter1), target->numOfRows,
                          target->maxPoints);
       }
 
-      target->numOfPoints++;
+      target->numOfRows++;
       (*iter1)++;
-    } else if (key1 > key2) {
+      if (key1 == key2) (*iter2)++;
+    } else {
       for (int i = 0; i < src2->numOfCols; i++) {
         ASSERT(target->cols[i].type == src2->cols[i].type);
-        dataColAppendVal(target->cols[i].pData, tdGetColDataOfRow(src2->cols + i, *iter2), target->numOfPoints,
+        dataColAppendVal(&(target->cols[i]), tdGetColDataOfRow(src2->cols + i, *iter2), target->numOfRows,
                          target->maxPoints);
       }
 
-      target->numOfPoints++;
+      target->numOfRows++;
       (*iter2)++;
-    } else {
-      // TODO: deal with duplicate keys
-      ASSERT(false);
     }
   }
 }

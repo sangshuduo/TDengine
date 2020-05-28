@@ -119,10 +119,12 @@ static void mgmtDoDealyedAddToShellQueue(void *param, void *tmrId) {
 
 void mgmtDealyedAddToShellQueue(SQueuedMsg *queuedMsg) {
   void *unUsed = NULL;
-  taosTmrReset(mgmtDoDealyedAddToShellQueue, 1000, queuedMsg, tsMgmtTmr, &unUsed);
+  taosTmrReset(mgmtDoDealyedAddToShellQueue, 300, queuedMsg, tsMgmtTmr, &unUsed);
 }
 
 void mgmtProcessMsgFromShell(SRpcMsg *rpcMsg) {
+
+  mTrace("%p, msg:%s will be processed", rpcMsg->ahandle, taosMsg[rpcMsg->msgType]);
 
   if (rpcMsg->pCont == NULL) {
     mgmtSendSimpleResp(rpcMsg->handle, TSDB_CODE_INVALID_MSG_LEN);
@@ -323,6 +325,8 @@ static void mgmtProcessHeartBeatMsg(SQueuedMsg *pMsg) {
     return;
   }
 
+  pHBRsp->onlineDnodes = htonl(mgmtGetOnlinDnodesNum());
+  pHBRsp->totalDnodes = htonl(mgmtGetDnodesNum());
   mgmtGetMnodeIpSet(&pHBRsp->ipList);
   
   /*
