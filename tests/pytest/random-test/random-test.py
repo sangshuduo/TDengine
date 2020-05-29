@@ -18,6 +18,7 @@ from util.cases import *
 from util.sql import *
 from util.dnodes import *
 
+
 class Test:
     def __init__(self):
         self.current_tb = ""
@@ -35,6 +36,7 @@ class Test:
             tdSql.execute(
                 'create table %s (ts timestamp, speed int)' %
                 self.current_tb)
+            self.last_tb = self.current_tb
             self.written = 0
 
     def insert_data(self):
