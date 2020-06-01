@@ -9,8 +9,7 @@
 #include "ttime.h"
 #include <sys/stat.h>
 
-#define TSDB_DEFAULT_PRECISION TSDB_PRECISION_MILLI  // default precision
-#define IS_VALID_PRECISION(precision) (((precision) >= TSDB_PRECISION_MILLI) && ((precision) <= TSDB_PRECISION_NANO))
+#define IS_VALID_PRECISION(precision) (((precision) >= TSDB_TIME_PRECISION_MILLI) && ((precision) <= TSDB_TIME_PRECISION_NANO))
 #define TSDB_DEFAULT_COMPRESSION TWO_STAGE_COMP
 #define IS_VALID_COMPRESSION(compression) (((compression) >= NO_COMPRESSION) && ((compression) <= TWO_STAGE_COMP))
 #define TSDB_MIN_ID 0
@@ -77,6 +76,11 @@ STsdbCfg *tsdbCreateDefaultCfg() {
 
 void tsdbFreeCfg(STsdbCfg *pCfg) {
   if (pCfg != NULL) free(pCfg);
+}
+
+STsdbCfg *tsdbGetCfg(const TsdbRepoT *repo) {
+  assert(repo != NULL);
+  return &((STsdbRepo*)repo)->config;
 }
 
 /**
@@ -189,9 +193,9 @@ _err:
  *
  * @return a TSDB repository handle on success, NULL for failure and the error number is set
  */
-TsdbRepoT *tsdbOpenRepo(char *tsdbDir, STsdbAppH *pAppH) {
+TsdbRepoT *tsdbOpenRepo(char *rootDir, STsdbAppH *pAppH) {
   char dataDir[128] = "\0";
-  if (access(tsdbDir, F_OK | W_OK | R_OK) < 0) {
+  if (access(rootDir, F_OK | W_OK | R_OK) < 0) {
     return NULL;
   }
 
@@ -200,12 +204,12 @@ TsdbRepoT *tsdbOpenRepo(char *tsdbDir, STsdbAppH *pAppH) {
     return NULL;
   }
 
-  pRepo->rootDir = strdup(tsdbDir);
+  pRepo->rootDir = strdup(rootDir);
 
   tsdbRestoreCfg(pRepo, &(pRepo->config));
   if (pAppH) pRepo->appH = *pAppH;
 
-  pRepo->tsdbMeta = tsdbInitMeta(tsdbDir, pRepo->config.maxTables);
+  pRepo->tsdbMeta = tsdbInitMeta(rootDir, pRepo->config.maxTables, pRepo);
   if (pRepo->tsdbMeta == NULL) {
     free(pRepo->rootDir);
     free(pRepo);
@@ -446,7 +450,7 @@ int32_t tsdbInsertData(TsdbRepoT *repo, SSubmitMsg *pMsg, SShellSubmitRspMsg * p
  */
 int tsdbInitTableCfg(STableCfg *config, ETableType type, uint64_t uid, int32_t tid) {
   if (config == NULL) return -1;
-  if (type != TSDB_NORMAL_TABLE && type != TSDB_CHILD_TABLE) return -1;
+  if (type != TSDB_CHILD_TABLE && type != TSDB_NORMAL_TABLE && type != TSDB_STREAM_TABLE) return -1;
 
   memset((void *)config, 0, sizeof(STableCfg));
 
@@ -455,6 +459,7 @@ int tsdbInitTableCfg(STableCfg *config, ETableType type, uint64_t uid, int32_t t
   config->tableId.uid = uid;
   config->tableId.tid = tid;
   config->name = NULL;
+  config->sql = NULL;
   return 0;
 }
 
@@ -540,12 +545,26 @@ int tsdbTableSetSName(STableCfg *config, char *sname, bool dup) {
   return 0;
 }
 
+int tsdbTableSetStreamSql(STableCfg *config, char *sql, bool dup) {
+  if (config->type != TSDB_STREAM_TABLE) return -1;
+  
+  if (dup) {
+    config->sql = strdup(sql);
+    if (config->sql == NULL) return -1;
+  } else {
+    config->sql = sql;
+  }
+
+  return 0;
+}
+
 void tsdbClearTableCfg(STableCfg *config) {
   if (config->schema) tdFreeSchema(config->schema);
   if (config->tagSchema) tdFreeSchema(config->tagSchema);
   if (config->tagValues) tdFreeDataRow(config->tagValues);
   tfree(config->name);
   tfree(config->sname);
+  tfree(config->sql);
 }
 
 int tsdbInitSubmitBlkIter(SSubmitBlk *pBlock, SSubmitBlkIter *pIter) {

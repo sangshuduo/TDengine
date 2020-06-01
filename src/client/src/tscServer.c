@@ -60,10 +60,10 @@ static void tscSetDnodeIpList(SSqlObj* pSql, SCMVgroupInfo* pVgroupInfo) {
 
 void tscPrintMgmtIp() {
   if (tscMgmtIpSet.numOfIps <= 0) {
-    tscError("invalid mgmt IP list:%d", tscMgmtIpSet.numOfIps);
+    tscError("invalid mnode IP list:%d", tscMgmtIpSet.numOfIps);
   } else {
     for (int i = 0; i < tscMgmtIpSet.numOfIps; ++i) {
-      tscTrace("mgmt index:%d %s:%d", i, tscMgmtIpSet.fqdn[i], tscMgmtIpSet.port[i]);
+      tscTrace("mnode index:%d %s:%d", i, tscMgmtIpSet.fqdn[i], tscMgmtIpSet.port[i]);
     }
   }
 }
@@ -78,7 +78,7 @@ void tscSetMgmtIpList(SRpcIpSet *pIpList) {
 
 void tscUpdateIpSet(void *ahandle, SRpcIpSet *pIpSet) {
   tscMgmtIpSet = *pIpSet;
-  tscTrace("mgmt IP list is changed for ufp is called, numOfIps:%d inUse:%d", tscMgmtIpSet.numOfIps, tscMgmtIpSet.inUse);
+  tscTrace("mnode IP list is changed for ufp is called, numOfIps:%d inUse:%d", tscMgmtIpSet.numOfIps, tscMgmtIpSet.inUse);
   for (int32_t i = 0; i < tscMgmtIpSet.numOfIps; ++i) {
     tscTrace("index:%d fqdn:%s port:%d", i, tscMgmtIpSet.fqdn[i], tscMgmtIpSet.port[i]);
   }
@@ -217,10 +217,12 @@ void tscProcessMsgFromServer(SRpcMsg *rpcMsg, SRpcIpSet *pIpSet) {
   STscObj *pObj = pSql->pTscObj;
   // tscTrace("%p msg:%s is received from server", pSql, taosMsg[rpcMsg->msgType]);
 
-  if (pSql->freed || pObj->signature != pObj) {
+  if (pObj->signature != pObj) {
     tscTrace("%p sql is already released or DB connection is closed, freed:%d pObj:%p signature:%p", pSql, pSql->freed,
              pObj, pObj->signature);
-    tscFreeSqlObj(pSql);
+    if (pSql != pObj->pSql) {
+      tscFreeSqlObj(pSql);
+    }
     rpcFreeCont(rpcMsg->pCont);
     return;
   }
@@ -235,10 +237,8 @@ void tscProcessMsgFromServer(SRpcMsg *rpcMsg, SRpcIpSet *pIpSet) {
     rpcMsg->code = TSDB_CODE_NETWORK_UNAVAIL;
   } else {
     STableMetaInfo *pTableMetaInfo = tscGetTableMetaInfoFromCmd(pCmd, pCmd->clauseIndex, 0);
-    if (rpcMsg->code == TSDB_CODE_NOT_ACTIVE_TABLE || rpcMsg->code == TSDB_CODE_INVALID_TABLE_ID ||
-        rpcMsg->code == TSDB_CODE_INVALID_VNODE_ID || rpcMsg->code == TSDB_CODE_NOT_ACTIVE_VNODE ||
-        rpcMsg->code == TSDB_CODE_NETWORK_UNAVAIL || rpcMsg->code == TSDB_CODE_NOT_ACTIVE_TABLE ||
-        rpcMsg->code == TSDB_CODE_TABLE_ID_MISMATCH) {
+    if (rpcMsg->code == TSDB_CODE_INVALID_TABLE_ID || rpcMsg->code == TSDB_CODE_INVALID_VGROUP_ID || 
+        rpcMsg->code == TSDB_CODE_NETWORK_UNAVAIL) {
       /*
        * not_active_table: 1. the virtual node may fail to create table, since the procedure of create table is asynchronized,
        *                   the virtual node may have not create table till now, so try again by using the new metermeta.
@@ -651,7 +651,7 @@ int tscBuildQueryMsg(SSqlObj *pSql, SSqlInfo *pInfo) {
 
   pQueryMsg->order          = htons(pQueryInfo->order.order);
   pQueryMsg->orderColId     = htons(pQueryInfo->order.orderColId);
-  pQueryMsg->fillType    = htons(pQueryInfo->fillType);
+  pQueryMsg->fillType       = htons(pQueryInfo->fillType);
   pQueryMsg->limit          = htobe64(pQueryInfo->limit.limit);
   pQueryMsg->offset         = htobe64(pQueryInfo->limit.offset);
   pQueryMsg->numOfCols      = htons(taosArrayGetSize(pQueryInfo->colList));
@@ -1287,7 +1287,7 @@ int tscBuildAlterTableMsg(SSqlObj *pSql, SSqlInfo *pInfo) {
 
   pAlterTableMsg->numOfCols = htons(tscNumOfFields(pQueryInfo));
   SSchema *pSchema = pAlterTableMsg->schema;
-  for (int i = 0; i < pAlterTableMsg->numOfCols; ++i) {
+  for (int i = 0; i < tscNumOfFields(pQueryInfo); ++i) {
     TAOS_FIELD *pField = tscFieldInfoGetField(&pQueryInfo->fieldsInfo, i);
 
     pSchema->type = pField->type;
@@ -1843,17 +1843,6 @@ int tscProcessTableMetaRsp(SSqlObj *pSql) {
 
   size_t size = 0;
   STableMeta* pTableMeta = tscCreateTableMetaFromMsg(pMetaMsg, &size);
-
-#if 0
-  // if current table is created according to super table, get the table meta of super table
-  if (pTableMeta->tableType == TSDB_CHILD_TABLE) {
-    char id[TSDB_TABLE_ID_LEN + 1] = {0};
-    strncpy(id, pMetaMsg->stableId, TSDB_TABLE_ID_LEN);
-  
-    // NOTE: if the table meta of super table is not cached at client side yet, the pSTable is NULL
-    pTableMeta->pSTable = taosCacheAcquireByName(tscCacheHandle, id);
-  }
-#endif
   
   // todo add one more function: taosAddDataIfNotExists();
   STableMetaInfo *pTableMetaInfo = tscGetTableMetaInfoFromCmd(&pSql->cmd, 0, 0);
@@ -1867,8 +1856,8 @@ int tscProcessTableMetaRsp(SSqlObj *pSql) {
     return TSDB_CODE_CLI_OUT_OF_MEMORY;
   }
 
-  free(pTableMeta);
   tscTrace("%p recv table meta: %"PRId64 ", tid:%d, name:%s", pSql, pTableMeta->uid, pTableMeta->sid, pTableMetaInfo->name);
+  free(pTableMeta);
   
   return TSDB_CODE_SUCCESS;
 }
@@ -1976,7 +1965,7 @@ int tscProcessMultiMeterMetaRsp(SSqlObj *pSql) {
   
   pSql->res.code = TSDB_CODE_SUCCESS;
   pSql->res.numOfTotal = i;
-  tscTrace("%p load multi-metermeta resp complete num:%d", pSql, pSql->res.numOfTotal);
+  tscTrace("%p load multi-metermeta resp from complete num:%d", pSql, pSql->res.numOfTotal);
 #endif
   
   return TSDB_CODE_SUCCESS;

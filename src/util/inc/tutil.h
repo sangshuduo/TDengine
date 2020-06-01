@@ -46,6 +46,7 @@ extern "C" {
 
 // Pointer p drift right by b bytes
 #define POINTER_SHIFT(p, b) ((void *)((char *)(p) + (b)))
+#define POINTER_DISTANCE(p1, p2) ((char *)(p1) - (char *)(p2)) 
 
 #ifndef NDEBUG
 #define ASSERT(x) assert(x)
@@ -124,6 +125,8 @@ int64_t strnatoi(char *num, int32_t len);
 
 char* strreplace(const char* str, const char* pattern, const char* rep);
 
+char *strbetween(char *string, char *begin, char *end);
+
 char *paGetToken(char *src, char **token, int32_t *tokenLen);
 
 void taosMsleep(int32_t mseconds);
@@ -145,7 +148,7 @@ bool taosMbsToUcs4(char *mbs, size_t mbs_len, char *ucs4, int32_t ucs4_max_len, 
 
 int tasoUcs4Compare(void* f1_ucs4, void *f2_ucs4, int bytes);
 
-bool taosUcs4ToMbs(void *ucs4, int32_t ucs4_max_len, char *mbs);
+int32_t taosUcs4ToMbs(void *ucs4, int32_t ucs4_max_len, char *mbs);
 
 bool taosValidateEncodec(const char *encodec);
 

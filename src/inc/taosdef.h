@@ -91,6 +91,7 @@ extern const int32_t TYPE_BYTES[11];
 
 #define TSDB_TIME_PRECISION_MILLI 0
 #define TSDB_TIME_PRECISION_MICRO 1
+#define TSDB_TIME_PRECISION_NANO  2
 
 #define TSDB_TIME_PRECISION_MILLI_STR "ms"
 #define TSDB_TIME_PRECISION_MICRO_STR "us"
@@ -203,6 +204,7 @@ void tsDataSwap(void *pLeft, void *pRight, int32_t type, int32_t size);
 #define TSDB_COL_NAME_LEN         64
 #define TSDB_MAX_SAVED_SQL_LEN    TSDB_MAX_COLUMNS * 64
 #define TSDB_MAX_SQL_LEN          TSDB_PAYLOAD_SIZE
+#define TSDB_MAX_SQL_SHOW_LEN     256
 #define TSDB_MAX_ALLOWED_SQL_LEN  (8*1024*1024U)          // sql length should be less than 6mb
 
 #define TSDB_MAX_BYTES_PER_ROW    TSDB_MAX_COLUMNS * 64
@@ -284,17 +286,17 @@ void tsDataSwap(void *pLeft, void *pRight, int32_t type, int32_t size);
 #define TSDB_MAX_COMMIT_TIME            40960
 #define TSDB_DEFAULT_COMMIT_TIME        3600
 
-#define TSDB_MIN_PRECISION              TSDB_PRECISION_MILLI
-#define TSDB_MAX_PRECISION              TSDB_PRECISION_NANO
-#define TSDB_DEFAULT_PRECISION          TSDB_PRECISION_MILLI
+#define TSDB_MIN_PRECISION              TSDB_TIME_PRECISION_MILLI
+#define TSDB_MAX_PRECISION              TSDB_TIME_PRECISION_NANO
+#define TSDB_DEFAULT_PRECISION          TSDB_TIME_PRECISION_MILLI
 
 #define TSDB_MIN_COMP_LEVEL             0
 #define TSDB_MAX_COMP_LEVEL             2
 #define TSDB_DEFAULT_COMP_LEVEL         2
 
-#define TSDB_MIN_WAL_LEVEL             0
-#define TSDB_MAX_WAL_LEVEL             2
-#define TSDB_DEFAULT_WAL_LEVEL         2
+#define TSDB_MIN_WAL_LEVEL              1
+#define TSDB_MAX_WAL_LEVEL              2
+#define TSDB_DEFAULT_WAL_LEVEL          1
 
 #define TSDB_MIN_REPLICA_NUM            1
 #define TSDB_MAX_REPLICA_NUM            3
@@ -337,9 +339,6 @@ void tsDataSwap(void *pLeft, void *pRight, int32_t type, int32_t size);
 #define TSDB_ORDER_ASC   1
 #define TSDB_ORDER_DESC  2
 
-#define TSDB_SESSIONS_PER_VNODE (300)
-#define TSDB_SESSIONS_PER_DNODE (TSDB_SESSIONS_PER_VNODE * TSDB_MAX_VNODES)
-
 #define TSDB_DEFAULT_MNODES_HASH_SIZE   5
 #define TSDB_DEFAULT_DNODES_HASH_SIZE   10
 #define TSDB_DEFAULT_ACCOUNTS_HASH_SIZE 10
@@ -359,12 +358,6 @@ void tsDataSwap(void *pLeft, void *pRight, int32_t type, int32_t size);
 #define TAOS_QTYPE_CQ       3
 
 typedef enum {
-  TSDB_PRECISION_MILLI,
-  TSDB_PRECISION_MICRO,
-  TSDB_PRECISION_NANO
-} EPrecisionType;
-
-typedef enum {
   TSDB_SUPER_TABLE        = 0,  // super table
   TSDB_CHILD_TABLE        = 1,  // table created from super table
   TSDB_NORMAL_TABLE       = 2,  // ordinary table
@@ -373,7 +366,7 @@ typedef enum {
 } ETableType;
 
 typedef enum {
-  TSDB_MOD_MGMT,
+  TSDB_MOD_MNODE,
   TSDB_MOD_HTTP,
   TSDB_MOD_MONITOR,
   TSDB_MOD_MQTT,
