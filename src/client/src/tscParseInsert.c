@@ -793,7 +793,7 @@ static int32_t tscCheckIfCreateTable(char **sqlstr, SSqlObj *pSql) {
     }
 
     STableMetaInfo *pSTableMeterMetaInfo = tscGetMetaInfo(pQueryInfo, STABLE_INDEX);
-    tscSetTableId(pSTableMeterMetaInfo, &sToken, pSql);
+    tscSetTableFullName(pSTableMeterMetaInfo, &sToken, pSql);
 
     strncpy(pTag->name, pSTableMeterMetaInfo->name, TSDB_TABLE_ID_LEN);
     code = tscGetTableMeta(pSql, pSTableMeterMetaInfo);
@@ -834,9 +834,8 @@ static int32_t tscCheckIfCreateTable(char **sqlstr, SSqlObj *pSql) {
         sql += index;
 
         if (TK_STRING == sToken.type) {
-          sToken.n = strdequote(sToken.z);
-          strtrim(sToken.z);
-          sToken.n = (uint32_t)strlen(sToken.z);
+          strdequote(sToken.z);
+          sToken.n = strtrim(sToken.z);
         }
 
         if (sToken.type == TK_RP) {
@@ -925,7 +924,11 @@ static int32_t tscCheckIfCreateTable(char **sqlstr, SSqlObj *pSql) {
 
       for (int32_t i = 0; i < spd.numOfCols; ++i) {
         if (!spd.hasVal[i]) {  // current tag column do not have any value to insert, set it to null
-          setNull(ptr, pTagSchema[i].type, pTagSchema[i].bytes);
+          if (pTagSchema[i].type == TSDB_DATA_TYPE_BINARY || pTagSchema[i].type == TSDB_DATA_TYPE_NCHAR) {
+            setVardataNull(ptr, pTagSchema[i].type);
+          } else {
+            setNull(ptr, pTagSchema[i].type, pTagSchema[i].bytes);
+          }
         }
 
         ptr += pTagSchema[i].bytes;
@@ -944,7 +947,7 @@ static int32_t tscCheckIfCreateTable(char **sqlstr, SSqlObj *pSql) {
       return tscInvalidSQLErrMsg(pCmd->payload, "invalid table name", *sqlstr);
     }
 
-    int32_t ret = tscSetTableId(pTableMetaInfo, &tableToken, pSql);
+    int32_t ret = tscSetTableFullName(pTableMetaInfo, &tableToken, pSql);
     if (ret != TSDB_CODE_SUCCESS) {
       return ret;
     }
@@ -1087,7 +1090,7 @@ int doParseInsertSql(SSqlObj *pSql, char *str) {
       goto _error_clean;
     }
 
-    if ((code = tscSetTableId(pTableMetaInfo, &sToken, pSql)) != TSDB_CODE_SUCCESS) {
+    if ((code = tscSetTableFullName(pTableMetaInfo, &sToken, pSql)) != TSDB_CODE_SUCCESS) {
       goto _error_clean;
     }
 
@@ -1205,9 +1208,8 @@ int doParseInsertSql(SSqlObj *pSql, char *str) {
         str += index;
 
         if (TK_STRING == sToken.type) {
-          sToken.n = strdequote(sToken.z);
-          strtrim(sToken.z);
-          sToken.n = (uint32_t)strlen(sToken.z);
+          strdequote(sToken.z);
+          sToken.n = strtrim(sToken.z);
         }
 
         if (sToken.type == TK_RP) {
@@ -1312,6 +1314,7 @@ int tsParseInsertSql(SSqlObj *pSql) {
   tscGetQueryInfoDetailSafely(pCmd, pCmd->clauseIndex, &pQueryInfo);
 
   TSDB_QUERY_SET_TYPE(pQueryInfo->type, TSDB_QUERY_TYPE_INSERT);
+  TSDB_QUERY_SET_TYPE(pQueryInfo->type, pSql->insertType);
 
   sToken = tStrGetToken(pSql->sqlstr, &index, false, 0, NULL);
   if (sToken.type != TK_INTO) {
@@ -1339,7 +1342,7 @@ int tsParseSql(SSqlObj *pSql, bool initialParse) {
      * Set the fp before parse the sql string, in case of getTableMeta failed, in which
      * the error handle callback function can rightfully restore the user-defined callback function (fp).
      */
-    if (initialParse) {
+    if (initialParse && (pSql->insertType != TSDB_QUERY_TYPE_STMT_INSERT)) {
       pSql->fetchFp = pSql->fp;
       pSql->fp = (void(*)())tscHandleMultivnodeInsert;
     }

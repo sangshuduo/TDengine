@@ -322,7 +322,7 @@ void tsDataSwap(void *pLeft, void *pRight, int32_t type, int32_t size);
 #define TSDB_QUERY_TYPE_SUBQUERY                       0x02u
 #define TSDB_QUERY_TYPE_STABLE_SUBQUERY                0x04u     // two-stage subquery for super table
 
-#define TSDB_QUERY_TYPE_TABLE_QUERY                    0x08u     // query ordinary table; below only apply to client side
+#define TSDB_QUERY_TYPE_TABLE_QUERY                    0x08u    // query ordinary table; below only apply to client side
 #define TSDB_QUERY_TYPE_STABLE_QUERY                   0x10u    // query on super table
 #define TSDB_QUERY_TYPE_JOIN_QUERY                     0x20u    // join query
 #define TSDB_QUERY_TYPE_PROJECTION_QUERY               0x40u    // select *,columns... query
@@ -331,6 +331,7 @@ void tsDataSwap(void *pLeft, void *pRight, int32_t type, int32_t size);
 #define TSDB_QUERY_TYPE_TAG_FILTER_QUERY              0x400u
 #define TSDB_QUERY_TYPE_INSERT                        0x100u    // insert type
 #define TSDB_QUERY_TYPE_MULTITABLE_QUERY              0x200u
+#define TSDB_QUERY_TYPE_STMT_INSERT                   0x800u    // stmt insert type
 
 #define TSDB_QUERY_HAS_TYPE(x, _type)         (((x) & (_type)) != 0)
 #define TSDB_QUERY_SET_TYPE(x, _type)         ((x) |= (_type))
