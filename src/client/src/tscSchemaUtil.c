@@ -131,13 +131,6 @@ SSchema* tscGetTableColumnSchema(const STableMeta* pTableMeta, int32_t startCol)
   assert(pTableMeta != NULL);
   
   SSchema* pSchema = (SSchema*) pTableMeta->schema;
-#if 0
-  if (pTableMeta->tableType == TSDB_CHILD_TABLE) {
-    assert (pTableMeta->pSTable != NULL);
-    pSchema = pTableMeta->pSTable->schema;
-  }
-#endif
-
   return &pSchema[startCol];
 }
 
@@ -168,6 +161,8 @@ STableMeta* tscCreateTableMetaFromMsg(STableMetaMsg* pTableMetaMsg, size_t* size
   pTableMeta->sid = pTableMetaMsg->sid;
   pTableMeta->uid = pTableMetaMsg->uid;
   pTableMeta->vgroupInfo = pTableMetaMsg->vgroup;
+  pTableMeta->sversion = pTableMetaMsg->sversion;
+  pTableMeta->tversion = pTableMetaMsg->tversion;
   
   memcpy(pTableMeta->schema, pTableMetaMsg->schema, schemaSize);
   

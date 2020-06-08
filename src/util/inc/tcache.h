@@ -47,7 +47,7 @@ typedef struct SCacheDataNode {
 typedef struct STrashElem {
   struct STrashElem *prev;
   struct STrashElem *next;
-  SCacheDataNode *        pData;
+  SCacheDataNode    *pData;
 } STrashElem;
 
 typedef struct {
@@ -110,6 +110,15 @@ void *taosCachePut(SCacheObj *pCacheObj, const char *key, const void *pData, siz
  * @return              cached data or NULL
  */
 void *taosCacheAcquireByName(SCacheObj *pCacheObj, const char *key);
+
+/**
+ * update the expire time of data in cache 
+ * @param pCacheObj     cache object
+ * @param key           key
+ * @param expireTime    new expire time of data
+ * @return
+ */ 
+void* taosCacheUpdateExpireTimeByName(SCacheObj *pCacheObj, const char *key, uint64_t expireTime);
 
 /**
  * Add one reference count for the exist data, and assign this data for a new owner.

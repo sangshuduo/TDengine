@@ -72,7 +72,7 @@ void *taosInitUdpConnection(uint32_t ip, uint16_t port, char *label, int threads
   pSet->port = port;
   pSet->shandle = shandle;
   pSet->fp = fp;
-  strcpy(pSet->label, label);
+  tstrncpy(pSet->label, label, sizeof(pSet->label));
 
   uint16_t ownPort;
   for (int i = 0; i < threads; ++i) {
@@ -99,7 +99,7 @@ void *taosInitUdpConnection(uint32_t ip, uint16_t port, char *label, int threads
       pConn->localPort = (uint16_t)ntohs(sin.sin_port);
     }
 
-    strcpy(pConn->label, label);
+    tstrncpy(pConn->label, label, sizeof(pConn->label));
     pConn->shandle = shandle;
     pConn->processData = fp;
     pConn->index = i;
@@ -192,7 +192,7 @@ static void *taosRecvUdpData(void *param) {
 
     char *tmsg = malloc(dataLen + tsRpcOverhead);
     if (NULL == tmsg) {
-      tError("%s failed to allocate memory, size:%d", pConn->label, dataLen);
+      tError("%s failed to allocate memory, size:%ld", pConn->label, dataLen);
       continue;
     }
 

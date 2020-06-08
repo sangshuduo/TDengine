@@ -1039,7 +1039,7 @@ void exprTreeToBinary(SBufferWriter* bw, tExprNode* expr) {
 static void* exception_calloc(size_t nmemb, size_t size) {
   void* p = calloc(nmemb, size);
   if (p == NULL) {
-    THROW(TSDB_CODE_SERV_OUT_OF_MEMORY);
+    THROW(TSDB_CODE_QRY_OUT_OF_MEMORY);
   }
   return p;
 }
@@ -1047,7 +1047,7 @@ static void* exception_calloc(size_t nmemb, size_t size) {
 static void* exception_malloc(size_t size) {
   void* p = malloc(size);
   if (p == NULL) {
-    THROW(TSDB_CODE_SERV_OUT_OF_MEMORY);
+    THROW(TSDB_CODE_QRY_OUT_OF_MEMORY);
   }
   return p;
 }
@@ -1055,7 +1055,7 @@ static void* exception_malloc(size_t size) {
 static UNUSED_FUNC char* exception_strdup(const char* str) {
   char* p = strdup(str);
   if (p == NULL) {
-    THROW(TSDB_CODE_SERV_OUT_OF_MEMORY);
+    THROW(TSDB_CODE_QRY_OUT_OF_MEMORY);
   }
   return p;
 }

@@ -124,7 +124,7 @@ static SSub* tscCreateSubscription(STscObj* pObj, const char* topic, const char*
     strtolower(pSql->sqlstr, pSql->sqlstr);
 
     code = tsParseSql(pSql, false);
-    if (code == TSDB_CODE_ACTION_IN_PROGRESS) {
+    if (code == TSDB_CODE_TSC_ACTION_IN_PROGRESS) {
       // wait for the callback function to post the semaphore
       sem_wait(&pSql->rspSem);
       code = pSql->res.code;
@@ -148,7 +148,7 @@ static SSub* tscCreateSubscription(STscObj* pObj, const char* topic, const char*
     pSub->topic[sizeof(pSub->topic) - 1] = 0;
     pSub->progress = taosArrayInit(32, sizeof(SSubscriptionProgress));
     if (pSub->progress == NULL) {
-      THROW(TSDB_CODE_CLI_OUT_OF_MEMORY);
+      THROW(TSDB_CODE_TSC_OUT_OF_MEMORY);
     }
 
     CLEANUP_EXECUTE();
@@ -181,21 +181,23 @@ static SArray* getTableList( SSqlObj* pSql ) {
   const char* p = strstr( pSql->sqlstr, " from " );
   char* sql = alloca(strlen(p) + 32);
   sprintf(sql, "select tbid(tbname)%s", p);
-  int code = taos_query( pSql->pTscObj, sql );
-  if (code != TSDB_CODE_SUCCESS) {
-    tscError("failed to retrieve table id: %s", tstrerror(code));
+  
+  SSqlObj* pSql1 = taos_query(pSql->pTscObj, sql);
+  if (terrno != TSDB_CODE_SUCCESS) {
+    tscError("failed to retrieve table id: %s", tstrerror(terrno));
     return NULL;
   }
 
-  TAOS_RES* res = taos_use_result( pSql->pTscObj );
   TAOS_ROW row;
   SArray* result = taosArrayInit( 128, sizeof(STidTags) );
-  while ((row = taos_fetch_row(res))) {
+  while ((row = taos_fetch_row(pSql1))) {
     STidTags tags;
     memcpy(&tags, row[0], sizeof(tags));
     taosArrayPush(result, &tags);
   }
 
+  taos_free_result(pSql1);
+  
   return result;
 }
 
@@ -322,7 +324,7 @@ void tscSaveSubscriptionProgress(void* sub) {
 TAOS_SUB *taos_subscribe(TAOS *taos, int restart, const char* topic, const char *sql, TAOS_SUBSCRIBE_CALLBACK fp, void *param, int interval) {
   STscObj* pObj = (STscObj*)taos;
   if (pObj == NULL || pObj->signature != pObj) {
-    terrno = TSDB_CODE_DISCONNECTED;
+    terrno = TSDB_CODE_TSC_DISCONNECTED;
     tscError("connection disconnected");
     return NULL;
   }

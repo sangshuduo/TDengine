@@ -42,6 +42,11 @@ extern "C" {
     }            \
   }
 
+#define tstrncpy(dst, src, size) do { \
+    strncpy((dst), (src), (size)); \
+    (dst)[(size) - 1] = 0; \
+} while (0);
+
 #define tclose(x) taosCloseSocket(x)
 
 // Pointer p drift right by b bytes
@@ -113,7 +118,7 @@ extern "C" {
 
 int32_t strdequote(char *src);
 
-void strtrim(char *src);
+size_t strtrim(char *src);
 
 char *strnchr(char *haystack, char needle, int32_t len, bool skipquote);
 
@@ -147,6 +152,8 @@ void getTmpfilePath(const char *fileNamePattern, char *dstPath);
 bool taosMbsToUcs4(char *mbs, size_t mbs_len, char *ucs4, int32_t ucs4_max_len, size_t* len);
 
 int tasoUcs4Compare(void* f1_ucs4, void *f2_ucs4, int bytes);
+
+void taosRandStr(char* str, int32_t size);
 
 int32_t taosUcs4ToMbs(void *ucs4, int32_t ucs4_max_len, char *mbs);
 

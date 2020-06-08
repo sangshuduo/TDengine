@@ -55,7 +55,7 @@ taos_queue taosOpenQueue() {
   
   STaosQueue *queue = (STaosQueue *) calloc(sizeof(STaosQueue), 1);
   if (queue == NULL) {
-    terrno = TSDB_CODE_NO_RESOURCE;
+    terrno = TSDB_CODE_COM_OUT_OF_MEMORY;
     return NULL;
   }
 
@@ -145,7 +145,7 @@ int taosReadQitem(taos_queue param, int *type, void **pitem) {
       queue->numOfItems--;
       if (queue->qset) atomic_sub_fetch_32(&queue->qset->numOfItems, 1);
       code = 1;
-      uTrace("item:%p is read out from queue:%p, type:%d items:%d", *pitem, *type, queue->numOfItems);
+      uTrace("item:%p is read out from queue:%p, type:%d items:%d", *pitem, queue, *type, queue->numOfItems);
   } 
 
   pthread_mutex_unlock(&queue->mutex);
@@ -216,7 +216,7 @@ taos_qset taosOpenQset() {
 
   STaosQset *qset = (STaosQset *) calloc(sizeof(STaosQset), 1);
   if (qset == NULL) {
-    terrno = TSDB_CODE_NO_RESOURCE;
+    terrno = TSDB_CODE_COM_OUT_OF_MEMORY;
     return NULL;
   }
 
