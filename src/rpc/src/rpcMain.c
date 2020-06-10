@@ -458,7 +458,7 @@ int rpcGetConnInfo(void *thandle, SRpcConnInfo *pInfo) {
   pInfo->clientPort = pConn->peerPort;
   // pInfo->serverIp = pConn->destIp;
 
-  strncpy(pInfo->user, pConn->user, sizeof(pInfo->user));
+  tstrncpy(pInfo->user, pConn->user, sizeof(pInfo->user));
   return 0;
 }
 
@@ -493,7 +493,7 @@ static SRpcConn *rpcOpenConn(SRpcInfo *pRpc, char *peerFqdn, uint16_t peerPort, 
   SRpcConn *pConn;
 
   uint32_t peerIp = taosGetIpFromFqdn(peerFqdn);
-  if (peerIp == -1) {
+  if (peerIp == 0xFFFFFFFF) {
     tError("%s, failed to resolve FQDN:%s", pRpc->label, peerFqdn); 
     terrno = TSDB_CODE_RPC_APP_ERROR; 
     return NULL;
