@@ -73,6 +73,7 @@ typedef struct {
   SRpcInfo *pRpc;       // associated SRpcInfo
   SRpcIpSet ipSet;      // ip list provided by app
   void     *ahandle;    // handle provided by app
+  struct SRpcConn *pConn; // pConn allocated
   char      msgType;    // message type
   uint8_t  *pCont;      // content provided by app
   int32_t   contLen;    // content length
@@ -339,7 +340,7 @@ void *rpcReallocCont(void *ptr, int contLen) {
   return start + sizeof(SRpcReqContext) + sizeof(SRpcHead);
 }
 
-void rpcSendRequest(void *shandle, const SRpcIpSet *pIpSet, const SRpcMsg *pMsg) {
+void *rpcSendRequest(void *shandle, const SRpcIpSet *pIpSet, const SRpcMsg *pMsg) {
   SRpcInfo       *pRpc = (SRpcInfo *)shandle;
   SRpcReqContext *pContext;
 
@@ -367,7 +368,7 @@ void rpcSendRequest(void *shandle, const SRpcIpSet *pIpSet, const SRpcMsg *pMsg)
   
   rpcSendReqToServer(pRpc, pContext);
 
-  return;
+  return pContext;
 }
 
 void rpcSendResponse(const SRpcMsg *pRsp) {
@@ -393,7 +394,6 @@ void rpcSendResponse(const SRpcMsg *pRsp) {
   if ( pConn->inType == 0 || pConn->user[0] == 0 ) {
     tTrace("%s, connection is already released, rsp wont be sent", pConn->info);
     rpcUnlockConn(pConn);
-    rpcDecRef(pRpc);
     return;
   }
 
@@ -425,6 +425,10 @@ void rpcSendResponse(const SRpcMsg *pRsp) {
   taosTmrReset(rpcProcessIdleTimer, pRpc->idleTime, pConn, pRpc->tmrCtrl, &pConn->pIdleTimer);
   rpcSendMsgToPeer(pConn, msg, msgLen);
   pConn->secured = 1; // connection shall be secured
+
+  if (pConn->pReqMsg) rpcFreeCont(pConn->pReqMsg);
+  pConn->pReqMsg = NULL;
+  pConn->reqMsgLen = 0;
 
   rpcUnlockConn(pConn);
   rpcDecRef(pRpc);    // decrease the referene count
@@ -482,6 +486,40 @@ void rpcSendRecv(void *shandle, SRpcIpSet *pIpSet, const SRpcMsg *pMsg, SRpcMsg 
   return;
 }
 
+// this API is used by server app to keep an APP context in case connection is broken
+int rpcReportProgress(void *handle, char *pCont, int contLen) {
+  SRpcConn *pConn = (SRpcConn *)handle;
+  int code = 0;
+
+  rpcLockConn(pConn);
+
+  if (pConn->user[0]) {
+    // pReqMsg and reqMsgLen is re-used to store the context from app server
+    pConn->pReqMsg = pCont;     
+    pConn->reqMsgLen = contLen;
+  } else {
+    tTrace("%s, rpc connection is already released", pConn->info);
+    rpcFreeCont(pCont);
+    code = -1;
+  }
+
+  rpcUnlockConn(pConn);
+  return code;
+}
+
+/* todo: cancel process may have race condition, pContext may have been released 
+   just before app calls the rpcCancelRequest */
+void rpcCancelRequest(void *handle) {
+  SRpcReqContext *pContext = handle;
+
+  if (pContext->pConn) {
+    tTrace("%s, app trys to cancel request", pContext->pConn->info);
+    rpcCloseConn(pContext->pConn);
+    pContext->pConn = NULL;
+    rpcFreeCont(pContext->pCont);
+  }
+}
+
 static void rpcFreeMsg(void *msg) {
   if ( msg ) {
     char *temp = (char *)msg - sizeof(SRpcReqContext);
@@ -522,17 +560,9 @@ static SRpcConn *rpcOpenConn(SRpcInfo *pRpc, char *peerFqdn, uint16_t peerPort, 
   return pConn;
 }
 
-static void rpcCloseConn(void *thandle) {
-  SRpcConn *pConn = (SRpcConn *)thandle;
+static void rpcReleaseConn(SRpcConn *pConn) {
   SRpcInfo *pRpc = pConn->pRpc;
   if (pConn->user[0] == 0) return;
-
-  rpcLockConn(pConn);
-
-  if (pConn->user[0] == 0) {
-    rpcUnlockConn(pConn);
-    return;
-  }
 
   pConn->user[0] = 0;
   if (taosCloseConn[pConn->connType]) (*taosCloseConn[pConn->connType])(pConn->chandle);
@@ -542,7 +572,7 @@ static void rpcCloseConn(void *thandle) {
 
   if ( pRpc->connType == TAOS_CONN_SERVER) {
     char hashstr[40] = {0};
-    size_t size = sprintf(hashstr, "%x:%x:%x:%d", pConn->peerIp, pConn->linkUid, pConn->peerId, pConn->connType);
+    size_t size = snprintf(hashstr, sizeof(hashstr), "%x:%x:%x:%d", pConn->peerIp, pConn->linkUid, pConn->peerId, pConn->connType);
     taosHashRemove(pRpc->hash, hashstr, size);
   
     rpcFreeMsg(pConn->pRspMsg); // it may have a response msg saved, but not request msg
@@ -558,7 +588,16 @@ static void rpcCloseConn(void *thandle) {
   taosFreeId(pRpc->idPool, pConn->sid);
   pConn->pContext = NULL;
 
-  tTrace("%s, rpc connection is closed", pConn->info);
+  tTrace("%s, rpc connection is released", pConn->info);
+}
+
+static void rpcCloseConn(void *thandle) {
+  SRpcConn *pConn = (SRpcConn *)thandle;
+
+  rpcLockConn(pConn);
+
+  if (pConn->user[0])
+    rpcReleaseConn(pConn);
 
   rpcUnlockConn(pConn);
 }
@@ -592,7 +631,7 @@ static SRpcConn *rpcAllocateServerConn(SRpcInfo *pRpc, SRecvInfo *pRecv) {
   char      hashstr[40] = {0};
   SRpcHead *pHead = (SRpcHead *)pRecv->msg;
 
-  size_t size = sprintf(hashstr, "%x:%x:%x:%d", pRecv->ip, pHead->linkUid, pHead->sourceId, pRecv->connType);
+  size_t size = snprintf(hashstr, sizeof(hashstr), "%x:%x:%x:%d", pRecv->ip, pHead->linkUid, pHead->sourceId, pRecv->connType);
  
   // check if it is already allocated
   SRpcConn **ppConn = (SRpcConn **)(taosHashGet(pRpc->hash, hashstr, size));
@@ -662,6 +701,7 @@ static SRpcConn *rpcGetConnObj(SRpcInfo *pRpc, int sid, SRecvInfo *pRecv) {
   if (pConn) {
     if (pConn->linkUid != pHead->linkUid) {
       terrno = TSDB_CODE_RPC_MISMATCHED_LINK_ID;
+      tError("%s %p %p, linkUid:0x%x is not matched with received:0x%x", pRpc->label, pConn, pHead->ahandle, pConn->linkUid, pHead->linkUid);
       pConn = NULL;
     }
   }
@@ -682,7 +722,7 @@ static SRpcConn *rpcSetupConnToServer(SRpcReqContext *pContext) {
   if (pConn) {
     pConn->tretry = 0;
     pConn->ahandle = pContext->ahandle;
-    sprintf(pConn->info, "%s %p %p", pRpc->label, pConn, pConn->ahandle);
+    snprintf(pConn->info, sizeof(pConn->info), "%s %p %p", pRpc->label, pConn, pConn->ahandle);
     pConn->tretry = 0;
   } else {
     tError("%s %p, failed to set up connection(%s)", pRpc->label, pContext->ahandle, tstrerror(terrno));
@@ -811,7 +851,7 @@ static SRpcConn *rpcProcessMsgHead(SRpcInfo *pRpc, SRecvInfo *pRecv) {
 
   if (rpcIsReq(pHead->msgType)) {
     pConn->ahandle = (void *)pHead->ahandle;
-    sprintf(pConn->info, "%s %p %p", pRpc->label, pConn, pConn->ahandle);
+    snprintf(pConn->info, sizeof(pConn->info), "%s %p %p", pRpc->label, pConn, pConn->ahandle);
   }
 
   sid = pConn->sid;
@@ -846,6 +886,22 @@ static SRpcConn *rpcProcessMsgHead(SRpcInfo *pRpc, SRecvInfo *pRecv) {
   return pConn;
 }
 
+static void rpcReportBrokenLinkToServer(SRpcConn *pConn) {
+  SRpcInfo *pRpc = pConn->pRpc;
+
+  // if there are pending request, notify the app
+  tTrace("%s, notify the server app, connection is gone", pConn->info);
+
+  SRpcMsg rpcMsg;
+  rpcMsg.pCont = pConn->pReqMsg;     // pReqMsg is re-used to store the APP context from server
+  rpcMsg.contLen = pConn->reqMsgLen; // reqMsgLen is re-used to store the APP context length
+  rpcMsg.ahandle = pConn->ahandle;
+  rpcMsg.handle = pConn;
+  rpcMsg.msgType = pConn->inType;
+  rpcMsg.code = TSDB_CODE_RPC_NETWORK_UNAVAIL; 
+  if (pRpc->cfp) (*(pRpc->cfp))(&rpcMsg, NULL);
+}
+
 static void rpcProcessBrokenLink(SRpcConn *pConn) {
   if (pConn == NULL) return;
   SRpcInfo *pRpc = pConn->pRpc;
@@ -859,22 +915,10 @@ static void rpcProcessBrokenLink(SRpcConn *pConn) {
     taosTmrStart(rpcProcessConnError, 0, pContext, pRpc->tmrCtrl);
   }
 
-  if (pConn->inType) {
-    // if there are pending request, notify the app
-    tTrace("%s, connection is gone, notify the app", pConn->info);
-/*
-    SRpcMsg rpcMsg;
-    rpcMsg.pCont = NULL;
-    rpcMsg.contLen = 0;
-    rpcMsg.handle = pConn;
-    rpcMsg.msgType = pConn->inType;
-    rpcMsg.code = TSDB_CODE_RPC_NETWORK_UNAVAIL;
-    (*(pRpc->cfp))(&rpcMsg);
-*/
-  }
+  if (pConn->inType) rpcReportBrokenLinkToServer(pConn); 
 
+  rpcReleaseConn(pConn);
   rpcUnlockConn(pConn);
-  rpcCloseConn(pConn);
 }
 
 static void *rpcProcessMsgFromPeer(SRecvInfo *pRecv) {
@@ -887,7 +931,7 @@ static void *rpcProcessMsgFromPeer(SRecvInfo *pRecv) {
   // underlying UDP layer does not know it is server or client
   pRecv->connType = pRecv->connType | pRpc->connType;  
 
-  if (pRecv->ip == 0) {
+  if (pRecv->msg == NULL) {
     rpcProcessBrokenLink(pConn);
     return NULL;
   }
@@ -920,6 +964,7 @@ static void *rpcProcessMsgFromPeer(SRecvInfo *pRecv) {
 static void rpcNotifyClient(SRpcReqContext *pContext, SRpcMsg *pMsg) {
   SRpcInfo       *pRpc = pContext->pRpc;
 
+  pContext->pConn = NULL;
   if (pContext->pRsp) { 
     // for synchronous API
     memcpy(pContext->pSet, &pContext->ipSet, sizeof(SRpcIpSet));
@@ -1088,6 +1133,7 @@ static void rpcSendReqToServer(SRpcInfo *pRpc, SRpcReqContext *pContext) {
     return;
   }
 
+  pContext->pConn = pConn;
   pConn->ahandle = pContext->ahandle;
   rpcLockConn(pConn);
 
@@ -1177,7 +1223,6 @@ static void rpcProcessConnError(void *param, void *id) {
 static void rpcProcessRetryTimer(void *param, void *tmrId) {
   SRpcConn *pConn = (SRpcConn *)param;
   SRpcInfo *pRpc = pConn->pRpc;
-  int       reportDisc = 0;
 
   rpcLockConn(pConn);
 
@@ -1193,44 +1238,33 @@ static void rpcProcessRetryTimer(void *param, void *tmrId) {
     } else {
       // close the connection
       tTrace("%s, failed to send msg:%s to %s:%hu", pConn->info, taosMsg[pConn->outType], pConn->peerFqdn, pConn->peerPort);
-      reportDisc = 1;
+      if (pConn->pContext) {
+        pConn->pContext->code = TSDB_CODE_RPC_NETWORK_UNAVAIL;
+        taosTmrStart(rpcProcessConnError, 0, pConn->pContext, pRpc->tmrCtrl);
+        rpcReleaseConn(pConn);
+      }
     }
   } else {
     tTrace("%s, retry timer not processed", pConn->info);
   }
 
   rpcUnlockConn(pConn);
-
-  if (reportDisc && pConn->pContext) { 
-    pConn->pContext->code = TSDB_CODE_RPC_NETWORK_UNAVAIL;
-    rpcProcessConnError(pConn->pContext, NULL);
-    rpcCloseConn(pConn);
-  }
 }
 
 static void rpcProcessIdleTimer(void *param, void *tmrId) {
   SRpcConn *pConn = (SRpcConn *)param;
-  SRpcInfo *pRpc = pConn->pRpc;
+
+  rpcLockConn(pConn);
 
   if (pConn->user[0]) {
     tTrace("%s, close the connection since no activity", pConn->info);
-    if (pConn->inType && pRpc->cfp) {
-      // if there are pending request, notify the app
-      tTrace("%s, notify the app, connection is gone", pConn->info);
-/*
-      SRpcMsg rpcMsg;
-      rpcMsg.pCont = NULL;
-      rpcMsg.contLen = 0;
-      rpcMsg.handle = pConn;
-      rpcMsg.msgType = pConn->inType;
-      rpcMsg.code = TSDB_CODE_RPC_NETWORK_UNAVAIL; 
-      (*(pRpc->cfp))(&rpcMsg);
-*/
-    }
-    rpcCloseConn(pConn);
+    if (pConn->inType) rpcReportBrokenLinkToServer(pConn); 
+    rpcReleaseConn(pConn);
   } else {
     tTrace("%s, idle timer:%p not processed", pConn->info, tmrId);
   }
+
+  rpcUnlockConn(pConn);
 }
 
 static void rpcProcessProgressTimer(void *param, void *tmrId) {

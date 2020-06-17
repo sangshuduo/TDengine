@@ -157,10 +157,12 @@ static int32_t mnodeChildTableActionDelete(SSdbOper *pOper) {
   if (pDb != NULL) pAcct = mnodeGetAcct(pDb->acct);
 
   if (pTable->info.type == TSDB_CHILD_TABLE) {
-    grantRestore(TSDB_GRANT_TIMESERIES, pTable->superTable->numOfColumns - 1);
-    if (pAcct != NULL) pAcct->acctInfo.numOfTimeSeries -= (pTable->superTable->numOfColumns - 1);
-    mnodeRemoveTableFromStable(pTable->superTable, pTable);
-    mnodeDecTableRef(pTable->superTable);
+    if (pTable->superTable) {
+      grantRestore(TSDB_GRANT_TIMESERIES, pTable->superTable->numOfColumns - 1);
+      if (pAcct != NULL) pAcct->acctInfo.numOfTimeSeries -= (pTable->superTable->numOfColumns - 1);
+      mnodeRemoveTableFromStable(pTable->superTable, pTable);
+      mnodeDecTableRef(pTable->superTable);
+    }
   } else {
     grantRestore(TSDB_GRANT_TIMESERIES, pTable->numOfColumns - 1);
     if (pAcct != NULL) pAcct->acctInfo.numOfTimeSeries -= (pTable->numOfColumns - 1);
@@ -201,7 +203,7 @@ static int32_t mnodeChildTableActionEncode(SSdbOper *pOper) {
   assert(pTable != NULL && pOper->rowData != NULL);
 
   int32_t len = strlen(pTable->info.tableId);
-  if (len > TSDB_TABLE_ID_LEN) return TSDB_CODE_MND_INVALID_TABLE_ID;
+  if (len >= TSDB_TABLE_ID_LEN) return TSDB_CODE_MND_INVALID_TABLE_ID;
 
   memcpy(pOper->rowData, pTable->info.tableId, len);
   memset(pOper->rowData + len, 0, 1);
@@ -232,7 +234,7 @@ static int32_t mnodeChildTableActionDecode(SSdbOper *pOper) {
   if (pTable == NULL) return TSDB_CODE_MND_OUT_OF_MEMORY;
 
   int32_t len = strlen(pOper->rowData);
-  if (len > TSDB_TABLE_ID_LEN) {
+  if (len >= TSDB_TABLE_ID_LEN) {
     free(pTable);
     return TSDB_CODE_MND_INVALID_TABLE_ID;
   }
@@ -453,7 +455,7 @@ static int32_t mnodeSuperTableActionEncode(SSdbOper *pOper) {
   assert(pOper->pObj != NULL && pOper->rowData != NULL);
 
   int32_t len = strlen(pStable->info.tableId);
-  if (len > TSDB_TABLE_ID_LEN) len = TSDB_CODE_MND_INVALID_TABLE_ID;
+  if (len >= TSDB_TABLE_ID_LEN) len = TSDB_CODE_MND_INVALID_TABLE_ID;
 
   memcpy(pOper->rowData, pStable->info.tableId, len);
   memset(pOper->rowData + len, 0, 1);
@@ -477,7 +479,7 @@ static int32_t mnodeSuperTableActionDecode(SSdbOper *pOper) {
   if (pStable == NULL) return TSDB_CODE_MND_OUT_OF_MEMORY;
 
   int32_t len = strlen(pOper->rowData);
-  if (len > TSDB_TABLE_ID_LEN){
+  if (len >= TSDB_TABLE_ID_LEN){
     free(pStable);
     return TSDB_CODE_MND_INVALID_TABLE_ID;
   }
@@ -1004,7 +1006,7 @@ static int32_t mnodeAddSuperTableColumn(SDbObj *pDb, SSuperTableObj *pStable, SS
           sizeof(SSchema) * pStable->numOfTags);
   memcpy(pStable->schema + pStable->numOfColumns, schema, sizeof(SSchema) * ncols);
 
-  SSchema *tschema = (SSchema *) (pStable->schema + sizeof(SSchema) * pStable->numOfColumns);
+  SSchema *tschema = (SSchema *) (pStable->schema + pStable->numOfColumns);
   for (int32_t i = 0; i < ncols; i++) {
     tschema[i].colId = pStable->nextColId++;
   }
@@ -1078,8 +1080,9 @@ static int32_t mnodeGetShowSuperTableMeta(STableMetaMsg *pMeta, SShowObj *pShow,
   int32_t cols = 0;
   SSchema *pSchema = pMeta->schema;
 
-  pShow->bytes[cols] = (TSDB_TABLE_NAME_LEN - 1) + VARSTR_HEADER_SIZE;
-  pSchema[cols].type = TSDB_DATA_TYPE_BINARY;
+  SSchema tbnameSchema = tGetTableNameColumnSchema();
+  pShow->bytes[cols] = tbnameSchema.bytes;
+  pSchema[cols].type = tbnameSchema.type;
   strcpy(pSchema[cols].name, "name");
   pSchema[cols].bytes = htons(pShow->bytes[cols]);
   cols++;
@@ -1249,12 +1252,12 @@ static int32_t mnodeGetSuperTableMeta(SMnodeMsg *pMsg) {
   pMeta->numOfColumns = htons((int16_t)pTable->numOfColumns);
   pMeta->tableType    = pTable->info.type;
   pMeta->contLen      = sizeof(STableMetaMsg) + mnodeSetSchemaFromSuperTable(pMeta->schema, pTable);
-  strncpy(pMeta->tableId, pTable->info.tableId, TSDB_TABLE_ID_LEN);
+  tstrncpy(pMeta->tableId, pTable->info.tableId, sizeof(pMeta->tableId));
 
+  pMsg->rpcRsp.len = pMeta->contLen;
   pMeta->contLen = htons(pMeta->contLen);
 
   pMsg->rpcRsp.rsp = pMeta;
-  pMsg->rpcRsp.len = pMeta->contLen;
   
   mTrace("stable:%s, uid:%" PRIu64 " table meta is retrieved", pTable->info.tableId, pTable->uid);
   return TSDB_CODE_SUCCESS;
@@ -1769,7 +1772,8 @@ static int32_t mnodeAutoCreateChildTable(SMnodeMsg *pMsg) {
     return TSDB_CODE_MND_OUT_OF_MEMORY;
   }
 
-  tstrncpy(pCreateMsg->tableId, pInfo->tableId, sizeof(pInfo->tableId));
+  size_t size = sizeof(pInfo->tableId);
+  tstrncpy(pCreateMsg->tableId, pInfo->tableId, size);
   tstrncpy(pCreateMsg->db, pMsg->pDb->name, sizeof(pCreateMsg->db));
   pCreateMsg->igExists = 1;
   pCreateMsg->getMeta = 1;
@@ -2032,7 +2036,7 @@ static int32_t mnodeProcessMultiTableMetaMsg(SMnodeMsg *pMsg) {
   pMultiMeta->numOfTables = 0;
 
   for (int32_t t = 0; t < pInfo->numOfTables; ++t) {
-    char * tableId = (char *)(pInfo->tableIds + t * TSDB_TABLE_ID_LEN + 1);
+    char * tableId = (char *)(pInfo->tableIds + t * TSDB_TABLE_ID_LEN);
     SChildTableObj *pTable = mnodeGetChildTable(tableId);
     if (pTable == NULL) continue;
 
@@ -2079,8 +2083,9 @@ static int32_t mnodeGetShowTableMeta(STableMetaMsg *pMeta, SShowObj *pShow, void
   int32_t cols = 0;
   SSchema *pSchema = pMeta->schema;
 
-  pShow->bytes[cols] = (TSDB_TABLE_NAME_LEN - 1) + VARSTR_HEADER_SIZE;
-  pSchema[cols].type = TSDB_DATA_TYPE_BINARY;
+  SSchema s = tGetTableNameColumnSchema();
+  pShow->bytes[cols] = s.bytes;
+  pSchema[cols].type = s.type;
   strcpy(pSchema[cols].name, "table_name");
   pSchema[cols].bytes = htons(pShow->bytes[cols]);
   cols++;
@@ -2097,8 +2102,9 @@ static int32_t mnodeGetShowTableMeta(STableMetaMsg *pMeta, SShowObj *pShow, void
   pSchema[cols].bytes = htons(pShow->bytes[cols]);
   cols++;
 
-  pShow->bytes[cols] = (TSDB_TABLE_NAME_LEN - 1) + VARSTR_HEADER_SIZE;
-  pSchema[cols].type = TSDB_DATA_TYPE_BINARY;
+  SSchema tbCol = tGetTableNameColumnSchema();
+  pShow->bytes[cols] = tbCol.bytes + VARSTR_HEADER_SIZE;
+  pSchema[cols].type = tbCol.type;
   strcpy(pSchema[cols].name, "stable_name");
   pSchema[cols].bytes = htons(pShow->bytes[cols]);
   cols++;
@@ -2155,7 +2161,7 @@ static int32_t mnodeRetrieveShowTables(SShowObj *pShow, char *data, int32_t rows
 
     char *pWrite = data + pShow->offset[cols] * rows + pShow->bytes[cols] * numOfRows;
 
-    STR_WITH_MAXSIZE_TO_VARSTR(pWrite, tableName, sizeof(tableName) - 1);
+    STR_WITH_MAXSIZE_TO_VARSTR(pWrite, tableName, pShow->bytes[cols]);
     cols++;
 
     pWrite = data + pShow->offset[cols] * rows + pShow->bytes[cols] * numOfRows;
@@ -2176,7 +2182,7 @@ static int32_t mnodeRetrieveShowTables(SShowObj *pShow, char *data, int32_t rows
     memset(tableName, 0, sizeof(tableName));
     if (pTable->info.type == TSDB_CHILD_TABLE) {
       mnodeExtractTableName(pTable->superTable->info.tableId, tableName);
-      STR_WITH_MAXSIZE_TO_VARSTR(pWrite, tableName, sizeof(tableName) - 1);
+      STR_WITH_MAXSIZE_TO_VARSTR(pWrite, tableName, pShow->bytes[cols]);
     }
     
     cols++;
@@ -2268,8 +2274,9 @@ static int32_t mnodeGetStreamTableMeta(STableMetaMsg *pMeta, SShowObj *pShow, vo
   int32_t cols = 0;
   SSchema *pSchema = pMeta->schema;
 
-  pShow->bytes[cols] = (TSDB_TABLE_NAME_LEN - 1) + VARSTR_HEADER_SIZE;
-  pSchema[cols].type = TSDB_DATA_TYPE_BINARY;
+  SSchema tbnameColSchema = tGetTableNameColumnSchema();
+  pShow->bytes[cols] = tbnameColSchema.bytes;
+  pSchema[cols].type = tbnameColSchema.type;
   strcpy(pSchema[cols].name, "table_name");
   pSchema[cols].bytes = htons(pShow->bytes[cols]);
   cols++;
@@ -2345,7 +2352,7 @@ static int32_t mnodeRetrieveStreamTables(SShowObj *pShow, char *data, int32_t ro
 
     char *pWrite = data + pShow->offset[cols] * rows + pShow->bytes[cols] * numOfRows;
 
-    STR_WITH_MAXSIZE_TO_VARSTR(pWrite, tableName, sizeof(tableName) - 1);
+    STR_WITH_MAXSIZE_TO_VARSTR(pWrite, tableName, pShow->bytes[cols]);
     cols++;
 
     pWrite = data + pShow->offset[cols] * rows + pShow->bytes[cols] * numOfRows;
@@ -2357,7 +2364,7 @@ static int32_t mnodeRetrieveStreamTables(SShowObj *pShow, char *data, int32_t ro
     cols++;
 
     pWrite = data + pShow->offset[cols] * rows + pShow->bytes[cols] * numOfRows;
-    STR_WITH_MAXSIZE_TO_VARSTR(pWrite, pTable->sql, TSDB_MAX_SQL_SHOW_LEN);    
+    STR_WITH_MAXSIZE_TO_VARSTR(pWrite, pTable->sql, pShow->bytes[cols]);    
     cols++;
 
     numOfRows++;
