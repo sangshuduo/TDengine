@@ -97,6 +97,8 @@ class Test:
                 "create table %s using %s tags (1, '表1')" %
                 (current_tb, self.last_stb))
             self.last_tb = current_tb
+            self.written = 0
+
             tdSql.execute(
                 "insert into %s values (now, 27, '我是nchar字符串')" %
                 self.last_tb)
@@ -111,6 +113,8 @@ class Test:
             tdLog.info("will drop last super table")
             tdSql.execute('drop table %s' % self.last_stb)
             self.last_stb = ""
+            self.last_tb = ""
+            self.written = 0
 
     def query_data_from_stable(self):
         tdLog.info("query_data_from_stable")

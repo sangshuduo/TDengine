@@ -572,6 +572,7 @@ static void dnodeSaveMnodeInfos() {
   len += snprintf(content + len, maxLen - len, "}\n"); 
 
   fwrite(content, 1, len, fp);
+  fflush(fp);
   fclose(fp);
   free(content);
   
@@ -615,6 +616,16 @@ static void dnodeSendStatusMsg(void *handle, void *tmrId) {
   pStatus->numOfCores       = htons((uint16_t) tsNumOfCores);
   pStatus->diskAvailable    = tsAvailDataDirGB;
   pStatus->alternativeRole  = (uint8_t) tsAlternativeRole;
+
+  // fill cluster cfg parameters
+  pStatus->clusterCfg.numOfMnodes        = tsNumOfMnodes;
+  pStatus->clusterCfg.mnodeEqualVnodeNum = tsMnodeEqualVnodeNum;
+  pStatus->clusterCfg.offlineThreshold   = tsOfflineThreshold;
+  pStatus->clusterCfg.statusInterval     = tsStatusInterval;
+  strcpy(pStatus->clusterCfg.arbitrator, tsArbitrator);
+  strcpy(pStatus->clusterCfg.timezone, tsTimezone);
+  strcpy(pStatus->clusterCfg.locale, tsLocale);
+  strcpy(pStatus->clusterCfg.charset, tsCharset);  
   
   vnodeBuildStatusMsg(pStatus);
   contLen = sizeof(SDMStatusMsg) + pStatus->openVnodes * sizeof(SVnodeLoad);
@@ -694,6 +705,7 @@ static void dnodeSaveDnodeCfg() {
   len += snprintf(content + len, maxLen - len, "}\n"); 
 
   fwrite(content, 1, len, fp);
+  fflush(fp);
   fclose(fp);
   free(content);
   
