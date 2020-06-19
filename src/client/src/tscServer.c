@@ -196,8 +196,8 @@ int tscSendMsgToServer(SSqlObj *pSql) {
       .handle  = pSql,
       .code    = 0
   };
-  rpcSendRequest(pObj->pDnodeConn, &pSql->ipList, &rpcMsg);
 
+  pSql->SRpcReqContext = rpcSendRequest(pObj->pDnodeConn, &pSql->ipList, &rpcMsg);
   return TSDB_CODE_SUCCESS;
 }
 
@@ -272,7 +272,7 @@ void tscProcessMsgFromServer(SRpcMsg *rpcMsg, SRpcIpSet *pIpSet) {
   if (pRes->code != TSDB_CODE_TSC_QUERY_CANCELLED) {
     pRes->code = (rpcMsg->code != TSDB_CODE_SUCCESS) ? rpcMsg->code : TSDB_CODE_RPC_NETWORK_UNAVAIL;
   } else {
-    tscTrace("%p query is cancelled, code:%d", pSql, tstrerror(pRes->code));
+    tscTrace("%p query is cancelled, code:%s", pSql, tstrerror(pRes->code));
   }
 
   if (pRes->code == TSDB_CODE_SUCCESS) {
@@ -412,7 +412,6 @@ void tscKillSTableQuery(SSqlObj *pSql) {
 
   for (int i = 0; i < pSql->numOfSubs; ++i) {
     SSqlObj *pSub = pSql->pSubs[i];
-
     if (pSub == NULL) {
       continue;
     }
@@ -422,7 +421,7 @@ void tscKillSTableQuery(SSqlObj *pSql) {
      * sub-queries not correctly released and master sql object of super table query reaches an abnormal state.
      */
     pSql->pSubs[i]->res.code = TSDB_CODE_TSC_QUERY_CANCELLED;
-//    taosStopRpcConn(pSql->pSubs[i]->);
+    rpcCancelRequest(pSql->pSubs[i]->SRpcReqContext);
   }
 
   /*
@@ -646,10 +645,6 @@ int tscBuildQueryMsg(SSqlObj *pSql, SSqlInfo *pInfo) {
   
   size_t numOfOutput = tscSqlExprNumOfExprs(pQueryInfo);
   pQueryMsg->numOfOutput = htons(numOfOutput);
-  if (numOfOutput < 0) {
-    tscError("%p illegal value of number of output columns in query msg: %d", pSql, numOfOutput);
-    return -1;
-  }
 
   // set column list ids
   size_t numOfCols = taosArrayGetSize(pQueryInfo->colList);
@@ -663,7 +658,7 @@ int tscBuildQueryMsg(SSqlObj *pSql, SSqlInfo *pInfo) {
     if (pCol->colIndex.columnIndex >= tscGetNumOfColumns(pTableMeta) || pColSchema->type < TSDB_DATA_TYPE_BOOL ||
         pColSchema->type > TSDB_DATA_TYPE_NCHAR) {
       tscError("%p sid:%d uid:%" PRIu64" id:%s, column index out of range, numOfColumns:%d, index:%d, column name:%s",
-          pSql, pTableMeta->sid, pTableMeta->uid, pTableMetaInfo->name, tscGetNumOfColumns(pTableMeta), pCol->colIndex,
+          pSql, pTableMeta->sid, pTableMeta->uid, pTableMetaInfo->name, tscGetNumOfColumns(pTableMeta), pCol->colIndex.columnIndex,
                pColSchema->name);
 
       return TSDB_CODE_TSC_INVALID_SQL;
@@ -783,7 +778,7 @@ int tscBuildQueryMsg(SSqlObj *pSql, SSqlInfo *pInfo) {
           (pColSchema->type < TSDB_DATA_TYPE_BOOL || pColSchema->type > TSDB_DATA_TYPE_NCHAR)) {
         tscError("%p sid:%d uid:%" PRIu64 " id:%s, tag index out of range, totalCols:%d, numOfTags:%d, index:%d, column name:%s",
                  pSql, pTableMeta->sid, pTableMeta->uid, pTableMetaInfo->name, total, numOfTagColumns,
-                 pCol->colIndex, pColSchema->name);
+                 pCol->colIndex.columnIndex, pColSchema->name);
 
         return TSDB_CODE_TSC_INVALID_SQL;
       }
@@ -982,7 +977,7 @@ int32_t tscBuildDropDbMsg(SSqlObj *pSql, SSqlInfo *pInfo) {
   SCMDropDbMsg *pDropDbMsg = (SCMDropDbMsg*)pCmd->payload;
 
   STableMetaInfo *pTableMetaInfo = tscGetTableMetaInfoFromCmd(pCmd, pCmd->clauseIndex, 0);
-  strncpy(pDropDbMsg->db, pTableMetaInfo->name, tListLen(pDropDbMsg->db));
+  tstrncpy(pDropDbMsg->db, pTableMetaInfo->name, sizeof(pDropDbMsg->db));
   pDropDbMsg->ignoreNotExists = pInfo->pDCLInfo->existsCheck ? 1 : 0;
 
   pCmd->msgType = TSDB_MSG_TYPE_CM_DROP_DB;
@@ -1052,7 +1047,7 @@ int32_t tscBuildDropAcctMsg(SSqlObj *pSql, SSqlInfo *pInfo) {
 
   SCMDropUserMsg *pDropMsg = (SCMDropUserMsg*)pCmd->payload;
   STableMetaInfo *pTableMetaInfo = tscGetTableMetaInfoFromCmd(pCmd, pCmd->clauseIndex, 0);
-  strcpy(pDropMsg->user, pTableMetaInfo->name);
+  tstrncpy(pDropMsg->user, pTableMetaInfo->name, sizeof(pDropMsg->user));
 
   return TSDB_CODE_SUCCESS;
 }
@@ -1812,6 +1807,7 @@ int tscProcessTableMetaRsp(SSqlObj *pSql) {
   
   // todo handle out of memory case
   if (pTableMetaInfo->pTableMeta == NULL) {
+    free(pTableMeta);
     return TSDB_CODE_TSC_OUT_OF_MEMORY;
   }
 
@@ -2183,7 +2179,7 @@ int tscProcessRetrieveRspFromNode(SSqlObj *pSql) {
   }
 
   pRes->row = 0;
-  tscTrace("%p numOfRows:%d, offset:%d, complete:%d", pSql, pRes->numOfRows, pRes->offset, pRes->completed);
+  tscTrace("%p numOfRows:%" PRId64 ", offset:%" PRId64 ", complete:%d", pSql, pRes->numOfRows, pRes->offset, pRes->completed);
 
   return 0;
 }
@@ -2324,6 +2320,7 @@ int tscGetSTableVgroupInfo(SSqlObj *pSql, int32_t clauseIndex) {
   
   SQueryInfo *pNewQueryInfo = NULL;
   if ((code = tscGetQueryInfoDetailSafely(&pNew->cmd, 0, &pNewQueryInfo)) != TSDB_CODE_SUCCESS) {
+    tscFreeSqlObj(pNew);
     return code;
   }
   

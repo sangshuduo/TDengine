@@ -752,6 +752,10 @@ static bool validateTableColumnInfo(tFieldList* pFieldList, SSqlCmd* pCmd) {
 
   int32_t nLen = 0;
   for (int32_t i = 0; i < pFieldList->nField; ++i) {
+    if (pFieldList->p[i].bytes == 0) {
+      invalidSqlErrMsg(tscGetErrorMsgPayload(pCmd), msg5);
+      return false;
+    }
     nLen += pFieldList->p[i].bytes;
   }
 
@@ -808,6 +812,10 @@ static bool validateTagParams(tFieldList* pTagsList, tFieldList* pFieldList, SSq
 
   int32_t nLen = 0;
   for (int32_t i = 0; i < pTagsList->nField; ++i) {
+    if (pTagsList->p[i].bytes == 0) {
+      invalidSqlErrMsg(tscGetErrorMsgPayload(pCmd), msg7);
+      return false;
+    }
     nLen += pTagsList->p[i].bytes;
   }
 
@@ -2614,7 +2622,7 @@ static int32_t doExtractColumnFilterInfo(SQueryInfo* pQueryInfo, SColumnFilterIn
     tVariantDump(&pRight->val, (char*)&pColumnFilter->upperBndd, colType, false);
   } else {  // TK_GT,TK_GE,TK_EQ,TK_NE are based on the pColumn->lowerBndd
     if (colType == TSDB_DATA_TYPE_BINARY) {
-      pColumnFilter->pz = (int64_t)calloc(1, pRight->val.nLen + 1);
+      pColumnFilter->pz = (int64_t)calloc(1, pRight->val.nLen + TSDB_NCHAR_SIZE);
       pColumnFilter->len = pRight->val.nLen;
 
       tVariantDump(&pRight->val, (char*)pColumnFilter->pz, colType, false);

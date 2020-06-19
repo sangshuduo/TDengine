@@ -192,7 +192,7 @@ JNIEXPORT jint JNICALL Java_com_taosdata_jdbc_TSDBJNIConnector_setOptions(JNIEnv
     const char *tz1 = (*env)->GetStringUTFChars(env, optionValue, NULL);
     if (tz1 && strlen(tz1) != 0) {
       res = taos_options(TSDB_OPTION_TIMEZONE, tz1);
-      jniTrace("set timezone to %s, result:%d", timezone, res);
+      jniTrace("set timezone to %s, result:%d", tz1, res);
     } else {
       jniTrace("input timezone is empty");
     }
@@ -227,12 +227,10 @@ JNIEXPORT jlong JNICALL Java_com_taosdata_jdbc_TSDBJNIConnector_connectImp(JNIEn
   }
 
   if (user == NULL) {
-    jniTrace("jobj:%p, user is null, use tsDefaultUser", jobj);
-    user = tsDefaultUser;
+    jniTrace("jobj:%p, user is null, use default user %s", jobj, TSDB_DEFAULT_USER);
   }
   if (pass == NULL) {
-    jniTrace("jobj:%p, pass is null, use tsDefaultPass", jobj);
-    pass = tsDefaultPass;
+    jniTrace("jobj:%p, pass is null, use default password", jobj);
   }
 
   /*
@@ -252,8 +250,8 @@ JNIEXPORT jlong JNICALL Java_com_taosdata_jdbc_TSDBJNIConnector_connectImp(JNIEn
 
   if (host != NULL) (*env)->ReleaseStringUTFChars(env, jhost, host);
   if (dbname != NULL) (*env)->ReleaseStringUTFChars(env, jdbName, dbname);
-  if (user != NULL && user != tsDefaultUser) (*env)->ReleaseStringUTFChars(env, juser, user);
-  if (pass != NULL && pass != tsDefaultPass) (*env)->ReleaseStringUTFChars(env, jpass, pass);
+  if (user != NULL) (*env)->ReleaseStringUTFChars(env, juser, user);
+  if (pass != NULL) (*env)->ReleaseStringUTFChars(env, jpass, pass);
 
   return ret;
 }
@@ -583,7 +581,7 @@ JNIEXPORT jlong JNICALL Java_com_taosdata_jdbc_TSDBJNIConnector_subscribeImp(JNI
 }
 
 JNIEXPORT jlong JNICALL Java_com_taosdata_jdbc_TSDBJNIConnector_consumeImp(JNIEnv *env, jobject jobj, jlong sub) {
-  jniTrace("jobj:%p, in TSDBJNIConnector_consumeImp, sub:%" PRId64, jobj, sub);
+  jniTrace("jobj:%p, in TSDBJNIConnector_consumeImp, sub:%lld", jobj, sub);
   jniGetGlobalMethod(env);
 
   TAOS_SUB *tsub = (TAOS_SUB *)sub;

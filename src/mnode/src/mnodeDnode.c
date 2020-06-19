@@ -90,11 +90,12 @@ static int32_t mnodeDnodeActionDelete(SSdbOper *pOper) {
 static int32_t mnodeDnodeActionUpdate(SSdbOper *pOper) {
   SDnodeObj *pDnode = pOper->pObj;
   SDnodeObj *pSaved = mnodeGetDnode(pDnode->dnodeId);
-  if (pDnode != pSaved && pDnode != NULL && pSaved != NULL) {
+  if (pSaved != NULL && pDnode != pSaved) {
     memcpy(pSaved, pDnode, pOper->rowSize);
     free(pDnode);
+    mnodeDecDnodeRef(pSaved);
   }
-  mnodeDecDnodeRef(pSaved);
+
   return TSDB_CODE_SUCCESS;
 }
 
@@ -120,8 +121,10 @@ static int32_t mnodeDnodeActionRestored() {
     mPrint("dnode first deploy, create dnode:%s", tsLocalEp);
     mnodeCreateDnode(tsLocalEp, NULL);
     SDnodeObj *pDnode = mnodeGetDnodeByEp(tsLocalEp);
-    mnodeAddMnode(pDnode->dnodeId);
-    mnodeDecDnodeRef(pDnode);
+    if (pDnode != NULL) {
+      mnodeAddMnode(pDnode->dnodeId);
+      mnodeDecDnodeRef(pDnode);
+    }
   }
 
   return TSDB_CODE_SUCCESS;
@@ -251,7 +254,7 @@ static int32_t mnodeProcessCfgDnodeMsg(SMnodeMsg *pMsg) {
     // TODO temporary disabled for compiling: strcpy(pCmCfgDnode->ep, pCmCfgDnode->ep); 
   }
 
-  if (strcmp(pMsg->pUser->user, "root") != 0) {
+  if (strcmp(pMsg->pUser->user, TSDB_DEFAULT_USER) != 0) {
     return TSDB_CODE_MND_NO_RIGHTS;
   }
 
@@ -335,6 +338,19 @@ static int32_t mnodeProcessDnodeStatusMsg(SMnodeMsg *pMsg) {
   }
  
   int32_t openVnodes = htons(pStatus->openVnodes);
+  int32_t contLen = sizeof(SDMStatusRsp) + openVnodes * sizeof(SDMVgroupAccess);
+  SDMStatusRsp *pRsp = rpcMallocCont(contLen);
+  if (pRsp == NULL) {
+    mnodeDecDnodeRef(pDnode);
+    return TSDB_CODE_MND_OUT_OF_MEMORY;
+  }
+
+  pRsp->dnodeCfg.dnodeId = htonl(pDnode->dnodeId);
+  pRsp->dnodeCfg.moduleStatus = htonl((int32_t)pDnode->isMgmt);
+  pRsp->dnodeCfg.numOfVnodes = htonl(openVnodes);
+  mnodeGetMnodeInfos(&pRsp->mnodes);
+  SDMVgroupAccess *pAccess = (SDMVgroupAccess *)((char *)pRsp + sizeof(SDMStatusRsp));
+
   for (int32_t j = 0; j < openVnodes; ++j) {
     SVnodeLoad *pVload = &pStatus->load[j];
     pVload->vgId = htonl(pVload->vgId);
@@ -347,6 +363,8 @@ static int32_t mnodeProcessDnodeStatusMsg(SMnodeMsg *pMsg) {
       mnodeSendDropVnodeMsg(pVload->vgId, &ipSet, NULL);
     } else {
       mnodeUpdateVgroupStatus(pVgroup, pDnode, pVload);
+      pAccess->vgId = htonl(pVload->vgId);
+      pAccess->accessState = pVgroup->accessState;
       mnodeDecVgroupRef(pVgroup);
     }
   }
@@ -356,6 +374,7 @@ static int32_t mnodeProcessDnodeStatusMsg(SMnodeMsg *pMsg) {
     bool ret = mnodeCheckClusterCfgPara(&(pStatus->clusterCfg));
     if (false == ret) {
       mnodeDecDnodeRef(pDnode);
+      rpcFreeCont(pRsp);
       mError("dnode %s cluster cfg parameters inconsistent", pStatus->dnodeEp);
       return TSDB_CODE_MND_CLUSTER_CFG_INCONSISTENT;
     }
@@ -366,26 +385,13 @@ static int32_t mnodeProcessDnodeStatusMsg(SMnodeMsg *pMsg) {
     balanceNotify();
   }
 
-  mnodeDecDnodeRef(pDnode);
-
-  int32_t contLen = sizeof(SDMStatusRsp) + TSDB_MAX_VNODES * sizeof(SDMVgroupAccess);
-  SDMStatusRsp *pRsp = rpcMallocCont(contLen);
-  if (pRsp == NULL) {
-    return TSDB_CODE_MND_OUT_OF_MEMORY;
+  if (openVnodes != pDnode->openVnodes) {
+    mnodeCheckUnCreatedVgroup(pDnode, pStatus->load, openVnodes);
   }
 
   pDnode->lastAccess = tsAccessSquence;
+  mnodeDecDnodeRef(pDnode);
 
-  mnodeGetMnodeInfos(&pRsp->mnodes);
-
-  pRsp->dnodeCfg.dnodeId = htonl(pDnode->dnodeId);
-  pRsp->dnodeCfg.moduleStatus = htonl((int32_t)pDnode->isMgmt);
-  pRsp->dnodeCfg.numOfVnodes = 0;
-  
-  contLen = sizeof(SDMStatusRsp);
-
-  //TODO: set vnode access
-  
   pMsg->rpcRsp.len = contLen;
   pMsg->rpcRsp.rsp =  pRsp;
 
@@ -474,7 +480,7 @@ static int32_t mnodeDropDnodeByEp(char *ep, SMnodeMsg *pMsg) {
 static int32_t mnodeProcessCreateDnodeMsg(SMnodeMsg *pMsg) {
   SCMCreateDnodeMsg *pCreate = pMsg->rpcMsg.pCont;
 
-  if (strcmp(pMsg->pUser->user, "root") != 0) {
+  if (strcmp(pMsg->pUser->user, TSDB_DEFAULT_USER) != 0) {
     return TSDB_CODE_MND_NO_RIGHTS;
   } else {
     return mnodeCreateDnode(pCreate->ep, pMsg);
@@ -484,7 +490,7 @@ static int32_t mnodeProcessCreateDnodeMsg(SMnodeMsg *pMsg) {
 static int32_t mnodeProcessDropDnodeMsg(SMnodeMsg *pMsg) {
   SCMDropDnodeMsg *pDrop = pMsg->rpcMsg.pCont;
 
-  if (strcmp(pMsg->pUser->user, "root") != 0) {
+  if (strcmp(pMsg->pUser->user, TSDB_DEFAULT_USER) != 0) {
     return TSDB_CODE_MND_NO_RIGHTS;
   } else {
     return mnodeDropDnodeByEp(pDrop->ep, pMsg);
@@ -495,7 +501,7 @@ static int32_t mnodeGetDnodeMeta(STableMetaMsg *pMeta, SShowObj *pShow, void *pC
   SUserObj *pUser = mnodeGetUserFromConn(pConn);
   if (pUser == NULL) return 0;
 
-  if (strcmp(pUser->pAcct->user, "root") != 0) {
+  if (strcmp(pUser->pAcct->user, TSDB_DEFAULT_USER) != 0) {
     mnodeDecUserRef(pUser);
     return TSDB_CODE_MND_NO_RIGHTS;
   }
@@ -624,7 +630,7 @@ static int32_t mnodeGetModuleMeta(STableMetaMsg *pMeta, SShowObj *pShow, void *p
   SUserObj *pUser = mnodeGetUserFromConn(pConn);
   if (pUser == NULL) return 0;
 
-  if (strcmp(pUser->user, "root") != 0)  {
+  if (strcmp(pUser->user, TSDB_DEFAULT_USER) != 0)  {
     mnodeDecUserRef(pUser);
     return TSDB_CODE_MND_NO_RIGHTS;
   }
@@ -734,7 +740,7 @@ static int32_t mnodeGetConfigMeta(STableMetaMsg *pMeta, SShowObj *pShow, void *p
   SUserObj *pUser = mnodeGetUserFromConn(pConn);
   if (pUser == NULL) return 0;
 
-  if (strcmp(pUser->user, "root") != 0)  {
+  if (strcmp(pUser->user, TSDB_DEFAULT_USER) != 0)  {
     mnodeDecUserRef(pUser);
     return TSDB_CODE_MND_NO_RIGHTS;
   }
@@ -821,7 +827,7 @@ static int32_t mnodeGetVnodeMeta(STableMetaMsg *pMeta, SShowObj *pShow, void *pC
   SUserObj *pUser = mnodeGetUserFromConn(pConn);
   if (pUser == NULL) return 0;
   
-  if (strcmp(pUser->user, "root") != 0)  {
+  if (strcmp(pUser->user, TSDB_DEFAULT_USER) != 0)  {
     mnodeDecUserRef(pUser);
     return TSDB_CODE_MND_NO_RIGHTS;
   }
