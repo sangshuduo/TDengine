@@ -488,8 +488,7 @@ static bool tscFreeQhandleInVnode(SSqlObj* pSql) {
       (pCmd->command == TSDB_SQL_SELECT && pSql->pStream == NULL && pTableMetaInfo->pTableMeta != NULL)) {
 
     pCmd->command = (pCmd->command > TSDB_SQL_MGMT) ? TSDB_SQL_RETRIEVE : TSDB_SQL_FETCH;
-    tscTrace("%p start to send msg to free qhandle in dnode, command:%s", pSql, sqlCmd[pCmd->command]);
-    pSql->freed = 1;
+    tscTrace("%p send msg to dnode to free qhandle ASAP, command:%s", pSql, sqlCmd[pCmd->command]);
     tscProcessSql(pSql);
 
     // in case of sync model query, waits for response and then goes on
@@ -510,18 +509,17 @@ static bool tscFreeQhandleInVnode(SSqlObj* pSql) {
 
 void taos_free_result(TAOS_RES *res) {
   SSqlObj *pSql = (SSqlObj *)res;
-  tscTrace("%p start to free result", res);
-  
+
   if (pSql == NULL || pSql->signature != pSql) {
-    tscTrace("%p result has been freed", pSql);
+    tscTrace("%p sqlObj has been freed", pSql);
     return;
   }
   
   // The semaphore can not be changed while freeing async sub query objects.
   SSqlRes *pRes = &pSql->res;
   if (pRes == NULL || pRes->qhandle == 0) {
-    tscTrace("%p SqlObj is freed by app, qhandle is null", pSql);
     tscFreeSqlObj(pSql);
+    tscTrace("%p SqlObj is freed by app, qhandle is null", pSql);
     return;
   }
 
@@ -529,6 +527,7 @@ void taos_free_result(TAOS_RES *res) {
   SQueryInfo *pQueryInfo = tscGetQueryInfoDetail(&pSql->cmd, 0);
   if (pQueryInfo == NULL) {
     tscFreeSqlObj(pSql);
+    tscTrace("%p SqlObj is freed by app", pSql);
     return;
   }
 
@@ -631,7 +630,7 @@ void taos_stop_query(TAOS_RES *res) {
     return;
   }
 
-  rpcCancelRequest(pSql->SRpcReqContext);
+  rpcCancelRequest(pSql->pRpcCtx);
   tscTrace("%p query is cancelled", res);
 }
 
@@ -713,7 +712,6 @@ int taos_validate_sql(TAOS *taos, const char *sql) {
   SSqlRes *pRes = &pSql->res;
   SSqlCmd *pCmd = &pSql->cmd;
   
-  pRes->numOfRows  = 1;
   pRes->numOfTotal = 0;
   pRes->numOfClauseTotal = 0;
 
