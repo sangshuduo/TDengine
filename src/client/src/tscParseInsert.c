@@ -46,18 +46,28 @@ static int32_t tscToInteger(SSQLToken *pToken, int64_t *value, char **endPtr) {
     return TK_ILLEGAL;
   }
   
-  int32_t radix = 10;
-  
-  int32_t radixList[3] = {16, 8, 2}; // the integer number with different radix: hex, oct, bin
-  if (pToken->type == TK_HEX || pToken->type == TK_OCT || pToken->type == TK_BIN) {
-    radix = radixList[pToken->type - TK_HEX];
-  }
 
+  int32_t radix = 10;
+  if (pToken->type == TK_HEX) {
+    radix = 16;
+  } else if (pToken->type == TK_BIN) {
+    radix = 2;
+  }
+  
   errno = 0;
   *value = strtoll(pToken->z, endPtr, radix);
+  if (**endPtr == 'e' || **endPtr == 'E' || **endPtr == '.') {
+    errno = 0;
+    double v = round(strtod(pToken->z, endPtr));
+    if (v > INT64_MAX || v <= INT64_MIN) {
+      errno = ERANGE;
+    } else {
+      *value = v;
+    }
+  }
   
   // not a valid integer number, return error
-  if ((pToken->type == TK_STRING || pToken->type == TK_ID) && ((*endPtr - pToken->z) != pToken->n)) {
+  if (*endPtr - pToken->z != pToken->n) {
     return TK_ILLEGAL;
   }
 
@@ -73,11 +83,11 @@ static int32_t tscToDouble(SSQLToken *pToken, double *value, char **endPtr) {
   *value = strtod(pToken->z, endPtr);
   
   // not a valid integer number, return error
-  if ((pToken->type == TK_STRING || pToken->type == TK_ID) && ((*endPtr - pToken->z) != pToken->n)) {
+  if ((*endPtr - pToken->z) != pToken->n) {
     return TK_ILLEGAL;
-  } else {
-    return pToken->type;
   }
+
+  return pToken->type;
 }
 
 int tsParseTime(SSQLToken *pToken, int64_t *time, char **next, char *error, int16_t timePrec) {
@@ -781,12 +791,12 @@ static int32_t tscCheckIfCreateTable(char **sqlstr, SSqlObj *pSql) {
     sToken = tStrGetToken(sql, &index, false, 0, NULL);
     sql += index;
 
-    STagData *pTag = (STagData *)pCmd->payload;
+    tscAllocPayload(pCmd, sizeof(STagData));
+    STagData *pTag = (STagData *) pCmd->payload;
+
     memset(pTag, 0, sizeof(STagData));
     
-    /*
-     * the source super table is moved to the secondary position of the pTableMetaInfo list
-     */
+    //the source super table is moved to the secondary position of the pTableMetaInfo list
     if (pQueryInfo->numOfTables < 2) {
       tscAddEmptyMetaInfo(pQueryInfo);
     }
@@ -887,9 +897,8 @@ static int32_t tscCheckIfCreateTable(char **sqlstr, SSqlObj *pSql) {
       index = 0;
       sToken = tStrGetToken(sql, &index, true, numOfIgnoreToken, &ignoreTokenTypes);
       sql += index;
-      if (sToken.n == 0) {
-        break;
-      } else if (sToken.type == TK_RP) {
+
+      if (sToken.n == 0 || sToken.type == TK_RP) {
         break;
       }
 
@@ -902,11 +911,6 @@ static int32_t tscCheckIfCreateTable(char **sqlstr, SSqlObj *pSql) {
       code = tsParseOneColumnData(&pTagSchema[colIndex], &sToken, tagVal, pCmd->payload, &sql, false, tinfo.precision);
       if (code != TSDB_CODE_SUCCESS) {
         return code;
-      }
-
-      if ((pTagSchema[colIndex].type == TSDB_DATA_TYPE_BINARY || pTagSchema[colIndex].type == TSDB_DATA_TYPE_NCHAR) &&
-          sToken.n > pTagSchema[colIndex].bytes) {
-        return tscInvalidSQLErrMsg(pCmd->payload, "string too long", sToken.z);
       }
     }
 
@@ -987,13 +991,11 @@ static int32_t tscCheckIfCreateTable(char **sqlstr, SSqlObj *pSql) {
 }
 
 int validateTableName(char *tblName, int len, SSQLToken* psTblToken) {
-  char buf[TSDB_TABLE_ID_LEN] = {0};
-  tstrncpy(buf, tblName, sizeof(buf));
+  tstrncpy(psTblToken->z, tblName, TSDB_TABLE_ID_LEN);
 
   psTblToken->n    = len;
   psTblToken->type = TK_ID;
-  psTblToken->z    = buf;
-  tSQLGetToken(buf, &psTblToken->type);
+  tSQLGetToken(psTblToken->z, &psTblToken->type);
 
   return tscValidateName(psTblToken);
 }
@@ -1033,15 +1035,13 @@ int tsParseInsertSql(SSqlObj *pSql) {
     pTableMetaInfo = tscGetMetaInfo(pQueryInfo, 0);
   }
 
-  // TODO: 2048 is added because TSDB_MAX_TAGS_LEN now is 65536, but TSDB_PAYLOAD_SIZE is 65380
-  if ((code = tscAllocPayload(pCmd, TSDB_PAYLOAD_SIZE + 2048)) != TSDB_CODE_SUCCESS) {
+  if ((code = tscAllocPayload(pCmd, TSDB_DEFAULT_PAYLOAD_SIZE)) != TSDB_CODE_SUCCESS) {
     return code;
   }
 
   if (NULL == pCmd->pTableList) {
     pCmd->pTableList = taosHashInit(128, taosGetDefaultHashFunction(TSDB_DATA_TYPE_BIGINT), false);
-
-    pSql->cmd.pDataBlocks = tscCreateBlockArrayList();
+    pCmd->pDataBlocks = taosArrayInit(4, POINTER_BYTES);
     if (NULL == pCmd->pTableList || NULL == pSql->cmd.pDataBlocks) {
       code = TSDB_CODE_TSC_OUT_OF_MEMORY;
       goto _error;
@@ -1079,7 +1079,9 @@ int tsParseInsertSql(SSqlObj *pSql) {
     }
 
     pCmd->curSql = sToken.z;
+    char buf[TSDB_TABLE_ID_LEN];
     SSQLToken sTblToken;
+    sTblToken.z = buf;
     // Check if the table name available or not
     if (validateTableName(sToken.z, sToken.n, &sTblToken) != TSDB_CODE_SUCCESS) {
       code = tscInvalidSQLErrMsg(pCmd->payload, "table name invalid", sToken.z);
@@ -1172,7 +1174,7 @@ int tsParseInsertSql(SSqlObj *pSql) {
         goto _error;
       }
 
-      tscAppendDataBlock(pCmd->pDataBlocks, pDataBlock);
+      taosArrayPush(pCmd->pDataBlocks, &pDataBlock);
       strcpy(pDataBlock->filename, fname);
     } else if (sToken.type == TK_LP) {
       /* insert into tablename(col1, col2,..., coln) values(v1, v2,... vn); */
@@ -1260,7 +1262,7 @@ int tsParseInsertSql(SSqlObj *pSql) {
     goto _clean;
   }
 
-  if (pCmd->pDataBlocks->nSize > 0) { // merge according to vgId
+  if (taosArrayGetSize(pCmd->pDataBlocks) > 0) { // merge according to vgId
     if ((code = tscMergeTableDataBlocks(pSql, pCmd->pDataBlocks)) != TSDB_CODE_SUCCESS) {
       goto _error;
     }
@@ -1370,8 +1372,7 @@ static int doPackSendDataBlock(SSqlObj *pSql, int32_t numOfRows, STableDataBlock
     return code;
   }
 
-  // the pDataBlock is different from the pTableDataBlocks
-  STableDataBlocks *pDataBlock = pCmd->pDataBlocks->pData[0];
+  STableDataBlocks *pDataBlock = taosArrayGetP(pCmd->pDataBlocks, 0);
   if ((code = tscCopyDataBlockToPayload(pSql, pDataBlock)) != TSDB_CODE_SUCCESS) {
     return code;
   }
@@ -1402,15 +1403,15 @@ static int tscInsertDataFromFile(SSqlObj *pSql, FILE *fp, char *tmpTokenBuf) {
   
   int32_t rowSize = tinfo.rowSize;
 
-  pCmd->pDataBlocks = tscCreateBlockArrayList();
+  pCmd->pDataBlocks = taosArrayInit(4, POINTER_BYTES);
   STableDataBlocks *pTableDataBlock = NULL;
-  int32_t           ret = tscCreateDataBlock(TSDB_PAYLOAD_SIZE, rowSize, sizeof(SSubmitBlk),
-                                   pTableMetaInfo->name, pTableMeta, &pTableDataBlock);
+
+  int32_t ret = tscCreateDataBlock(TSDB_PAYLOAD_SIZE, rowSize, sizeof(SSubmitBlk), pTableMetaInfo->name, pTableMeta, &pTableDataBlock);
   if (ret != TSDB_CODE_SUCCESS) {
-    return -1;
+    return ret;
   }
 
-  tscAppendDataBlock(pCmd->pDataBlocks, pTableDataBlock);
+  taosArrayPush(pCmd->pDataBlocks, &pTableDataBlock);
 
   code = tscAllocateMemIfNeed(pTableDataBlock, rowSize, &maxRows);
   if (TSDB_CODE_SUCCESS != code) return -1;
@@ -1444,7 +1445,7 @@ static int tscInsertDataFromFile(SSqlObj *pSql, FILE *fp, char *tmpTokenBuf) {
         return -code;
       }
 
-      pTableDataBlock = pCmd->pDataBlocks->pData[0];
+      pTableDataBlock = taosArrayGetP(pCmd->pDataBlocks, 0);
       pTableDataBlock->size = sizeof(SSubmitBlk);
       pTableDataBlock->rowSize = tinfo.rowSize;
 
@@ -1481,13 +1482,14 @@ void tscProcessMultiVnodesInsertFromFile(SSqlObj *pSql) {
   int32_t           affected_rows = 0;
 
   assert(pCmd->dataSourceType == DATA_FROM_DATA_FILE && pCmd->pDataBlocks != NULL);
-  SDataBlockList *pDataBlockList = pCmd->pDataBlocks;
+  SArray *pDataBlockList = pCmd->pDataBlocks;
   pCmd->pDataBlocks = NULL;
 
   char path[PATH_MAX] = {0};
 
-  for (int32_t i = 0; i < pDataBlockList->nSize; ++i) {
-    pDataBlock = pDataBlockList->pData[i];
+  size_t size = taosArrayGetSize(pDataBlockList);
+  for (int32_t i = 0; i < size; ++i) {
+    pDataBlock = taosArrayGetP(pDataBlockList, i );
     if (pDataBlock == NULL) {
       continue;
     }
