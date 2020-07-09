@@ -109,6 +109,8 @@ void cqClose(void *handle) {
   while (pObj) {
     SCqObj *pTemp = pObj;
     pObj = pObj->next;
+    tdFreeSchema(pTemp->pSchema);
+    tfree(pTemp->sqlStr);
     free(pTemp);
   } 
   
@@ -213,6 +215,8 @@ void cqDrop(void *handle) {
   pObj->pStream = NULL;
 
   cTrace("vgId:%d, id:%d CQ:%s is dropped", pContext->vgId, pObj->tid, pObj->sqlStr); 
+  tdFreeSchema(pObj->pSchema);
+  free(pObj->sqlStr);
   free(pObj);
 
   pthread_mutex_unlock(&pContext->mutex);
@@ -240,6 +244,10 @@ static void cqCreateStream(SCqContext *pContext, SCqObj *pObj) {
 
 static void cqProcessStreamRes(void *param, TAOS_RES *tres, TAOS_ROW row) {
   SCqObj     *pObj = (SCqObj *)param;
+  if (tres == NULL && row == NULL) {
+    pObj->pStream = NULL;
+    return;
+  }
   SCqContext *pContext = pObj->pContext;
   STSchema   *pSchema = pObj->pSchema;
   if (pObj->pStream == NULL) return;
@@ -256,34 +264,24 @@ static void cqProcessStreamRes(void *param, TAOS_RES *tres, TAOS_ROW row) {
   SDataRow trow = (SDataRow)pBlk->data;
   tdInitDataRow(trow, pSchema);
 
-  union {
-    char buf[sizeof(int64_t)];
-    tstr str;
-  } nullVal;
-
   for (int32_t i = 0; i < pSchema->numOfCols; i++) {
     STColumn *c = pSchema->columns + i;
-    char* val = (char*)row[i];
-    if (IS_VAR_DATA_TYPE(c->type)) {
-      if (val == NULL) {
-        val = nullVal.buf;
-        if (c->type == TSDB_DATA_TYPE_BINARY) {
-          setNull(nullVal.str.data, TSDB_DATA_TYPE_BINARY, 1);
-          nullVal.str.len = 1;
-        } else {
-          setNull(nullVal.str.data, TSDB_DATA_TYPE_NCHAR, 4);
-          nullVal.str.len = 4;
-        }
-      } else {
-        val -= sizeof(VarDataLenT);
-      }
-    } else if (val == NULL) {
-      val = nullVal.buf;
-      setNull(val, c->type, c->bytes);
+    void* val = row[i];
+    if (val == NULL) {
+      val = getNullValue(c->type);
+    } else if (c->type == TSDB_DATA_TYPE_BINARY) {
+      val = ((char*)val) - sizeof(VarDataLenT);
+    } else if (c->type == TSDB_DATA_TYPE_NCHAR) {
+      char buf[TSDB_MAX_NCHAR_LEN];
+      size_t len = taos_fetch_lengths(tres)[i];
+      taosMbsToUcs4(val, len, buf, sizeof(buf), &len);
+      memcpy(val + sizeof(VarDataLenT), buf, len);
+      varDataLen(val) = len;
     }
     tdAppendColVal(trow, val, c->type, c->bytes, c->offset);
   }
-  pBlk->len = htonl(dataRowLen(trow));
+  pBlk->dataLen = htonl(dataRowLen(trow));
+  pBlk->schemaLen = 0;
 
   pBlk->uid = htobe64(pObj->uid);
   pBlk->tid = htonl(pObj->tid);

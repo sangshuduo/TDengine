@@ -55,12 +55,13 @@ class TDTestCase:
         tdSql.checkRows(tbNum + 1)
 
         tdLog.info("===== step3 =====")
-        tdLog.info("sleeping 120 seconds")
-        time.sleep(120)
-        tdSql.query("select * from s0")
-        tdSql.checkData(0, 1, rowNum)
-        tdSql.checkData(0, 2, rowNum)
-        tdSql.checkData(0, 3, rowNum)
+        tdSql.waitedQuery("select * from s0", 1, 120)
+        try:
+            tdSql.checkData(0, 1, rowNum)
+            tdSql.checkData(0, 2, rowNum)
+            tdSql.checkData(0, 3, rowNum)
+        except Exception as e:
+            tdLog.info(repr(e))
 
         tdLog.info("===== step4 =====")
         tdSql.execute("drop table s0")
@@ -78,13 +79,13 @@ class TDTestCase:
         tdSql.checkRows(tbNum + 1)
 
         tdLog.info("===== step7 =====")
-        tdLog.info("sleeping 120 seconds")
-        time.sleep(120)
-
-        tdSql.query("select * from s0")
-        tdSql.checkData(0, 1, rowNum)
-        tdSql.checkData(0, 2, rowNum)
-        tdSql.checkData(0, 3, rowNum)
+        tdSql.waitedQuery("select * from s0", 1, 120)
+        try:
+            tdSql.checkData(0, 1, rowNum)
+            tdSql.checkData(0, 2, rowNum)
+            tdSql.checkData(0, 3, rowNum)
+        except Exception as e:
+            tdLog.info(repr(e))
 
         tdLog.info("===== step8 =====")
         tdSql.query(
@@ -101,13 +102,13 @@ class TDTestCase:
         tdSql.checkRows(tbNum + 2)
 
         tdLog.info("===== step9 =====")
-        tdLog.info("sleeping 120 seconds")
-        time.sleep(120)
-
-        tdSql.query("select * from s1")
-        tdSql.checkData(0, 1, rowNum * tbNum)
-        tdSql.checkData(0, 2, rowNum * tbNum)
-        tdSql.checkData(0, 3, rowNum * tbNum)
+        tdSql.waitedQuery("select * from s1", 1, 120)
+        try:
+            tdSql.checkData(0, 1, rowNum * tbNum)
+            tdSql.checkData(0, 2, rowNum * tbNum)
+            tdSql.checkData(0, 3, rowNum * tbNum)
+        except Exception as e:
+            tdLog.info(repr(e))
 
         tdLog.info("===== step10 =====")
         tdSql.execute("drop table s1")
@@ -124,12 +125,13 @@ class TDTestCase:
         tdSql.checkRows(tbNum + 2)
 
         tdLog.info("===== step13 =====")
-        tdLog.info("sleeping 120 seconds")
-        time.sleep(120)
-        tdSql.query("select * from s1")
-        tdSql.checkData(0, 1, rowNum * tbNum)
-        tdSql.checkData(0, 2, rowNum * tbNum)
-        tdSql.checkData(0, 3, rowNum * tbNum)
+        tdSql.waitedQuery("select * from s1", 1, 120)
+        try:
+            tdSql.checkData(0, 1, rowNum * tbNum)
+            tdSql.checkData(0, 2, rowNum * tbNum)
+            tdSql.checkData(0, 3, rowNum * tbNum)
+        except Exception as e:
+            tdLog.info(repr(e))
 
     def stop(self):
         tdSql.close()

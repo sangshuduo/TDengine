@@ -124,7 +124,7 @@ bool httpParseHttpVersion(HttpContext* pContext) {
   else
     pContext->httpVersion = HTTP_VERSION_10;
 
-  httpTrace("context:%p, fd:%d, ip:%s, httpVersion:1.%d", pContext, pContext->fd, pContext->ipstr,
+  httpDebug("context:%p, fd:%d, ip:%s, httpVersion:1.%d", pContext, pContext->fd, pContext->ipstr,
             pContext->httpVersion);
   return true;
 }
@@ -313,9 +313,9 @@ bool httpParseRequest(HttpContext* pContext) {
     return true;
   }
 
-  httpTrace("context:%p, fd:%d, ip:%s, thread:%s, numOfFds:%d, read size:%d, raw data:\n%s",
-           pContext, pContext->fd, pContext->ipstr, pContext->pThread->label, pContext->pThread->numOfFds,
-           pContext->parser.bufsize, pContext->parser.buffer);
+  httpTraceL("context:%p, fd:%d, ip:%s, thread:%s, numOfFds:%d, read size:%d, raw data:\n%s", pContext, pContext->fd,
+            pContext->ipstr, pContext->pThread->label, pContext->pThread->numOfFds, pContext->parser.bufsize,
+            pContext->parser.buffer);
 
   if (!httpGetHttpMethod(pContext)) {
     return false;
@@ -351,7 +351,7 @@ bool httpParseRequest(HttpContext* pContext) {
     pParser->pLast = ++pParser->pCur;
   } while (1);
 
-  httpTrace("context:%p, fd:%d, ip:%s, parse http head ok", pContext, pContext->fd, pContext->ipstr);
+  httpDebug("context:%p, fd:%d, ip:%s, parse http head ok", pContext, pContext->fd, pContext->ipstr);
 
   pContext->parsed = true;
   return true;
@@ -389,7 +389,7 @@ bool httpDecodeRequest(HttpContext* pContext) {
 bool httpProcessData(HttpContext* pContext) {
 
   if (!httpAlterContextState(pContext, HTTP_CONTEXT_STATE_READY, HTTP_CONTEXT_STATE_HANDLING)) {
-    httpTrace("context:%p, fd:%d, ip:%s, state:%s not in ready state, stop process request",
+    httpDebug("context:%p, fd:%d, ip:%s, state:%s not in ready state, stop process request",
             pContext, pContext->fd, pContext->ipstr, httpContextStateStr(pContext->state));
     httpCloseContextByApp(pContext);
     return false;
@@ -397,7 +397,7 @@ bool httpProcessData(HttpContext* pContext) {
 
   // handle Cross-domain request
   if (strcmp(pContext->parser.method.pos, "OPTIONS") == 0) {
-    httpTrace("context:%p, fd:%d, ip:%s, process options request", pContext, pContext->fd, pContext->ipstr);
+    httpDebug("context:%p, fd:%d, ip:%s, process options request", pContext, pContext->fd, pContext->ipstr);
     httpSendOptionResp(pContext, "process options request success");
   } else {
     if (!httpDecodeRequest(pContext)) {

@@ -42,7 +42,7 @@ tExtMemBuffer* createExtMemBuffer(int32_t inMemSize, int32_t elemSize, SColumnMo
   getTmpfilePath("extbuf", name);
   
   pMemBuffer->path = strdup(name);
-  uTrace("create tmp file:%s", pMemBuffer->path);
+  uDebug("create tmp file:%s", pMemBuffer->path);
   
   SExtFileInfo *pFMeta = &pMemBuffer->fileMeta;
 
@@ -83,7 +83,7 @@ void* destoryExtMemBuffer(tExtMemBuffer *pMemBuffer) {
       uError("failed to close file:%s, reason:%s", pMemBuffer->path, strerror(errno));
     }
     
-    uTrace("remove temp file:%s for external buffer", pMemBuffer->path);
+    uDebug("remove temp file:%s for external buffer", pMemBuffer->path);
     unlink(pMemBuffer->path);
   }
 
@@ -118,7 +118,7 @@ static bool tExtMemBufferAlloc(tExtMemBuffer *pMemBuffer) {
    * To flush data to disk to accommodate more data
    */
   if (pMemBuffer->numOfInMemPages > 0 && pMemBuffer->numOfInMemPages == pMemBuffer->inMemCapacity) {
-    if (!tExtMemBufferFlush(pMemBuffer)) {
+    if (tExtMemBufferFlush(pMemBuffer) != 0) {
       return false;
     }
   }
@@ -268,6 +268,7 @@ int32_t tExtMemBufferFlush(tExtMemBuffer *pMemBuffer) {
     size_t retVal = fwrite((char *)&(first->item), pMemBuffer->pageSize, 1, pMemBuffer->file);
     if (retVal <= 0) {  // failed to write to buffer, may be not enough space
       ret = TAOS_SYSTEM_ERROR(errno);
+      return ret;
     }
 
     pMemBuffer->fileMeta.numOfElemsInFile += first->item.num;

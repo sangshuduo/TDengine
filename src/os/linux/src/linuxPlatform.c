@@ -56,69 +56,7 @@ void taosMsleep(int mseconds) {
 
 bool taosCheckPthreadValid(pthread_t thread) { return thread != 0; }
 
-void taosResetPthread(pthread_t *thread) { *thread = 0; }
-
 int64_t taosGetPthreadId() { return (int64_t)pthread_self(); }
-
-/*
-* Function to get the private ip address of current machine. If get IP
-* successfully, return 0, else, return -1. The return values is ip.
-*
-* Use:
-* if (taosGetPrivateIp(ip) != 0) {
-*     perror("Fail to get private IP address\n");
-*     exit(EXIT_FAILURE);
-* }
-*/
-int taosGetPrivateIp(char *const ip) {
-  bool hasLoCard = false;
-
-  struct ifaddrs *ifaddr, *ifa;
-  int             family, s;
-  char            host[NI_MAXHOST];
-
-  if (getifaddrs(&ifaddr) == -1) {
-    return -1;
-  }
-
-  /* Walk through linked list, maintaining head pointer so we can free list later */
-  int flag = 0;
-  for (ifa = ifaddr; ifa != NULL; ifa = ifa->ifa_next) {
-    if (ifa->ifa_addr == NULL) continue;
-
-    family = ifa->ifa_addr->sa_family;
-    if (strcmp("lo", ifa->ifa_name) == 0) {
-      hasLoCard = true;
-      continue;
-    }
-
-    if (family == AF_INET) {
-      /* printf("%-8s", ifa->ifa_name); */
-      s = getnameinfo(ifa->ifa_addr, (family == AF_INET) ? sizeof(struct sockaddr_in) : sizeof(struct sockaddr_in6),
-                      host, NI_MAXHOST, NULL, 0, NI_NUMERICHOST);
-      if (s != 0) {
-        freeifaddrs(ifaddr);
-        return -1;
-      }
-
-      strcpy(ip, host);
-      flag = 1;
-      break;
-    }
-  }
-
-  freeifaddrs(ifaddr);
-  if (flag) {
-    return 0;
-  } else {
-    if (hasLoCard) {
-      uPrint("no net card was found, use lo:127.0.0.1 as default");
-      strcpy(ip, "127.0.0.1");
-      return 0;
-    }
-    return -1;
-  }
-}
 
 int taosSetNonblocking(int sock, int on) {
   int flags = 0;
@@ -294,21 +232,6 @@ ssize_t twrite(int fd, void *buf, size_t n) {
   return n;
 }
 
-bool taosSkipSocketCheck() {
-  struct utsname buf;
-  if (uname(&buf)) {
-    uPrint("can't fetch os info");
-    return false;
-  }
-
-  if (strstr(buf.release, "Microsoft") != 0) {
-    uPrint("using WSLv1");
-    return true;
-  }
-
-  return false;
-}
-
 void taosBlockSIGPIPE() {
   sigset_t signal_mask;
   sigemptyset(&signal_mask);
@@ -318,3 +241,78 @@ void taosBlockSIGPIPE() {
     uError("failed to block SIGPIPE");
   }
 }
+
+int tSystem(const char * cmd) 
+{ 
+  FILE * fp; 
+  int res; 
+  char buf[1024]; 
+  if (cmd == NULL) { 
+    uError("tSystem cmd is NULL!\n");
+    return -1;
+  } 
+  
+  if ((fp = popen(cmd, "r") ) == NULL) { 
+    uError("popen cmd:%s error: %s/n", cmd, strerror(errno)); 
+    return -1; 
+  } else {
+    while(fgets(buf, sizeof(buf), fp))  { 
+      uDebug("popen result:%s", buf); 
+    } 
+
+    if ((res = pclose(fp)) == -1) { 
+      uError("close popen file pointer fp error!\n");
+    } else { 
+      uDebug("popen res is :%d\n", res);
+    } 
+
+    return res;
+  }
+}
+
+#ifdef TAOS_RANDOM_NETWORK_FAIL
+
+#define RANDOM_NETWORK_FAIL_FACTOR  20
+
+ssize_t taos_send_random_fail(int sockfd, const void *buf, size_t len, int flags)
+{
+  if (rand() % RANDOM_NETWORK_FAIL_FACTOR == 0) {
+    errno = ECONNRESET;
+    return -1;
+  }
+
+  return send(sockfd, buf, len, flags);
+}
+
+ssize_t taos_sendto_random_fail(int sockfd, const void *buf, size_t len, int flags,
+                      const struct sockaddr *dest_addr, socklen_t addrlen)
+{
+  if (rand() % RANDOM_NETWORK_FAIL_FACTOR == 0) {
+    errno = ECONNRESET;
+    return -1;
+  }
+
+  return sendto(sockfd, buf, len, flags, dest_addr, addrlen);
+}
+
+ssize_t taos_read_random_fail(int fd, void *buf, size_t count)
+{
+  if (rand() % RANDOM_NETWORK_FAIL_FACTOR == 0) {
+    errno = ECONNRESET;
+    return -1;
+  }
+
+  return read(fd, buf, count);
+}
+
+ssize_t taos_write_random_fail(int fd, const void *buf, size_t count)
+{
+  if (rand() % RANDOM_NETWORK_FAIL_FACTOR == 0) {
+    errno = EINTR;
+    return -1;
+  }
+
+  return write(fd, buf, count);
+}
+
+#endif /* TAOS_RANDOM_NETWORK_FAIL */

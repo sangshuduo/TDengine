@@ -60,7 +60,7 @@ int httpInitSystem() {
 }
 
 int httpStartSystem() {
-  httpPrint("start http server ...");
+  httpInfo("start http server ...");
 
   if (tsHttpServer.status != HTTP_SERVER_INIT) {
     httpError("http server is already started");
@@ -92,14 +92,16 @@ void httpStopSystem() {
 }
 
 void httpCleanUpSystem() {
-  httpPrint("http server cleanup");
+  httpInfo("http server cleanup");
   httpStopSystem();
 
+  httpCleanUpConnect();
   httpCleanupContexts();
   httpCleanUpSessions();
-  httpCleanUpConnect();
   pthread_mutex_destroy(&tsHttpServer.serverMutex);
-
+  tfree(tsHttpServer.pThreads);
+  tsHttpServer.pThreads = NULL;
+  
   tsHttpServer.status = HTTP_SERVER_CLOSED;
 }
 

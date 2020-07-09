@@ -315,7 +315,7 @@ tMemBucket *tMemBucketCreate(int32_t totalSlots, int32_t nBufferSize, int16_t nE
     pBucket->pSegs[i].pBoundingEntries = NULL;
   }
 
-  uTrace("MemBucket:%p,created,buffer size:%ld,elem size:%d", pBucket, pBucket->numOfTotalPages * DEFAULT_PAGE_SIZE,
+  uDebug("MemBucket:%p,created,buffer size:%ld,elem size:%d", pBucket, pBucket->numOfTotalPages * DEFAULT_PAGE_SIZE,
          pBucket->nElemSize);
 
   return pBucket;
@@ -545,7 +545,7 @@ void tMemBucketPut(tMemBucket *pBucket, void *data, int32_t numOfRows) {
     // ensure available memory pages to allocate
     int16_t cseg = 0, cslot = 0;
     if (pBucket->numOfAvailPages == 0) {
-      uTrace("MemBucket:%p,max avail size:%d, no avail memory pages,", pBucket, pBucket->numOfTotalPages);
+      uDebug("MemBucket:%p,max avail size:%d, no avail memory pages,", pBucket, pBucket->numOfTotalPages);
 
       tBucketGetMaxMemSlot(pBucket, &cseg, &cslot);
       if (cseg == -1 || cslot == -1) {
@@ -560,10 +560,10 @@ void tMemBucketPut(tMemBucket *pBucket, void *data, int32_t numOfRows) {
         UNUSED(avail);
         tExtMemBufferFlush(pBucket->pSegs[cseg].pBuffer[cslot]);
 
-        uTrace("MemBucket:%p,seg:%d,slot:%d flushed to disk,new avail pages:%d", pBucket, cseg, cslot,
+        uDebug("MemBucket:%p,seg:%d,slot:%d flushed to disk,new avail pages:%d", pBucket, cseg, cslot,
                pBucket->numOfAvailPages);
       } else {
-        uTrace("MemBucket:%p,failed to choose slot to flush to disk seg:%d,slot:%d", pBucket, cseg, cslot);
+        uDebug("MemBucket:%p,failed to choose slot to flush to disk seg:%d,slot:%d", pBucket, cseg, cslot);
       }
     }
     int16_t consumedPgs = pSeg->pBuffer[slotIdx]->numOfInMemPages;
@@ -835,10 +835,10 @@ double getPercentileImpl(tMemBucket *pMemBucket, int32_t count, double fraction)
             return finalResult;
           }
 
-          uTrace("MemBucket:%p,start second round bucketing", pMemBucket);
+          uDebug("MemBucket:%p,start second round bucketing", pMemBucket);
 
           if (pSeg->pBuffer[j]->numOfElemsInBuffer != 0) {
-            uTrace("MemBucket:%p,flush %d pages to disk, clear status", pMemBucket, pSeg->pBuffer[j]->numOfInMemPages);
+            uDebug("MemBucket:%p,flush %d pages to disk, clear status", pMemBucket, pSeg->pBuffer[j]->numOfInMemPages);
 
             pMemBucket->numOfAvailPages += pSeg->pBuffer[j]->numOfInMemPages;
             tExtMemBufferFlush(pSeg->pBuffer[j]);
@@ -879,9 +879,12 @@ double getPercentileImpl(tMemBucket *pMemBucket, int32_t count, double fraction)
           UNUSED(ret);
 
           for (uint32_t jx = 0; jx < pFlushInfo->numOfPages; ++jx) {
-            ret = fread(pPage, pMemBuffer->pageSize, 1, pMemBuffer->file);
-            UNUSED(ret);
-            tMemBucketPut(pMemBucket, pPage->data, pPage->num);
+            size_t sz = fread(pPage, pMemBuffer->pageSize, 1, pMemBuffer->file);
+            if (sz != pMemBuffer->pageSize) {
+              uError("MemBucket:%p, read tmp file %s failed", pMemBucket, pMemBuffer->path);
+            } else {
+              tMemBucketPut(pMemBucket, pPage->data, pPage->num);
+            }
           }
 
           fclose(pMemBuffer->file);
@@ -965,10 +968,11 @@ char *getFirstElemOfMemBuffer(tMemBucketSegment *pSeg, int32_t slotIdx, tFilePag
      */
     tFlushoutInfo *pFlushInfo = &pMemBuffer->fileMeta.flushoutData.pFlushoutInfo[0];
     assert(pFlushInfo->numOfPages == pMemBuffer->fileMeta.nFileSize);
-
-    fseek(pMemBuffer->file, pFlushInfo->startPageId * pMemBuffer->pageSize, SEEK_SET);
-    size_t ret = fread(pPage, pMemBuffer->pageSize, 1, pMemBuffer->file);
+    int32_t ret;
+    ret = fseek(pMemBuffer->file, pFlushInfo->startPageId * pMemBuffer->pageSize, SEEK_SET);
     UNUSED(ret);
+    size_t sz = fread(pPage, pMemBuffer->pageSize, 1, pMemBuffer->file);
+    UNUSED(sz);
     thisVal = pPage->data;
   }
   return thisVal;

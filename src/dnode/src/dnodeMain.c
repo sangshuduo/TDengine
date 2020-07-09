@@ -114,7 +114,7 @@ int32_t dnodeInitSystem() {
   }
   taosPrintGlobalCfg();
 
-  dPrint("start to initialize TDengine on %s", tsLocalEp);
+  dInfo("start to initialize TDengine on %s", tsLocalEp);
 
   if (dnodeInitComponents() != 0) {
     return -1;
@@ -124,7 +124,7 @@ int32_t dnodeInitSystem() {
   dnodeSetRunStatus(TSDB_DNODE_RUN_STATUS_RUNING);
   dnodeStartStream();
 
-  dPrint("TDengine is initialized successfully");
+  dInfo("TDengine is initialized successfully");
 
   return 0;
 }
@@ -171,6 +171,7 @@ static int32_t dnodeInitStorage() {
   sprintf(tsMnodeDir, "%s/mnode", tsDataDir);
   sprintf(tsVnodeDir, "%s/vnode", tsDataDir);
   sprintf(tsDnodeDir, "%s/dnode", tsDataDir);
+  sprintf(tsVnodeBakDir, "%s/vnode_bak", tsDataDir);
 
   //TODO(dengyihao): no need to init here 
   if (dnodeCreateDir(tsMnodeDir) < 0) {
@@ -186,10 +187,14 @@ static int32_t dnodeInitStorage() {
    dError("failed to create dir: %s, reason: %s", tsDnodeDir, strerror(errno));
    return -1;
   } 
+  if (dnodeCreateDir(tsVnodeBakDir) < 0) {
+   dError("failed to create dir: %s, reason: %s", tsVnodeBakDir, strerror(errno));
+   return -1;
+  }
 
   dnodeCheckDataDirOpenned(tsDnodeDir);
 
-  dPrint("storage directory is initialized");
+  dInfo("storage directory is initialized");
   return 0;
 }
 

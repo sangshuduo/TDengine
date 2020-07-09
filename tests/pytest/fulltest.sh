@@ -142,10 +142,17 @@ python3 ./test.py -f query/filterFloatAndDouble.py
 python3 ./test.py -f query/filterOtherTypes.py
 python3 ./test.py -f query/querySort.py
 python3 ./test.py -f query/queryJoin.py
+python3 ./test.py -f query/select_last_crash.py
 
 #stream
+python3 ./test.py -f stream/metric_1.py
+python3 ./test.py -f stream/new.py
 python3 ./test.py -f stream/stream1.py
 python3 ./test.py -f stream/stream2.py
+python3 ./test.py -f stream/parser.py
 
 #alter table
 python3 ./test.py -f alter/alter_table_crash.py
+
+# client
+python3 ./test.py -f client/client.py

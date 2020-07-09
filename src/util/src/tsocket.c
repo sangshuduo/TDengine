@@ -222,11 +222,9 @@ int taosReadn(int fd, char *ptr, int nbytes) {
 int taosOpenUdpSocket(uint32_t ip, uint16_t port) {
   struct sockaddr_in localAddr;
   int                sockFd;
-  int                ttl = 128;
-  int                reuse, nocheck;
-  int                bufSize = 8192000;
+  int                bufSize = 1024000;
 
-  uTrace("open udp socket:0x%x:%hu", ip, port);
+  uDebug("open udp socket:0x%x:%hu", ip, port);
 
   memset((char *)&localAddr, 0, sizeof(localAddr));
   localAddr.sin_family = AF_INET;
@@ -235,31 +233,6 @@ int taosOpenUdpSocket(uint32_t ip, uint16_t port) {
 
   if ((sockFd = (int)socket(AF_INET, SOCK_DGRAM, 0)) < 0) {
     uError("failed to open udp socket: %d (%s)", errno, strerror(errno));
-    return -1;
-  }
-
-  reuse = 1;
-  if (taosSetSockOpt(sockFd, SOL_SOCKET, SO_REUSEADDR, (void *)&reuse, sizeof(reuse)) < 0) {
-    uError("setsockopt SO_REUSEADDR failed): %d (%s)", errno, strerror(errno));
-    close(sockFd);
-    return -1;
-  };
-
-  nocheck = 1;
-  if (taosSetSockOpt(sockFd, SOL_SOCKET, SO_NO_CHECK, (void *)&nocheck, sizeof(nocheck)) < 0) {
-    if (!taosSkipSocketCheck()) {
-      uError("setsockopt SO_NO_CHECK failed: %d (%s)", errno, strerror(errno));
-      close(sockFd);
-      return -1;
-    } else {
-      uPrint("Skipping setsockopt SO_NO_CHECK error: %d (%s)", errno, strerror(errno));
-    }
-  }
-
-  ttl = 128;
-  if (taosSetSockOpt(sockFd, IPPROTO_IP, IP_TTL, (void *)&ttl, sizeof(ttl)) < 0) {
-    uError("setsockopt IP_TTL failed: %d (%s)", errno, strerror(errno));
-    close(sockFd);
     return -1;
   }
 
@@ -383,7 +356,7 @@ int taosOpenTcpServerSocket(uint32_t ip, uint16_t port) {
   int                sockFd;
   int                reuse;
 
-  uTrace("open tcp server socket:0x%x:%hu", ip, port);
+  uDebug("open tcp server socket:0x%x:%hu", ip, port);
 
   bzero((char *)&serverAdd, sizeof(serverAdd));
   serverAdd.sin_family = AF_INET;
@@ -410,10 +383,15 @@ int taosOpenTcpServerSocket(uint32_t ip, uint16_t port) {
     return -1;
   }
 
-  if (taosKeepTcpAlive(sockFd) < 0) return -1;
+  if (taosKeepTcpAlive(sockFd) < 0) {
+    uError("failed to set tcp server keep-alive option, 0x%x:%hu(%s)", ip, port, strerror(errno));
+    close(sockFd);
+    return -1;
+  }
 
   if (listen(sockFd, 10) < 0) {
     uError("listen tcp server socket failed, 0x%x:%hu(%s)", ip, port, strerror(errno));
+    close(sockFd);
     return -1;
   }
 

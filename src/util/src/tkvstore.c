@@ -27,6 +27,7 @@
 #include "tcoding.h"
 #include "tkvstore.h"
 #include "tulog.h"
+#include "tfile.h"
 
 #define TD_KVSTORE_HEADER_SIZE 512
 #define TD_KVSTORE_MAJOR_VERSION 1
@@ -78,8 +79,8 @@ int tdCreateKVStore(char *fname) {
   return 0;
 
 _err:
-  if (fd > 0) close(fd);
-  remove(fname);
+  if (fd >= 0) close(fd);
+  (void)remove(fname);
   return -1;
 }
 
@@ -106,15 +107,15 @@ SKVStore *tdOpenKVStore(char *fname, iterFunc iFunc, afterFunc aFunc, void *appH
     goto _err;
   }
 
-  if (access(pStore->fsnap, F_OK) == 0) { // .snap file exists
-    uTrace("file %s exists, try to recover the KV store", pStore->fsnap);
-    pStore->sfd = open(pStore->fsnap, O_RDONLY);
-    if (pStore->sfd < 0) {
+  pStore->sfd = open(pStore->fsnap, O_RDONLY);
+  if (pStore->sfd < 0) {
+    if (errno != ENOENT) {
       uError("failed to open file %s since %s", pStore->fsnap, strerror(errno));
       terrno = TAOS_SYSTEM_ERROR(errno);
       goto _err;
     }
-
+  } else {
+    uDebug("file %s exists, try to recover the KV store", pStore->fsnap);
     if (tdLoadKVStoreHeader(pStore->sfd, pStore->fsnap, &info) < 0) {
       if (terrno != TSDB_CODE_COM_FILE_CORRUPTED) goto _err;
     } else {
@@ -133,7 +134,7 @@ SKVStore *tdOpenKVStore(char *fname, iterFunc iFunc, afterFunc aFunc, void *appH
 
     close(pStore->sfd);
     pStore->sfd = -1;
-    remove(pStore->fsnap);
+    (void)remove(pStore->fsnap);
   }
 
   if (tdLoadKVStoreHeader(pStore->fd, pStore->fname, &info) < 0) goto _err;
@@ -212,7 +213,7 @@ _err:
   if (pStore->sfd > 0) {
     close(pStore->sfd);
     pStore->sfd = -1;
-    remove(pStore->fsnap);
+    (void)remove(pStore->fsnap);
   }
   if (pStore->fd > 0) {
     close(pStore->fd);
@@ -259,6 +260,7 @@ int tdUpdateKVStoreRecord(SKVStore *pStore, uint64_t uid, void *cont, int contLe
   }
 
   taosHashPut(pStore->map, (void *)(&uid), sizeof(uid), (void *)(&rInfo), sizeof(rInfo));
+  uDebug("put uid %" PRIu64 " into kvStore %s", uid, pStore->fname);
 
   return 0;
 }
@@ -292,6 +294,7 @@ int tdDropKVStoreRecord(SKVStore *pStore, uint64_t uid) {
   pStore->info.tombSize += (rInfo.size + sizeof(SKVRecord) * 2);
 
   taosHashRemove(pStore->map, (void *)(&uid), sizeof(uid));
+  uDebug("drop uid %" PRIu64 " from KV store %s", uid, pStore->fname);
 
   return 0;
 }
@@ -314,7 +317,7 @@ int tdKVStoreEndCommit(SKVStore *pStore) {
   }
   pStore->fd = -1;
 
-  remove(pStore->fsnap);
+  (void)remove(pStore->fsnap);
   return 0;
 }
 
@@ -500,7 +503,7 @@ static int tdRestoreKVStore(SKVStore *pStore) {
 
     char *pBuf = tdDecodeKVRecord(tbuf, &rInfo);
     ASSERT(POINTER_DISTANCE(pBuf, tbuf) == sizeof(SKVRecord));
-    ASSERT(pStore->info.size == rInfo.offset);
+    ASSERT((rInfo.offset > 0) ? (pStore->info.size == rInfo.offset) : true);
 
     if (rInfo.offset < 0) {
       taosHashRemove(pStore->map, (void *)(&rInfo.uid), sizeof(rInfo.uid));

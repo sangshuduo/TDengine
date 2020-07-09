@@ -55,6 +55,25 @@ uint32_t taosRand(void)
 */
   return rand();
 }
+
+uint32_t trand(void)
+{
+  int fd;
+  int seed;
+  
+  fd = open("/dev/urandom", 0);
+  if (fd < 0) {
+    seed = time(0);
+  } else {
+    int len = read(fd, &seed, sizeof(seed));
+    if (len < 0) {
+      seed = time(0);
+    }  
+    close(fd);
+  }
+
+  return (uint32_t)seed;
+}
 #endif
 
 size_t twcslen(const wchar_t *wcs) {
@@ -295,6 +314,7 @@ int64_t strnatoi(char *num, int32_t len) {
   return ret;
 }
 
+#if 0
 FORCE_INLINE size_t getLen(size_t old, size_t size) {
   if (old == 1) {
     old = 2;
@@ -382,6 +402,7 @@ char *strreplace(const char *str, const char *pattern, const char *rep) {
 
   return dest;
 }
+#endif
 
 char *strbetween(char *string, char *begin, char *end) {
   char *result = NULL;
@@ -763,12 +784,33 @@ void taosRemoveDir(char *rootDir) {
       taosRemoveDir(filename);
     } else {
       (void)remove(filename);
-      uPrint("file:%s is removed", filename);
+      uInfo("file:%s is removed", filename);
     }
   }
 
   closedir(dir);
   rmdir(rootDir);
 
-  uPrint("dir:%s is removed", rootDir);
+  uInfo("dir:%s is removed", rootDir);
 }
+
+int tmkdir(const char *path, mode_t mode) {
+  int code = mkdir(path, 0755);
+  if (code < 0 && errno == EEXIST) code = 0;
+  return code;
+}
+
+void taosMvDir(char* destDir, char *srcDir) {
+  if (0 == tsEnableVnodeBak) {
+    uInfo("vnode backup not enabled");
+    return;
+  }
+
+  char shellCmd[1024+1] = {0}; 
+  
+  //(void)snprintf(shellCmd, 1024, "cp -rf %s %s", srcDir, destDir);
+  (void)snprintf(shellCmd, 1024, "mv %s %s", srcDir, destDir);
+  tSystem(shellCmd);
+  uInfo("shell cmd:%s is executed", shellCmd);
+}
+

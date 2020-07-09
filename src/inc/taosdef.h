@@ -165,6 +165,7 @@ bool isNull(const char *val, int32_t type);
 void setVardataNull(char* val, int32_t type);
 void setNull(char *val, int32_t type, int32_t bytes);
 void setNullN(char *val, int32_t type, int32_t bytes, int32_t numOfElems);
+void* getNullValue(int32_t type);
 
 void assignVal(char *val, const char *src, int32_t len, int32_t type);
 void tsDataSwap(void *pLeft, void *pRight, int32_t type, int32_t size);
@@ -244,8 +245,8 @@ void tsDataSwap(void *pLeft, void *pRight, int32_t type, int32_t size);
 
 #define TSDB_DEFAULT_PKT_SIZE     65480  //same as RPC_MAX_UDP_SIZE
 
-#define TSDB_PAYLOAD_SIZE         (TSDB_DEFAULT_PKT_SIZE - 100)
-#define TSDB_DEFAULT_PAYLOAD_SIZE 2048   // default payload size
+#define TSDB_PAYLOAD_SIZE         TSDB_DEFAULT_PKT_SIZE
+#define TSDB_DEFAULT_PAYLOAD_SIZE 5120   // default payload size, greater than PATH_MAX value
 #define TSDB_EXTRA_PAYLOAD_SIZE   128    // extra bytes for auth
 #define TSDB_CQ_SQL_SIZE          1024
 #define TSDB_MAX_VNODES           256
@@ -354,7 +355,7 @@ void tsDataSwap(void *pLeft, void *pRight, int32_t type, int32_t size);
 #define TSDB_DEFAULT_DBS_HASH_SIZE      100
 #define TSDB_DEFAULT_VGROUPS_HASH_SIZE  100
 #define TSDB_DEFAULT_STABLES_HASH_SIZE  100
-#define TSDB_DEFAULT_CTABLES_HASH_SIZE  10000
+#define TSDB_DEFAULT_CTABLES_HASH_SIZE  20000
 
 #define TSDB_PORT_DNODESHELL 0 
 #define TSDB_PORT_DNODEDNODE 5 
@@ -364,6 +365,7 @@ void tsDataSwap(void *pLeft, void *pRight, int32_t type, int32_t size);
 #define TAOS_QTYPE_FWD      1
 #define TAOS_QTYPE_WAL      2 
 #define TAOS_QTYPE_CQ       3
+#define TAOS_QTYPE_QUERY    4
 
 typedef enum {
   TSDB_SUPER_TABLE        = 0,  // super table

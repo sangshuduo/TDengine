@@ -48,18 +48,23 @@ int64_t user_mktime64(const unsigned int year0, const unsigned int mon0,
 		const unsigned int day, const unsigned int hour,
 		const unsigned int min, const unsigned int sec)
 {
-	unsigned int mon = mon0, year = year0;
+  unsigned int mon = mon0, year = year0;
 
-	/* 1..12 -> 11,12,1..10 */
-	if (0 >= (int) (mon -= 2)) {
-		mon += 12;	/* Puts Feb last since it has leap day */
-		year -= 1;
-	}
+  /* 1..12 -> 11,12,1..10 */
+  if (0 >= (int) (mon -= 2)) {
+    mon += 12;	/* Puts Feb last since it has leap day */
+    year -= 1;
+  }
 
-  int64_t res = (((((int64_t) (year/4 - year/100 + year/400 + 367*mon/12 + day) +
-		  year*365 - 719499)*24 + hour)*60 + min)*60 + sec);
+  //int64_t res = (((((int64_t) (year/4 - year/100 + year/400 + 367*mon/12 + day) +
+  //               year*365 - 719499)*24 + hour)*60 + min)*60 + sec);
+  int64_t res;
+  res  = 367*((int64_t)mon)/12;
+  res += year/4 - year/100 + year/400 + day + ((int64_t)year)*365 - 719499;
+  res  = res*24;
+  res  = ((res + hour) * 60 + min) * 60 + sec;
 
-	return (res + timezone);
+  return (res + timezone);
 }
 // ==== mktime() kernel code =================//
 static int64_t m_deltaUtc = 0;
@@ -368,4 +373,35 @@ int32_t getTimestampInUsFromStr(char* token, int32_t tokenlen, int64_t* ts) {
   }
 
   return getTimestampInUsFromStrImpl(timestamp, token[tokenlen - 1], ts);
+}
+
+// internal function, when program is paused in debugger,
+// one can call this function from debugger to print a
+// timestamp as human readable string, for example (gdb):
+//     p fmtts(1593769722)
+// outputs:
+//     2020-07-03 17:48:42
+// and the parameter can also be a variable.
+const char* fmtts(int64_t ts) {
+  static char buf[32];
+
+  time_t tt;
+  if (ts > -62135625943 && ts < 32503651200) {
+    tt = ts;
+  } else if (ts > -62135625943000 && ts < 32503651200000) {
+    tt = ts / 1000;
+  } else {
+    tt = ts / 1000000;
+  }
+
+  struct tm* ptm = localtime(&tt);
+  size_t pos = strftime(buf, sizeof(buf), "%Y-%m-%d %H:%M:%S", ptm);
+
+  if (ts <= -62135625943000 || ts >= 32503651200000) {
+    sprintf(buf + pos, ".%06d", (int)(ts % 1000000));
+  } else if (ts <= -62135625943 || ts >= 32503651200) {
+    sprintf(buf + pos, ".%03d", (int)(ts % 1000));
+  }
+
+  return buf;
 }

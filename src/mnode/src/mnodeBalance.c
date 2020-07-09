@@ -25,8 +25,8 @@
 
 int32_t balanceInit() { return TSDB_CODE_SUCCESS; }
 void    balanceCleanUp() {}
-void    balanceNotify() {}
-void    balanceUpdateMnode() {}
+void    balanceAsyncNotify() {}
+void    balanceSyncNotify() {}
 void    balanceReset() {}
 
 int32_t balanceAllocVnodes(SVgObj *pVgroup) {
@@ -62,7 +62,7 @@ int32_t balanceAllocVnodes(SVgObj *pVgroup) {
   pVgroup->vnodeGid[0].dnodeId = pSelDnode->dnodeId;
   pVgroup->vnodeGid[0].pDnode = pSelDnode;
 
-  mTrace("dnode:%d, alloc one vnode to vgroup, openVnodes:%d", pSelDnode->dnodeId, pSelDnode->openVnodes);
+  mDebug("dnode:%d, alloc one vnode to vgroup, openVnodes:%d", pSelDnode->dnodeId, pSelDnode->openVnodes);
   return TSDB_CODE_SUCCESS;
 }
 

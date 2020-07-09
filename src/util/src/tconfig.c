@@ -111,21 +111,18 @@ static void taosReadDirectoryConfig(SGlobalCfg *cfg, char *input_value) {
         wordfree(&full_path);
         return;
       }
+      
       if (full_path.we_wordv != NULL && full_path.we_wordv[0] != NULL) {
         strcpy(option, full_path.we_wordv[0]);
       }
+      
       wordfree(&full_path);
 
-      struct stat dirstat;
-      if (stat(option, &dirstat) < 0) {
-        int code = mkdir(option, 0755);
-        if (code < 0) {
-          uError("config option:%s, input value:%s, directory not exist, create fail with return code:%d",
-               cfg->option, input_value, code); 
-        } else {
-          uPrint("config option:%s, input value:%s, directory not exist, create with return code:%d",
-               cfg->option, input_value, code); 
-        }
+      int code = tmkdir(option, 0755);
+      if (code != 0) {
+        terrno = TAOS_SYSTEM_ERROR(errno);
+        uError("config option:%s, input value:%s, directory not exist, create fail:%s",
+             cfg->option, input_value, strerror(errno)); 
       }
       cfg->cfgStatus = TAOS_CFG_CSTATUS_FILE;
     } else {
@@ -349,8 +346,8 @@ bool taosReadGlobalCfg() {
 }
 
 void taosPrintGlobalCfg() {
-  uPrint("   taos config & system info:");
-  uPrint("==================================");
+  uInfo("   taos config & system info:");
+  uInfo("==================================");
 
   for (int i = 0; i < tsGlobalConfigNum; ++i) {
     SGlobalCfg *cfg = tsGlobalConfig + i;
@@ -367,18 +364,18 @@ void taosPrintGlobalCfg() {
 
     switch (cfg->valType) {
       case TAOS_CFG_VTYPE_INT16:
-        uPrint(" %s:%s%d%s", cfg->option, blank, *((int16_t *)cfg->ptr), tsGlobalUnit[cfg->unitType]);
+        uInfo(" %s:%s%d%s", cfg->option, blank, *((int16_t *)cfg->ptr), tsGlobalUnit[cfg->unitType]);
         break;
       case TAOS_CFG_VTYPE_INT32:
-        uPrint(" %s:%s%d%s", cfg->option, blank, *((int32_t *)cfg->ptr), tsGlobalUnit[cfg->unitType]);
+        uInfo(" %s:%s%d%s", cfg->option, blank, *((int32_t *)cfg->ptr), tsGlobalUnit[cfg->unitType]);
         break;
       case TAOS_CFG_VTYPE_FLOAT:
-        uPrint(" %s:%s%f%s", cfg->option, blank, *((float *)cfg->ptr), tsGlobalUnit[cfg->unitType]);
+        uInfo(" %s:%s%f%s", cfg->option, blank, *((float *)cfg->ptr), tsGlobalUnit[cfg->unitType]);
         break;
       case TAOS_CFG_VTYPE_STRING:
       case TAOS_CFG_VTYPE_IPSTR:
       case TAOS_CFG_VTYPE_DIRECTORY:
-        uPrint(" %s:%s%s%s", cfg->option, blank, (char *)cfg->ptr, tsGlobalUnit[cfg->unitType]);
+        uInfo(" %s:%s%s%s", cfg->option, blank, (char *)cfg->ptr, tsGlobalUnit[cfg->unitType]);
         break;
       default:
         break;

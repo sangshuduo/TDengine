@@ -13,24 +13,19 @@
  * along with this program. If not, see <http://www.gnu.org/licenses/>.
  */
 
-#ifndef TDENGINE_VNODE_LOG_H
-#define TDENGINE_VNODE_LOG_H
+#ifndef TDENGINE_TFILE_H
+#define TDENGINE_TFILE_H
 
-#ifdef __cplusplus
-extern "C" {
-#endif
+#ifdef TAOS_RANDOM_FILE_FAIL
 
-#include "tlog.h"
+ssize_t taos_tread(int fd, void *buf, size_t count);
+ssize_t taos_twrite(int fd, void *buf, size_t count);
+off_t taos_lseek(int fd, off_t offset, int whence);
 
-extern int32_t dDebugFlag;
+#define tread(fd, buf, count)  taos_tread(fd, buf, count)
+#define twrite(fd, buf, count)  taos_twrite(fd, buf, count)
+#define lseek(fd, offset, whence)  taos_lseek(fd, offset, whence)
 
-#define dError(...) { if (dDebugFlag & DEBUG_ERROR) { taosPrintLog("ERROR DND ", 255, __VA_ARGS__); }}
-#define dWarn(...)  { if (dDebugFlag & DEBUG_WARN)  { taosPrintLog("WARN DND ", dDebugFlag, __VA_ARGS__); }}
-#define dTrace(...) { if (dDebugFlag & DEBUG_TRACE) { taosPrintLog("DND ", dDebugFlag, __VA_ARGS__); }}
-#define dPrint(...) { taosPrintLog("DND ", 255, __VA_ARGS__); }
+#endif  // TAOS_RANDOM_FILE_FAIL
 
-#ifdef __cplusplus
-}
-#endif
-
-#endif
+#endif  // TDENGINE_TFILE_H

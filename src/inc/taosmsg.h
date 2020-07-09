@@ -26,6 +26,7 @@ extern "C" {
 #include "taosdef.h"
 #include "taoserror.h"
 #include "trpc.h"
+#include "tdataformat.h"
 
 // message type
 
@@ -192,7 +193,8 @@ typedef struct SSubmitBlk {
   int32_t  tid;        // table id
   int32_t  padding;    // TODO just for padding here
   int32_t  sversion;   // data schema version
-  int32_t  len;        // data part length, not including the SSubmitBlk head
+  int32_t  dataLen;    // data part length, not including the SSubmitBlk head
+  int32_t  schemaLen;  // schema length, if length is 0, no schema exists
   int16_t  numOfRows;  // total number of rows in current submit block
   char     data[];
 } SSubmitBlk;
@@ -201,8 +203,7 @@ typedef struct SSubmitBlk {
 typedef struct SSubmitMsg {
   SMsgHead   header;
   int32_t    length;
-  int32_t    compressed : 2;
-  int32_t    numOfBlocks : 30;
+  int32_t    numOfBlocks;
   SSubmitBlk blocks[];
 } SSubmitMsg;
 
@@ -283,9 +284,11 @@ typedef struct {
   int32_t   tid;
   int16_t   tversion;
   int16_t   colId;
-  int16_t   type;
+  int8_t    type;
   int16_t   bytes;
   int32_t   tagValLen;
+  int16_t   numOfTags;
+  int32_t   schemaLen;
   char      data[];
 } SUpdateTableTagValMsg;
 
@@ -470,7 +473,7 @@ typedef struct {
 
 typedef struct {
   int32_t  code;
-  uint64_t qhandle;
+  uint64_t qhandle; // query handle
 } SQueryTableRsp;
 
 typedef struct {
@@ -483,7 +486,7 @@ typedef struct SRetrieveTableRsp {
   int32_t numOfRows;
   int8_t  completed;  // all results are returned to client
   int16_t precision;
-  int64_t offset;  // updated offset value for multi-vnode projection query
+  int64_t offset;     // updated offset value for multi-vnode projection query
   int64_t useconds;
   char    data[];
 } SRetrieveTableRsp;
@@ -618,7 +621,7 @@ typedef struct {
 } SMDVnodeDesc;
 
 typedef struct {
-  char db[TSDB_DB_NAME_LEN];
+  char db[TSDB_ACCT_LEN + TSDB_DB_NAME_LEN];
   SMDVnodeCfg  cfg;
   SMDVnodeDesc nodes[TSDB_MAX_REPLICA];
 } SMDCreateVnodeMsg;
@@ -673,7 +676,7 @@ typedef struct SMultiTableMeta {
 typedef struct {
   int32_t dataLen;
   char name[TSDB_TABLE_ID_LEN];
-  char data[TSDB_MAX_TAGS_LEN];
+  char data[TSDB_MAX_TAGS_LEN + TD_KV_ROW_HEAD_SIZE + sizeof(SColIdx) * TSDB_MAX_TAGS];
 } STagData;
 
 /*

@@ -38,6 +38,11 @@
 #include "mnodeVgroup.h"
 #include "mnodePeer.h"
 
+typedef enum {
+  TAOS_VG_STATUS_READY,
+  TAOS_VG_STATUS_DROPPING
+} EVgroupStatus;
+
 static void   *tsVgroupSdb = NULL;
 static int32_t tsVgUpdateSize = 0;
 
@@ -69,6 +74,11 @@ static int32_t mnodeVgroupActionInsert(SSdbOper *pOper) {
   SDbObj *pDb = mnodeGetDb(pVgroup->dbName);
   if (pDb == NULL) {
     return TSDB_CODE_MND_INVALID_DB;
+  }
+  
+  if (pDb->status != TSDB_DB_STATUS_READY) {
+    mError("db:%s, status:%d, in dropping", pDb->name, pDb->status);
+    return TSDB_CODE_MND_DB_IN_DROPPING;
   }
 
   pVgroup->pDb = pDb;
@@ -129,7 +139,7 @@ static void mnodeVgroupUpdateIdPool(SVgObj *pVgroup) {
   SDbObj *pDb = pVgroup->pDb;
   if (pDb != NULL) {
     if (pDb->cfg.maxTables != oldTables) {
-      mPrint("vgId:%d tables change from %d to %d", pVgroup->vgId, oldTables, pDb->cfg.maxTables);
+      mInfo("vgId:%d tables change from %d to %d", pVgroup->vgId, oldTables, pDb->cfg.maxTables);
       taosUpdateIdPool(pVgroup->idPool, pDb->cfg.maxTables);
       int32_t size = sizeof(SChildTableObj *) * pDb->cfg.maxTables;
       pVgroup->tableList = (SChildTableObj **)realloc(pVgroup->tableList, size);
@@ -160,13 +170,21 @@ static int32_t mnodeVgroupActionUpdate(SSdbOper *pOper) {
       }
       mnodeDecDnodeRef(pDnode);
     }
+
+    free(pNew);
   }
 
   mnodeVgroupUpdateIdPool(pVgroup);
 
+  // reset vgid status on vgroup changed
+  mDebug("vgId:%d, reset sync status to unsynced", pVgroup->vgId);
+  for (int32_t v = 0; v < pVgroup->numOfVnodes; ++v) {
+    pVgroup->vnodeGid[v].role = TAOS_SYNC_ROLE_UNSYNCED;
+  }
+
   mnodeDecVgroupRef(pVgroup);
 
-  mTrace("vgId:%d, is updated, numOfVnode:%d", pVgroup->vgId, pVgroup->numOfVnodes);
+  mDebug("vgId:%d, is updated, numOfVnode:%d", pVgroup->vgId, pVgroup->numOfVnodes);
   return TSDB_CODE_SUCCESS;
 }
 
@@ -228,7 +246,7 @@ int32_t mnodeInitVgroups() {
   mnodeAddPeerRspHandle(TSDB_MSG_TYPE_MD_DROP_VNODE_RSP, mnodeProcessDropVnodeRsp);
   mnodeAddPeerMsgHandle(TSDB_MSG_TYPE_DM_CONFIG_VNODE, mnodeProcessVnodeCfgMsg);
 
-  mTrace("table:vgroups is created");
+  mDebug("table:vgroups is created");
   
   return 0;
 }
@@ -279,7 +297,7 @@ void mnodeCheckUnCreatedVgroup(SDnodeObj *pDnode, SVnodeLoad *pVloads, int32_t o
       pNextV++;
     }
 
-    if (i == openVnodes) {
+    if (i == openVnodes && pVgroup->status == TAOS_VG_STATUS_READY) {
       mnodeSendCreateVgroupMsg(pVgroup, NULL);
     }
     
@@ -295,6 +313,7 @@ void mnodeUpdateVgroupStatus(SVgObj *pVgroup, SDnodeObj *pDnode, SVnodeLoad *pVl
   for (int32_t i = 0; i < pVgroup->numOfVnodes; ++i) {
     SVnodeGid *pVgid = &pVgroup->vnodeGid[i];
     if (pVgid->pDnode == pDnode) {
+      mTrace("dnode:%d, receive status from dnode, vgId:%d status is %d", pVgroup->vgId, pDnode->dnodeId, pVgid->role);
       pVgid->role = pVload->role;
       if (pVload->role == TAOS_SYNC_ROLE_MASTER) {
         pVgroup->inUse = i;
@@ -334,17 +353,23 @@ void *mnodeGetNextVgroup(void *pIter, SVgObj **pVgroup) {
 }
 
 static int32_t mnodeCreateVgroupCb(SMnodeMsg *pMsg, int32_t code) {
+  SVgObj *pVgroup = pMsg->pVgroup;
+  SDbObj *pDb = pMsg->pDb;
+  assert(pVgroup);
+
   if (code != TSDB_CODE_SUCCESS) {
-    pMsg->pVgroup = NULL;
+    mError("app:%p:%p, vgId:%d, failed to create in sdb, reason:%s", pMsg->rpcMsg.ahandle, pMsg, pVgroup->vgId,
+           tstrerror(code));
+    SSdbOper desc = {.type = SDB_OPER_GLOBAL, .pObj = pVgroup, .table = tsVgroupSdb};
+    sdbDeleteRow(&desc);
     return code;
   }
 
-  SVgObj *pVgroup = pMsg->pVgroup;
-  SDbObj *pDb = pMsg->pDb;
-
-  mPrint("vgId:%d, is created in mnode, db:%s replica:%d", pVgroup->vgId, pDb->name, pVgroup->numOfVnodes);
+  mInfo("app:%p:%p, vgId:%d, is created in mnode, db:%s replica:%d", pMsg->rpcMsg.ahandle, pMsg, pVgroup->vgId,
+        pDb->name, pVgroup->numOfVnodes);
   for (int32_t i = 0; i < pVgroup->numOfVnodes; ++i) {
-    mPrint("vgId:%d, index:%d, dnode:%d", pVgroup->vgId, i, pVgroup->vnodeGid[i].dnodeId);
+    mInfo("app:%p:%p, vgId:%d, index:%d, dnode:%d", pMsg->rpcMsg.ahandle, pMsg, pVgroup->vgId, i,
+          pVgroup->vnodeGid[i].dnodeId);
   }
 
   mnodeIncVgroupRef(pVgroup);
@@ -358,7 +383,7 @@ int32_t mnodeCreateVgroup(SMnodeMsg *pMsg, SDbObj *pDb) {
   if (pMsg == NULL) return TSDB_CODE_MND_APP_ERROR;
 
   SVgObj *pVgroup = (SVgObj *)calloc(1, sizeof(SVgObj));
-  tstrncpy(pVgroup->dbName, pDb->name, TSDB_DB_NAME_LEN);
+  tstrncpy(pVgroup->dbName, pDb->name, TSDB_ACCT_LEN + TSDB_DB_NAME_LEN);
   pVgroup->numOfVnodes = pDb->cfg.replications;
   pVgroup->createdTime = taosGetTimestampMs();
   pVgroup->accessState = TSDB_VN_ALL_ACCCESS;
@@ -394,7 +419,7 @@ void mnodeDropVgroup(SVgObj *pVgroup, void *ahandle) {
   if (ahandle != NULL) {
     mnodeSendDropVgroupMsg(pVgroup, ahandle);
   } else {
-    mTrace("vgId:%d, replica:%d is deleting from sdb", pVgroup->vgId, pVgroup->numOfVnodes);
+    mDebug("vgId:%d, replica:%d is deleting from sdb", pVgroup->vgId, pVgroup->numOfVnodes);
     mnodeSendDropVgroupMsg(pVgroup, NULL);
     SSdbOper oper = {
       .type = SDB_OPER_GLOBAL,
@@ -407,12 +432,18 @@ void mnodeDropVgroup(SVgObj *pVgroup, void *ahandle) {
 
 void mnodeCleanupVgroups() {
   sdbCloseTable(tsVgroupSdb);
+  tsVgroupSdb = NULL;
 }
 
 int32_t mnodeGetVgroupMeta(STableMetaMsg *pMeta, SShowObj *pShow, void *pConn) {
   SDbObj *pDb = mnodeGetDb(pShow->db);
   if (pDb == NULL) {
     return TSDB_CODE_MND_DB_NOT_SELECTED;
+  }
+  
+  if (pDb->status != TSDB_DB_STATUS_READY) {
+    mError("db:%s, status:%d, in dropping", pDb->name, pDb->status);
+    return TSDB_CODE_MND_DB_IN_DROPPING;
   }
 
   int32_t cols = 0;
@@ -502,6 +533,11 @@ int32_t mnodeRetrieveVgroups(SShowObj *pShow, char *data, int32_t rows, void *pC
 
   SDbObj *pDb = mnodeGetDb(pShow->db);
   if (pDb == NULL) return 0;
+  
+  if (pDb->status != TSDB_DB_STATUS_READY) {
+    mError("db:%s, status:%d, in dropping", pDb->name, pDb->status);
+    return 0;
+  }
 
   pVgroup = pDb->pHead;
   while (pVgroup != NULL) {
@@ -652,7 +688,7 @@ SRpcIpSet mnodeGetIpSetFromIp(char *ep) {
 void mnodeSendCreateVnodeMsg(SVgObj *pVgroup, SRpcIpSet *ipSet, void *ahandle) {
   SMDCreateVnodeMsg *pCreate = mnodeBuildCreateVnodeMsg(pVgroup);
   SRpcMsg rpcMsg = {
-    .handle  = ahandle,
+    .ahandle = ahandle,
     .pCont   = pCreate,
     .contLen = pCreate ? sizeof(SMDCreateVnodeMsg) : 0,
     .code    = 0,
@@ -662,30 +698,31 @@ void mnodeSendCreateVnodeMsg(SVgObj *pVgroup, SRpcIpSet *ipSet, void *ahandle) {
 }
 
 void mnodeSendCreateVgroupMsg(SVgObj *pVgroup, void *ahandle) {
-  mTrace("vgId:%d, send create all vnodes msg, numOfVnodes:%d db:%s", pVgroup->vgId, pVgroup->numOfVnodes,
+  mDebug("vgId:%d, send create all vnodes msg, numOfVnodes:%d db:%s", pVgroup->vgId, pVgroup->numOfVnodes,
          pVgroup->dbName);
   for (int32_t i = 0; i < pVgroup->numOfVnodes; ++i) {
     SRpcIpSet ipSet = mnodeGetIpSetFromIp(pVgroup->vnodeGid[i].pDnode->dnodeEp);
-    mTrace("vgId:%d, index:%d, send create vnode msg to dnode %s, ahandle:%p", pVgroup->vgId,
+    mDebug("vgId:%d, index:%d, send create vnode msg to dnode %s, ahandle:%p", pVgroup->vgId,
            i, pVgroup->vnodeGid[i].pDnode->dnodeEp, ahandle);
     mnodeSendCreateVnodeMsg(pVgroup, &ipSet, ahandle);
   }
 }
 
 static void mnodeProcessCreateVnodeRsp(SRpcMsg *rpcMsg) {
-  if (rpcMsg->handle == NULL) return;
+  if (rpcMsg->ahandle == NULL) return;
 
-  SMnodeMsg *mnodeMsg = rpcMsg->handle;
-  mnodeMsg->received++;
+  SMnodeMsg *mnodeMsg = rpcMsg->ahandle;
+  atomic_add_fetch_8(&mnodeMsg->received, 1);
   if (rpcMsg->code == TSDB_CODE_SUCCESS) {
+    atomic_add_fetch_8(&mnodeMsg->successed, 1);
+  } else {
     mnodeMsg->code = rpcMsg->code;
-    mnodeMsg->successed++;
   }
 
   SVgObj *pVgroup = mnodeMsg->pVgroup;
-  mTrace("vgId:%d, create vnode rsp received, result:%s received:%d successed:%d expected:%d, thandle:%p ahandle:%p",
+  mDebug("vgId:%d, create vnode rsp received, result:%s received:%d successed:%d expected:%d, thandle:%p ahandle:%p",
          pVgroup->vgId, tstrerror(rpcMsg->code), mnodeMsg->received, mnodeMsg->successed, mnodeMsg->expected,
-         mnodeMsg->rpcMsg.handle, rpcMsg->handle);
+         mnodeMsg->rpcMsg.handle, rpcMsg->ahandle);
 
   if (mnodeMsg->received != mnodeMsg->expected) return;
 
@@ -702,7 +739,7 @@ static void mnodeProcessCreateVnodeRsp(SRpcMsg *rpcMsg) {
       code = TSDB_CODE_MND_SDB_ERROR;
     }
 
-    dnodeSendRpcMnodeWriteRsp(mnodeMsg, code);
+    dnodeSendRpcMnodeWriteRsp(mnodeMsg, mnodeMsg->code);
   }
 }
 
@@ -717,7 +754,7 @@ static SMDDropVnodeMsg *mnodeBuildDropVnodeMsg(int32_t vgId) {
 void mnodeSendDropVnodeMsg(int32_t vgId, SRpcIpSet *ipSet, void *ahandle) {
   SMDDropVnodeMsg *pDrop = mnodeBuildDropVnodeMsg(vgId);
   SRpcMsg rpcMsg = {
-      .handle  = ahandle,
+      .ahandle = ahandle,
       .pCont   = pDrop,
       .contLen = pDrop ? sizeof(SMDDropVnodeMsg) : 0,
       .code    = 0,
@@ -727,19 +764,20 @@ void mnodeSendDropVnodeMsg(int32_t vgId, SRpcIpSet *ipSet, void *ahandle) {
 }
 
 static void mnodeSendDropVgroupMsg(SVgObj *pVgroup, void *ahandle) {
-  mTrace("vgId:%d, send drop all vnodes msg, ahandle:%p", pVgroup->vgId, ahandle);
+  pVgroup->status = TAOS_VG_STATUS_DROPPING; // deleting
+  mDebug("vgId:%d, send drop all vnodes msg, ahandle:%p", pVgroup->vgId, ahandle);
   for (int32_t i = 0; i < pVgroup->numOfVnodes; ++i) {
     SRpcIpSet ipSet = mnodeGetIpSetFromIp(pVgroup->vnodeGid[i].pDnode->dnodeEp);
-    mTrace("vgId:%d, send drop vnode msg to dnode:%d, ahandle:%p", pVgroup->vgId, pVgroup->vnodeGid[i].dnodeId, ahandle);
+    mDebug("vgId:%d, send drop vnode msg to dnode:%d, ahandle:%p", pVgroup->vgId, pVgroup->vnodeGid[i].dnodeId, ahandle);
     mnodeSendDropVnodeMsg(pVgroup->vgId, &ipSet, ahandle);
   }
 }
 
 static void mnodeProcessDropVnodeRsp(SRpcMsg *rpcMsg) {
-  mTrace("drop vnode rsp is received, handle:%p", rpcMsg->handle);
-  if (rpcMsg->handle == NULL) return;
+  mDebug("drop vnode rsp is received, handle:%p", rpcMsg->ahandle);
+  if (rpcMsg->ahandle == NULL) return;
 
-  SMnodeMsg *mnodeMsg = rpcMsg->handle;
+  SMnodeMsg *mnodeMsg = rpcMsg->ahandle;
   mnodeMsg->received++;
   if (rpcMsg->code == TSDB_CODE_SUCCESS) {
     mnodeMsg->code = rpcMsg->code;
@@ -747,9 +785,9 @@ static void mnodeProcessDropVnodeRsp(SRpcMsg *rpcMsg) {
   }
 
   SVgObj *pVgroup = mnodeMsg->pVgroup;
-  mTrace("vgId:%d, drop vnode rsp received, result:%s received:%d successed:%d expected:%d, thandle:%p ahandle:%p",
+  mDebug("vgId:%d, drop vnode rsp received, result:%s received:%d successed:%d expected:%d, thandle:%p ahandle:%p",
          pVgroup->vgId, tstrerror(rpcMsg->code), mnodeMsg->received, mnodeMsg->successed, mnodeMsg->expected,
-         mnodeMsg->rpcMsg.handle, rpcMsg->handle);
+         mnodeMsg->rpcMsg.handle, rpcMsg->ahandle);
 
   if (mnodeMsg->received != mnodeMsg->expected) return;
 
@@ -773,19 +811,19 @@ static int32_t mnodeProcessVnodeCfgMsg(SMnodeMsg *pMsg) {
 
   SDnodeObj *pDnode = mnodeGetDnode(pCfg->dnodeId);
   if (pDnode == NULL) {
-    mTrace("dnode:%s, vgId:%d, invalid dnode", taosIpStr(pCfg->dnodeId), pCfg->vgId);
+    mDebug("dnode:%s, vgId:%d, invalid dnode", taosIpStr(pCfg->dnodeId), pCfg->vgId);
     return TSDB_CODE_MND_VGROUP_NOT_EXIST;
   }
   mnodeDecDnodeRef(pDnode);
 
   SVgObj *pVgroup = mnodeGetVgroup(pCfg->vgId);
   if (pVgroup == NULL) {
-    mTrace("dnode:%s, vgId:%d, no vgroup info", taosIpStr(pCfg->dnodeId), pCfg->vgId);
+    mDebug("dnode:%s, vgId:%d, no vgroup info", taosIpStr(pCfg->dnodeId), pCfg->vgId);
     return TSDB_CODE_MND_VGROUP_NOT_EXIST;
   }
   mnodeDecVgroupRef(pVgroup);
 
-  mTrace("vgId:%d, send create vnode msg to dnode %s for vnode cfg msg", pVgroup->vgId, pDnode->dnodeEp);
+  mDebug("vgId:%d, send create vnode msg to dnode %s for vnode cfg msg", pVgroup->vgId, pDnode->dnodeEp);
   SRpcIpSet ipSet = mnodeGetIpSetFromIp(pDnode->dnodeEp);
   mnodeSendCreateVnodeMsg(pVgroup, &ipSet, NULL);
 
@@ -797,7 +835,7 @@ void mnodeDropAllDnodeVgroups(SDnodeObj *pDropDnode) {
   SVgObj *pVgroup = NULL;
   int32_t numOfVgroups = 0;
 
-  mPrint("dnode:%d, all vgroups will be dropped from sdb", pDropDnode->dnodeId);
+  mInfo("dnode:%d, all vgroups will be dropped from sdb", pDropDnode->dnodeId);
 
   while (1) {
     pIter = mnodeGetNextVgroup(pIter, &pVgroup);
@@ -818,14 +856,14 @@ void mnodeDropAllDnodeVgroups(SDnodeObj *pDropDnode) {
 
   sdbFreeIter(pIter);
 
-  mPrint("dnode:%d, all vgroups is dropped from sdb", pDropDnode->dnodeId);
+  mInfo("dnode:%d, all vgroups is dropped from sdb", pDropDnode->dnodeId);
 }
 
 void mnodeUpdateAllDbVgroups(SDbObj *pAlterDb) {
   void *  pIter = NULL;
   SVgObj *pVgroup = NULL;
 
-  mPrint("db:%s, all vgroups will be update in sdb", pAlterDb->name);
+  mInfo("db:%s, all vgroups will be update in sdb", pAlterDb->name);
 
   while (1) {
     pIter = mnodeGetNextVgroup(pIter, &pVgroup);
@@ -840,7 +878,7 @@ void mnodeUpdateAllDbVgroups(SDbObj *pAlterDb) {
 
   sdbFreeIter(pIter);
 
-  mPrint("db:%s, all vgroups is updated in sdb", pAlterDb->name);
+  mInfo("db:%s, all vgroups is updated in sdb", pAlterDb->name);
 }
 
 void mnodeDropAllDbVgroups(SDbObj *pDropDb) {
@@ -848,7 +886,7 @@ void mnodeDropAllDbVgroups(SDbObj *pDropDb) {
   int32_t numOfVgroups = 0;
   SVgObj *pVgroup = NULL;
 
-  mPrint("db:%s, all vgroups will be dropped from sdb", pDropDb->name);
+  mInfo("db:%s, all vgroups will be dropped from sdb", pDropDb->name);
   while (1) {
     pIter = mnodeGetNextVgroup(pIter, &pVgroup);
     if (pVgroup == NULL) break;
@@ -868,7 +906,7 @@ void mnodeDropAllDbVgroups(SDbObj *pDropDb) {
 
   sdbFreeIter(pIter);
 
-  mPrint("db:%s, all vgroups:%d is dropped from sdb", pDropDb->name, numOfVgroups);
+  mInfo("db:%s, all vgroups:%d is dropped from sdb", pDropDb->name, numOfVgroups);
 }
 
 void mnodeSendDropAllDbVgroupsMsg(SDbObj *pDropDb) {
@@ -876,7 +914,7 @@ void mnodeSendDropAllDbVgroupsMsg(SDbObj *pDropDb) {
   int32_t numOfVgroups = 0;
   SVgObj *pVgroup = NULL;
 
-  mPrint("db:%s, all vgroups will be dropped in dnode", pDropDb->name);
+  mInfo("db:%s, all vgroups will be dropped in dnode", pDropDb->name);
   while (1) {
     pIter = mnodeGetNextVgroup(pIter, &pVgroup);
     if (pVgroup == NULL) break;
@@ -890,5 +928,5 @@ void mnodeSendDropAllDbVgroupsMsg(SDbObj *pDropDb) {
 
   sdbFreeIter(pIter);
 
-  mPrint("db:%s, all vgroups:%d drop msg is sent to dnode", pDropDb->name, numOfVgroups);
+  mInfo("db:%s, all vgroups:%d drop msg is sent to dnode", pDropDb->name, numOfVgroups);
 }

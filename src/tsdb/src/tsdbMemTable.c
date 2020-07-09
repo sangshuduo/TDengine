@@ -99,6 +99,7 @@ int tsdbInsertRowToMem(STsdbRepo *pRepo, SDataRow row, STable *pTable) {
   if (tSkipListPut(pTableData->pData, pNode) == NULL) {
     tsdbFreeBytes(pRepo, (void *)pNode, bytes);
   } else {
+    if (TABLE_LASTKEY(pTable) < key) TABLE_LASTKEY(pTable) = key;
     if (pMemTable->keyFirst > key) pMemTable->keyFirst = key;
     if (pMemTable->keyLast < key) pMemTable->keyLast = key;
     pMemTable->numOfRows++;
@@ -222,11 +223,12 @@ int tsdbAsyncCommit(STsdbRepo *pRepo) {
       terrno = TAOS_SYSTEM_ERROR(errno);
       return -1;
     }
+    pRepo->commit = 0;
   }
 
   ASSERT(pRepo->commit == 0);
-  if (pRepo->appH.notifyStatus) pRepo->appH.notifyStatus(pRepo->appH.appH, TSDB_STATUS_COMMIT_START);
   if (pRepo->mem != NULL) {
+    if (pRepo->appH.notifyStatus) pRepo->appH.notifyStatus(pRepo->appH.appH, TSDB_STATUS_COMMIT_START);
     if (tsdbLockRepo(pRepo) < 0) return -1;
     pRepo->imem = pRepo->mem;
     pRepo->mem = NULL;
@@ -367,7 +369,7 @@ static void *tsdbCommitData(void *arg) {
   ASSERT(pRepo->commit == 1);
   ASSERT(pMem != NULL);
 
-  tsdbPrint("vgId:%d start to commit! keyFirst %" PRId64 " keyLast %" PRId64 " numOfRows %" PRId64, REPO_ID(pRepo),
+  tsdbInfo("vgId:%d start to commit! keyFirst %" PRId64 " keyLast %" PRId64 " numOfRows %" PRId64, REPO_ID(pRepo),
             pMem->keyFirst, pMem->keyLast, pMem->numOfRows);
 
   // Create the iterator to read from cache
@@ -415,7 +417,7 @@ _exit:
   tsdbDestroyTableIters(iters, pCfg->maxTables);
   tsdbDestroyHelper(&whelper);
   tsdbEndCommit(pRepo);
-  tsdbPrint("vgId:%d commit over", pRepo->config.tsdbId);
+  tsdbInfo("vgId:%d commit over", pRepo->config.tsdbId);
 
   return NULL;
 }
@@ -441,12 +443,14 @@ static int tsdbCommitMeta(STsdbRepo *pRepo) {
         if (tdUpdateKVStoreRecord(pMeta->pStore, pAct->uid, (void *)(pCont->cont), pCont->len) < 0) {
           tsdbError("vgId:%d failed to update meta with uid %" PRIu64 " since %s", REPO_ID(pRepo), pAct->uid,
                     tstrerror(terrno));
+          tdKVStoreEndCommit(pMeta->pStore);
           goto _err;
         }
       } else if (pAct->act == TSDB_DROP_META) {
         if (tdDropKVStoreRecord(pMeta->pStore, pAct->uid) < 0) {
           tsdbError("vgId:%d failed to drop meta with uid %" PRIu64 " since %s", REPO_ID(pRepo), pAct->uid,
                     tstrerror(terrno));
+          tdKVStoreEndCommit(pMeta->pStore);
           goto _err;
         }
       } else {
@@ -468,9 +472,6 @@ _err:
 
 static void tsdbEndCommit(STsdbRepo *pRepo) {
   ASSERT(pRepo->commit == 1);
-  tsdbLockRepo(pRepo);
-  pRepo->commit = 0;
-  tsdbUnlockRepo(pRepo);
   if (pRepo->appH.notifyStatus) pRepo->appH.notifyStatus(pRepo->appH.appH, TSDB_STATUS_COMMIT_OVER);
 }
 
@@ -510,7 +511,7 @@ static int tsdbCommitToFile(STsdbRepo *pRepo, int fid, SCommitIter *iters, SRWHe
   // Check if there are data to commit to this file
   int hasDataToCommit = tsdbHasDataToCommit(iters, pCfg->maxTables, minKey, maxKey);
   if (!hasDataToCommit) {
-    tsdbTrace("vgId:%d no data to commit to file %d", REPO_ID(pRepo), fid);
+    tsdbDebug("vgId:%d no data to commit to file %d", REPO_ID(pRepo), fid);
     return 0;
   }
 
@@ -526,8 +527,6 @@ static int tsdbCommitToFile(STsdbRepo *pRepo, int fid, SCommitIter *iters, SRWHe
     goto _err;
   }
 
-  free(dataDir);
-
   // Open files for write/read
   if (tsdbSetAndOpenHelperFile(pHelper, pGroup) < 0) {
     tsdbError("vgId:%d failed to set helper file since %s", REPO_ID(pRepo), tstrerror(terrno));
@@ -539,10 +538,12 @@ static int tsdbCommitToFile(STsdbRepo *pRepo, int fid, SCommitIter *iters, SRWHe
     SCommitIter *pIter = iters + tid;
     if (pIter->pTable == NULL) continue;
 
+    taosRLockLatch(&(pIter->pTable->latch));
+
     tsdbSetHelperTable(pHelper, pIter->pTable, pRepo);
 
     if (pIter->pIter != NULL) {
-      tdInitDataCols(pDataCols, tsdbGetTableSchema(pIter->pTable));
+      tdInitDataCols(pDataCols, tsdbGetTableSchemaImpl(pIter->pTable, false, false, -1));
 
       int maxRowsToRead = pCfg->maxRowsPerFileBlock * 4 / 5;
       int nLoop = 0;
@@ -558,6 +559,7 @@ static int tsdbCommitToFile(STsdbRepo *pRepo, int fid, SCommitIter *iters, SRWHe
         int rowsWritten = tsdbWriteDataBlock(pHelper, pDataCols);
         ASSERT(rowsWritten != 0);
         if (rowsWritten < 0) {
+          taosRUnLockLatch(&(pIter->pTable->latch));
           tsdbError("vgId:%d failed to write data block to table %s tid %d uid %" PRIu64 " since %s", REPO_ID(pRepo),
                     TABLE_CHAR_NAME(pIter->pTable), TABLE_TID(pIter->pTable), TABLE_UID(pIter->pTable),
                     tstrerror(terrno));
@@ -571,6 +573,8 @@ static int tsdbCommitToFile(STsdbRepo *pRepo, int fid, SCommitIter *iters, SRWHe
 
       ASSERT(pDataCols->numOfRows == 0);
     }
+
+    taosRUnLockLatch(&(pIter->pTable->latch));
 
     // Move the last block to the new .l file if neccessary
     if (tsdbMoveLastBlockIfNeccessary(pHelper) < 0) {
@@ -590,6 +594,7 @@ static int tsdbCommitToFile(STsdbRepo *pRepo, int fid, SCommitIter *iters, SRWHe
     goto _err;
   }
 
+  tfree(dataDir);
   tsdbCloseHelperFile(pHelper, 0);
 
   pthread_rwlock_wrlock(&(pFileH->fhlock));
@@ -601,7 +606,7 @@ static int tsdbCommitToFile(STsdbRepo *pRepo, int fid, SCommitIter *iters, SRWHe
   return 0;
 
 _err:
-  // ASSERT(false);
+  tfree(dataDir);
   tsdbCloseHelperFile(pHelper, 1);
   return -1;
 }
@@ -680,10 +685,10 @@ static int tsdbReadRowsFromCache(STsdbMeta *pMeta, STable *pTable, SSkipListIter
     if (dataRowKey(row) > maxKey) break;
 
     if (pSchema == NULL || schemaVersion(pSchema) != dataRowVersion(row)) {
-      pSchema = tsdbGetTableSchemaByVersion(pTable, dataRowVersion(row));
+      pSchema = tsdbGetTableSchemaImpl(pTable, true, false, dataRowVersion(row));
       if (pSchema == NULL) {
         // TODO: deal with the error here
-        ASSERT(false);
+        ASSERT(0);
       }
     }
 

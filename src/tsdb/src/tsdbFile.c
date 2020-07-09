@@ -28,8 +28,9 @@
 #include "tsdbMain.h"
 #include "tutil.h"
 #include "ttime.h"
+#include "tfile.h"
 
-const char *tsdbFileSuffix[] = {".head", ".data", ".last", "", ".h", ".h"};
+const char *tsdbFileSuffix[] = {".head", ".data", ".last", "", ".h", ".l"};
 
 static int   tsdbInitFile(SFile *pFile, STsdbRepo *pRepo, int fid, int type);
 static void  tsdbDestroyFile(SFile *pFile);
@@ -114,7 +115,7 @@ int tsdbOpenFileH(STsdbRepo *pRepo) {
       }
     }
 
-    tsdbTrace("vgId:%d file group %d init", REPO_ID(pRepo), fid);
+    tsdbDebug("vgId:%d file group %d init", REPO_ID(pRepo), fid);
 
     pFileH->pFGroup[pFileH->nFGroups++] = fileGroup;
     qsort((void *)(pFileH->pFGroup), pFileH->nFGroups, sizeof(SFileGroup), compFGroup);
@@ -358,7 +359,9 @@ void tsdbRemoveFileGroup(STsdbRepo *pRepo, SFileGroup *pFGroup) {
   ASSERT(pFileH->nFGroups >= 0);
 
   for (int type = TSDB_FILE_TYPE_HEAD; type < TSDB_FILE_TYPE_MAX; type++) {
-    remove(fileGroup.files[type].fname);
+    if (remove(fileGroup.files[type].fname) < 0) {
+      tsdbError("vgId:%d failed to remove file %s", REPO_ID(pRepo), fileGroup.files[type].fname);
+    }
     tsdbDestroyFile(&fileGroup.files[type]);
   }
 }

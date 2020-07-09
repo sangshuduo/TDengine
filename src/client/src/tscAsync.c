@@ -55,7 +55,7 @@ void doAsyncQuery(STscObj* pObj, SSqlObj* pSql, void (*fp)(), void* param, const
 
   strtolower(pSql->sqlstr, sqlstr);
 
-  tscDump("%p SQL: %s", pSql, pSql->sqlstr);
+  tscDebugL("%p SQL: %s", pSql, pSql->sqlstr);
   pSql->cmd.curSql = pSql->sqlstr;
 
   int32_t code = tsParseSql(pSql, true);
@@ -213,27 +213,34 @@ void taos_fetch_rows_a(TAOS_RES *taosa, void (*fp)(void *, TAOS_RES *, int), voi
   // handle the sub queries of join query
   if (pCmd->command == TSDB_SQL_TABLE_JOIN_RETRIEVE) {
     tscFetchDatablockFromSubquery(pSql);
-  } else if (pRes->completed && pCmd->command == TSDB_SQL_FETCH) {
-    if (hasMoreVnodesToTry(pSql)) { // sequentially retrieve data from remain vnodes.
-      tscTryQueryNextVnode(pSql, tscAsyncQueryRowsForNextVnode);
-      return;
-    } else {
-      /*
+  } else if (pRes->completed) {
+    if(pCmd->command == TSDB_SQL_FETCH) {
+      if (hasMoreVnodesToTry(pSql)) {  // sequentially retrieve data from remain vnodes.
+        tscTryQueryNextVnode(pSql, tscAsyncQueryRowsForNextVnode);
+        return;
+      } else {
+        /*
        * all available virtual node has been checked already, now we need to check
        * for the next subclause queries
-       */
-      if (pCmd->clauseIndex < pCmd->numOfClause - 1) {
-        tscTryQueryNextClause(pSql, tscAsyncQueryRowsForNextVnode);
-        return;
-      }
-    
-      /*
+         */
+        if (pCmd->clauseIndex < pCmd->numOfClause - 1) {
+          tscTryQueryNextClause(pSql, tscAsyncQueryRowsForNextVnode);
+          return;
+        }
+
+        /*
        * 1. has reach the limitation
        * 2. no remain virtual nodes to be retrieved anymore
-       */
+         */
+        (*pSql->fetchFp)(param, pSql, 0);
+      }
+      return;
+    } else if (pCmd->command == TSDB_SQL_RETRIEVE || pCmd->command == TSDB_SQL_RETRIEVE_LOCALMERGE) {
+      // in case of show command, return no data
       (*pSql->fetchFp)(param, pSql, 0);
+    } else {
+      assert(0);
     }
-    return;
   } else { // current query is not completed, continue retrieve from node
     if (pCmd->command != TSDB_SQL_RETRIEVE_LOCALMERGE && pCmd->command < TSDB_SQL_LOCAL) {
       pCmd->command = (pCmd->command > TSDB_SQL_MGMT) ? TSDB_SQL_RETRIEVE : TSDB_SQL_FETCH;
@@ -361,7 +368,7 @@ void tscProcessAsyncRes(SSchedMsg *pMsg) {
   }
 
   if (shouldFree) {
-    tscTrace("%p sqlObj is automatically freed in async res", pSql);
+    tscDebug("%p sqlObj is automatically freed in async res", pSql);
     tscFreeSqlObj(pSql);
   }
 }
@@ -385,7 +392,7 @@ void tscQueueAsyncError(void(*fp), void *param, int32_t code) {
 
 void tscQueueAsyncRes(SSqlObj *pSql) {
   if (pSql == NULL || pSql->signature != pSql) {
-    tscTrace("%p SqlObj is freed, not add into queue async res", pSql);
+    tscDebug("%p SqlObj is freed, not add into queue async res", pSql);
     return;
   } else {
     tscError("%p add into queued async res, code:%s", pSql, tstrerror(pSql->res.code));
@@ -401,19 +408,8 @@ void tscQueueAsyncRes(SSqlObj *pSql) {
 
 void tscProcessAsyncFree(SSchedMsg *pMsg) {
   SSqlObj *pSql = (SSqlObj *)pMsg->ahandle;
-  tscTrace("%p sql is freed", pSql);
+  tscDebug("%p sql is freed", pSql);
   taos_free_result(pSql);
-}
-
-void tscQueueAsyncFreeResult(SSqlObj *pSql) {
-  tscTrace("%p sqlObj put in queue to async free", pSql);
-
-  SSchedMsg schedMsg = { 0 };
-  schedMsg.fp = tscProcessAsyncFree;
-  schedMsg.ahandle = pSql;
-  schedMsg.thandle = (void *)1;
-  schedMsg.msg = NULL;
-  taosScheduleTask(tscQhandle, &schedMsg);
 }
 
 int tscSendMsgToServer(SSqlObj *pSql);
@@ -431,12 +427,14 @@ void tscTableMetaCallBack(void *param, TAOS_RES *res, int code) {
     return;
   }
 
+  tscDebug("%p get tableMeta successfully", pSql);
+
   if (pSql->pStream == NULL) {
     SQueryInfo* pQueryInfo = tscGetQueryInfoDetail(pCmd, pCmd->clauseIndex);
 
     // check if it is a sub-query of super table query first, if true, enter another routine
     if (TSDB_QUERY_HAS_TYPE(pQueryInfo->type, TSDB_QUERY_TYPE_STABLE_SUBQUERY)) {
-      tscTrace("%p update table meta in local cache, continue to process sql and send corresponding subquery", pSql);
+      tscDebug("%p update table meta in local cache, continue to process sql and send corresponding subquery", pSql);
 
       STableMetaInfo* pTableMetaInfo = tscGetMetaInfo(pQueryInfo, 0);
       code = tscGetTableMeta(pSql, pTableMetaInfo);
@@ -446,23 +444,23 @@ void tscTableMetaCallBack(void *param, TAOS_RES *res, int code) {
         assert(code == TSDB_CODE_SUCCESS);      
       }
      
-      
-      assert((tscGetNumOfTags(pTableMetaInfo->pTableMeta) != 0) && pTableMetaInfo->vgroupIndex >= 0 && pSql->param != NULL);
+      assert((tscGetNumOfTags(pTableMetaInfo->pTableMeta) != 0) && pSql->param != NULL);
 
       SRetrieveSupport *trs = (SRetrieveSupport *)pSql->param;
-      SSqlObj *         pParObj = trs->pParentSqlObj;
+      SSqlObj *         pParObj = trs->pParentSql;
       
-      assert(pParObj->signature == pParObj && trs->subqueryIndex == pTableMetaInfo->vgroupIndex &&
-          tscGetNumOfTags(pTableMetaInfo->pTableMeta) != 0);
-
       // NOTE: the vgroupInfo for the queried super table must be existed here.
-      assert(pTableMetaInfo->vgroupList != NULL);
+      assert(pParObj->signature == pParObj && trs->subqueryIndex == pTableMetaInfo->vgroupIndex &&
+          pTableMetaInfo->vgroupIndex >= 0 && pTableMetaInfo->vgroupList != NULL);
+
       if ((code = tscProcessSql(pSql)) == TSDB_CODE_SUCCESS) {
         return;
       }
+
+      goto _error;
     } else {  // continue to process normal async query
       if (pCmd->parseFinished) {
-        tscTrace("%p update table meta in local cache, continue to process sql and send corresponding query", pSql);
+        tscDebug("%p update table meta in local cache, continue to process sql and send corresponding query", pSql);
 
         STableMetaInfo* pTableMetaInfo = tscGetTableMetaInfoFromCmd(pCmd, pCmd->clauseIndex, 0);
         code = tscGetTableMeta(pSql, pTableMetaInfo);
@@ -472,18 +470,47 @@ void tscTableMetaCallBack(void *param, TAOS_RES *res, int code) {
           assert(code == TSDB_CODE_SUCCESS);      
         }
 
-        // if failed to process sql, go to error handler
-        if ((code = tscProcessSql(pSql)) == TSDB_CODE_SUCCESS) {
-          return;
+        // in case of insert, redo parsing the sql string and build new submit data block for two reasons:
+        // 1. the table Id(tid & uid) may have been update, the submit block needs to be updated accordingly.
+        // 2. vnode may need the schema information along with submit block to update its local table schema.
+        if (pCmd->command == TSDB_SQL_INSERT) {
+          tscDebug("%p redo parse sql string to build submit block", pSql);
+
+          pCmd->parseFinished = false;
+          code = tsParseSql(pSql, true);
+
+          if (code == TSDB_CODE_TSC_ACTION_IN_PROGRESS) {
+            return;
+          }
+
+          if (code == TSDB_CODE_SUCCESS) {
+            /*
+             * Discard previous built submit blocks, and then parse the sql string again and build up all submit blocks,
+             * and send the required submit block according to index value in supporter to server.
+             */
+            pSql->fp = pSql->fetchFp;  // restore the fp
+            if ((code = tscHandleInsertRetry(pSql)) == TSDB_CODE_SUCCESS) {
+              return;
+            }
+          }
+
+        } else {// in case of other query type, continue
+          if ((code = tscProcessSql(pSql)) == TSDB_CODE_SUCCESS) {
+            return;
+          }
         }
-//          // todo update the submit message according to the new table meta
-//          // 1. table uid, 2. ip address
-//          code = tscSendMsgToServer(pSql);
-//          if (code == TSDB_CODE_SUCCESS) return;
+
+        goto _error;
       } else {
-        tscTrace("%p continue parse sql after get table meta", pSql);
+        tscDebug("%p continue parse sql after get table meta", pSql);
 
         code = tsParseSql(pSql, false);
+        if (code == TSDB_CODE_TSC_ACTION_IN_PROGRESS) {
+          return;
+        } else if (code != TSDB_CODE_SUCCESS) {
+          goto _error;
+        }
+
         if (TSDB_QUERY_HAS_TYPE(pQueryInfo->type, TSDB_QUERY_TYPE_STMT_INSERT)) {
           STableMetaInfo* pTableMetaInfo = tscGetTableMetaInfoFromCmd(pCmd, pCmd->clauseIndex, 0);
           code = tscGetTableMeta(pSql, pTableMetaInfo);
@@ -492,45 +519,49 @@ void tscTableMetaCallBack(void *param, TAOS_RES *res, int code) {
           } else {
             assert(code == TSDB_CODE_SUCCESS);      
           }
+
           (*pSql->fp)(pSql->param, pSql, code);
           return;
         }
-        
-        if (code == TSDB_CODE_TSC_ACTION_IN_PROGRESS) return;
+
+        // proceed to invoke the tscDoQuery();
       }
     }
 
   } else {  // stream computing
     STableMetaInfo *pTableMetaInfo = tscGetTableMetaInfoFromCmd(pCmd, pCmd->clauseIndex, 0);
-    code = tscGetTableMeta(pSql, pTableMetaInfo);
-    pRes->code = code;
 
-    if (code == TSDB_CODE_TSC_ACTION_IN_PROGRESS) return;
+    code = tscGetTableMeta(pSql, pTableMetaInfo);
+    if (code == TSDB_CODE_TSC_ACTION_IN_PROGRESS) {
+      return;
+    } else if (code != TSDB_CODE_SUCCESS) {
+      goto _error;
+    }
 
     if (code == TSDB_CODE_SUCCESS && UTIL_TABLE_IS_SUPER_TABLE(pTableMetaInfo)) {
       code = tscGetSTableVgroupInfo(pSql, pCmd->clauseIndex);
-      pRes->code = code;
-
-      if (code == TSDB_CODE_TSC_ACTION_IN_PROGRESS) return;
+      if (code == TSDB_CODE_TSC_ACTION_IN_PROGRESS) {
+        return;
+      } else if (code != TSDB_CODE_SUCCESS) {
+        goto _error;
+      }
     }
-  }
 
-  if (code != TSDB_CODE_SUCCESS) {
-    pSql->res.code = code;
-    tscQueueAsyncRes(pSql);
-    return;
-  }
-
-  if (pSql->pStream) {
-    tscTrace("%p stream:%p meta is updated, start new query, command:%d", pSql, pSql->pStream, pSql->cmd.command);
+    tscDebug("%p stream:%p meta is updated, start new query, command:%d", pSql, pSql->pStream, pSql->cmd.command);
     if (!pSql->cmd.parseFinished) {
       tsParseSql(pSql, false);
       sem_post(&pSql->rspSem);
     }
+
     return;
-  } else {
-    tscTrace("%p get tableMeta successfully", pSql);
   }
 
   tscDoQuery(pSql);
+  return;
+
+  _error:
+  if (code != TSDB_CODE_SUCCESS) {
+    pSql->res.code = code;
+    tscQueueAsyncRes(pSql);
+  }
 }

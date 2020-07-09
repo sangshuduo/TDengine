@@ -63,7 +63,6 @@ typedef struct _SSdbTable {
   int32_t (*encodeFp)(SSdbOper *pOper);
   int32_t (*destroyFp)(SSdbOper *pOper);
   int32_t (*restoredFp)();
-  pthread_mutex_t mutex;
 } SSdbTable;
 
 typedef struct {
@@ -73,8 +72,6 @@ typedef struct {
   void *     sync;
   void *     wal;
   SSyncCfg   cfg;
-  sem_t      sem;
-  int32_t    code;
   int32_t    numOfTables;
   SSdbTable *tableList[SDB_TABLE_MAX];
   pthread_mutex_t mutex;
@@ -182,7 +179,7 @@ static int32_t sdbInitWal() {
     return -1;
   }
 
-  sdbTrace("open sdb wal for restore");
+  sdbInfo("open sdb wal for restore");
   walRestore(tsSdbObj.wal, NULL, sdbWrite);
   return 0;
 }
@@ -199,10 +196,10 @@ static void sdbRestoreTables() {
 
     totalRows += pTable->numOfRows;
     numOfTables++;
-    sdbTrace("table:%s, is restored, numOfRows:%" PRId64, pTable->tableName, pTable->numOfRows);
+    sdbDebug("table:%s, is restored, numOfRows:%" PRId64, pTable->tableName, pTable->numOfRows);
   }
 
-  sdbTrace("sdb is restored, version:%" PRId64 " totalRows:%d numOfTables:%d", tsSdbObj.version, totalRows, numOfTables);
+  sdbInfo("sdb is restored, ver:%" PRId64 " totalRows:%d numOfTables:%d", tsSdbObj.version, totalRows, numOfTables);
 }
 
 void sdbUpdateMnodeRoles() {
@@ -211,12 +208,12 @@ void sdbUpdateMnodeRoles() {
   SNodesRole roles = {0};
   syncGetNodesRole(tsSdbObj.sync, &roles);
 
-  sdbPrint("update mnodes sync roles, total:%d", tsSdbObj.cfg.replica);
+  sdbInfo("update mnodes sync roles, total:%d", tsSdbObj.cfg.replica);
   for (int32_t i = 0; i < tsSdbObj.cfg.replica; ++i) {
     SMnodeObj *pMnode = mnodeGetMnode(roles.nodeId[i]);
     if (pMnode != NULL) {
       pMnode->role = roles.role[i];
-      sdbPrint("mnode:%d, role:%s", pMnode->mnodeId, mnodeGetMnodeRoleStr(pMnode->role));
+      sdbInfo("mnode:%d, role:%s", pMnode->mnodeId, mnodeGetMnodeRoleStr(pMnode->role));
       if (pMnode->mnodeId == dnodeGetDnodeId()) tsSdbObj.role = pMnode->role;
       mnodeDecMnodeRef(pMnode);
     }
@@ -235,7 +232,7 @@ static int sdbGetWalInfo(void *ahandle, char *name, uint32_t *index) {
 }
 
 static void sdbNotifyRole(void *ahandle, int8_t role) {
-  sdbPrint("mnode role changed from %s to %s", mnodeGetMnodeRoleStr(tsSdbObj.role), mnodeGetMnodeRoleStr(role));
+  sdbInfo("mnode role changed from %s to %s", mnodeGetMnodeRoleStr(tsSdbObj.role), mnodeGetMnodeRoleStr(role));
 
   if (role == TAOS_SYNC_ROLE_MASTER && tsSdbObj.role != TAOS_SYNC_ROLE_MASTER) {
     balanceReset();
@@ -245,27 +242,36 @@ static void sdbNotifyRole(void *ahandle, int8_t role) {
   sdbUpdateMnodeRoles();
 }
 
+FORCE_INLINE
 static void sdbConfirmForward(void *ahandle, void *param, int32_t code) {
-  tsSdbObj.code = code;
-  sem_post(&tsSdbObj.sem);
-  sdbTrace("forward request confirmed, version:%" PRIu64 ", result:%s", (int64_t)param, tstrerror(code));
-}
+  assert(param);
+  SSdbOper * pOper = param;
+  SMnodeMsg *pMsg = pOper->pMsg;
+  if (code <= 0) pOper->retCode = code;
 
-static int32_t sdbForwardToPeer(SWalHead *pHead) {
-  if (tsSdbObj.sync == NULL) return TSDB_CODE_SUCCESS;
+  int32_t processedCount = atomic_add_fetch_32(&pOper->processedCount, 1);
+  if (processedCount <= 1) {
+    if (pMsg != NULL) {
+      sdbDebug("app:%p:%p, waiting for confirm this operation, count:%d", pMsg->rpcMsg.ahandle, pMsg, processedCount);
+    }
+    return;
+  }
 
-  int32_t code = syncForwardToPeer(tsSdbObj.sync, pHead, (void*)pHead->version, TAOS_QTYPE_RPC);
-  if (code > 0) {
-    sdbTrace("forward request is sent, version:%" PRIu64 ", code:%d", pHead->version, code);
-    sem_wait(&tsSdbObj.sem);
-    return tsSdbObj.code;
-  } 
-  return code;
+  if (pMsg != NULL) {
+    sdbDebug("app:%p:%p, is confirmed and will do callback func", pMsg->rpcMsg.ahandle, pMsg);
+  }
+
+  if (pOper->cb != NULL) {
+    pOper->retCode = (*pOper->cb)(pMsg, pOper->retCode);
+  }
+
+  dnodeSendRpcMnodeWriteRsp(pMsg, pOper->retCode);
+  taosFreeQitem(pOper);
 }
 
 void sdbUpdateSync() {
   SSyncCfg syncCfg = {0};
-  int32_t index = 0;
+  int32_t  index = 0;
 
   SDMMnodeInfos *mnodes = dnodeGetMnodeInfos();
   for (int32_t i = 0; i < mnodes->nodeNum; ++i) {
@@ -288,7 +294,7 @@ void sdbUpdateSync() {
       SDnodeObj *pDnode = mnodeGetDnode(pMnode->mnodeId);
       if (pDnode != NULL) {
         syncCfg.nodeInfo[index].nodePort = pDnode->dnodePort + TSDB_PORT_SYNC;
-        strcpy(syncCfg.nodeInfo[index].nodeFqdn, pDnode->dnodeEp);
+        tstrncpy(syncCfg.nodeInfo[index].nodeFqdn, pDnode->dnodeFqdn, TSDB_FQDN_LEN);
         index++;
       }
 
@@ -299,7 +305,7 @@ void sdbUpdateSync() {
   }
 
   syncCfg.replica = index;
-  syncCfg.quorum = (syncCfg.replica == 1) ? 1:2;
+  syncCfg.quorum = (syncCfg.replica == 1) ? 1 : 2;
 
   bool hasThisDnode = false;
   for (int32_t i = 0; i < syncCfg.replica; ++i) {
@@ -312,9 +318,9 @@ void sdbUpdateSync() {
   if (!hasThisDnode) return;
   if (memcmp(&syncCfg, &tsSdbObj.cfg, sizeof(SSyncCfg)) == 0) return;
 
-  sdbPrint("work as mnode, replica:%d", syncCfg.replica);
+  sdbInfo("work as mnode, replica:%d", syncCfg.replica);
   for (int32_t i = 0; i < syncCfg.replica; ++i) {
-    sdbPrint("mnode:%d, %s:%d", syncCfg.nodeInfo[i].nodeId, syncCfg.nodeInfo[i].nodeFqdn, syncCfg.nodeInfo[i].nodePort);
+    sdbInfo("mnode:%d, %s:%d", syncCfg.nodeInfo[i].nodeId, syncCfg.nodeInfo[i].nodeFqdn, syncCfg.nodeInfo[i].nodePort);
   }
 
   SSyncInfo syncInfo = {0};
@@ -326,10 +332,10 @@ void sdbUpdateSync() {
   syncInfo.getWalInfo = sdbGetWalInfo;
   syncInfo.getFileInfo = sdbGetFileInfo;
   syncInfo.writeToCache = sdbWriteToQueue;
-  syncInfo.confirmForward = sdbConfirmForward; 
+  syncInfo.confirmForward = sdbConfirmForward;
   syncInfo.notifyRole = sdbNotifyRole;
   tsSdbObj.cfg = syncCfg;
-  
+
   if (tsSdbObj.sync) {
     syncReconfig(tsSdbObj.sync, &syncCfg);
   } else {
@@ -340,7 +346,6 @@ void sdbUpdateSync() {
 
 int32_t sdbInit() {
   pthread_mutex_init(&tsSdbObj.mutex, NULL);
-  sem_init(&tsSdbObj.sem, 0, 0);
 
   if (sdbInitWriteWorker() != 0) {
     return -1;
@@ -368,6 +373,7 @@ void sdbCleanUp() {
   tsSdbObj.status = SDB_STATUS_CLOSING;
   
   sdbCleanupWriteWorker();
+  sdbDebug("sdb will be closed, ver:%" PRId64, tsSdbObj.version);
 
   if (tsSdbObj.sync) {
     syncStop(tsSdbObj.sync);
@@ -379,7 +385,6 @@ void sdbCleanUp() {
     tsSdbObj.wal = NULL;
   }
   
-  sem_destroy(&tsSdbObj.sem);
   pthread_mutex_destroy(&tsSdbObj.mutex);
 }
 
@@ -389,9 +394,7 @@ void sdbIncRef(void *handle, void *pObj) {
   SSdbTable *pTable = handle;
   int32_t *  pRefCount = (int32_t *)(pObj + pTable->refCountPos);
   atomic_add_fetch_32(pRefCount, 1);
-  if (0 && (pTable->tableId == SDB_TABLE_CTABLE || pTable->tableId == SDB_TABLE_DB)) {
-    sdbTrace("add ref to table:%s record:%p:%s:%d", pTable->tableName, pObj, sdbGetKeyStrFromObj(pTable, pObj), *pRefCount);
-  }
+  sdbTrace("add ref to table:%s record:%p:%s:%d", pTable->tableName, pObj, sdbGetKeyStrFromObj(pTable, pObj), *pRefCount);
 }
 
 void sdbDecRef(void *handle, void *pObj) {
@@ -400,9 +403,7 @@ void sdbDecRef(void *handle, void *pObj) {
   SSdbTable *pTable = handle;
   int32_t *  pRefCount = (int32_t *)(pObj + pTable->refCountPos);
   int32_t    refCount = atomic_sub_fetch_32(pRefCount, 1);
-  if (0 && (pTable->tableId == SDB_TABLE_CTABLE || pTable->tableId == SDB_TABLE_DB)) {
-    sdbTrace("def ref of table:%s record:%p:%s:%d", pTable->tableName, pObj, sdbGetKeyStrFromObj(pTable, pObj), *pRefCount);
-  }
+  sdbTrace("def ref of table:%s record:%p:%s:%d", pTable->tableName, pObj, sdbGetKeyStrFromObj(pTable, pObj), *pRefCount);
 
   int8_t *updateEnd = pObj + pTable->refCountPos - 1;
   if (refCount <= 0 && *updateEnd) {
@@ -429,24 +430,18 @@ static SSdbRow *sdbGetRowMetaFromObj(SSdbTable *pTable, void *key) {
 
 void *sdbGetRow(void *handle, void *key) {
   SSdbTable *pTable = (SSdbTable *)handle;
-  SSdbRow * pMeta;
-
-  if (handle == NULL) return NULL;
-
-  pthread_mutex_lock(&pTable->mutex);
-
   int32_t keySize = sizeof(int32_t);
   if (pTable->keyType == SDB_KEY_STRING || pTable->keyType == SDB_KEY_VAR_STRING) {
     keySize = strlen((char *)key);
   }
-  pMeta = taosHashGet(pTable->iHandle, key, keySize);
-
-  if (pMeta) sdbIncRef(pTable, pMeta->row);
-  pthread_mutex_unlock(&pTable->mutex);
-
-  if (pMeta == NULL) return NULL;
-
-  return pMeta->row;
+  
+  SSdbRow *pMeta = taosHashGet(pTable->iHandle, key, keySize);
+  if (pMeta) {
+    sdbIncRef(pTable, pMeta->row);
+    return pMeta->row;
+  } else {
+    return NULL;
+  }
 }
 
 static void *sdbGetRowFromObj(SSdbTable *pTable, void *key) {
@@ -458,8 +453,6 @@ static int32_t sdbInsertHash(SSdbTable *pTable, SSdbOper *pOper) {
   rowMeta.rowSize = pOper->rowSize;
   rowMeta.row = pOper->pObj;
 
-  pthread_mutex_lock(&pTable->mutex);
-
   void *  key = sdbGetObjKey(pTable, pOper->pObj);
   int32_t keySize = sizeof(int32_t);
 
@@ -470,18 +463,16 @@ static int32_t sdbInsertHash(SSdbTable *pTable, SSdbOper *pOper) {
   taosHashPut(pTable->iHandle, key, keySize, &rowMeta, sizeof(SSdbRow));
 
   sdbIncRef(pTable, pOper->pObj);
-  pTable->numOfRows++;
+  atomic_add_fetch_32(&pTable->numOfRows, 1);
 
   if (pTable->keyType == SDB_KEY_AUTO) {
     pTable->autoIndex = MAX(pTable->autoIndex, *((uint32_t *)pOper->pObj));
   } else {
-    pTable->autoIndex++;
+    atomic_add_fetch_32(&pTable->autoIndex, 1);
   }
 
-  pthread_mutex_unlock(&pTable->mutex);
-
-  sdbTrace("table:%s, insert record:%s to hash, rowSize:%d numOfRows:%" PRId64 " version:%" PRIu64, pTable->tableName,
-           sdbGetKeyStrFromObj(pTable, pOper->pObj), pOper->rowSize, pTable->numOfRows, sdbGetVersion());
+  sdbDebug("table:%s, insert record:%s to hash, rowSize:%d numOfRows:%" PRId64 " ver:%" PRIu64 ", msg:%p", pTable->tableName,
+           sdbGetKeyStrFromObj(pTable, pOper->pObj), pOper->rowSize, pTable->numOfRows, sdbGetVersion(), pOper->pMsg);
 
   (*pTable->insertFp)(pOper);
   return TSDB_CODE_SUCCESS;
@@ -490,22 +481,17 @@ static int32_t sdbInsertHash(SSdbTable *pTable, SSdbOper *pOper) {
 static int32_t sdbDeleteHash(SSdbTable *pTable, SSdbOper *pOper) {
   (*pTable->deleteFp)(pOper);
   
-  pthread_mutex_lock(&pTable->mutex);
-
   void *  key = sdbGetObjKey(pTable, pOper->pObj);
   int32_t keySize = sizeof(int32_t);
-
   if (pTable->keyType == SDB_KEY_STRING || pTable->keyType == SDB_KEY_VAR_STRING) {
     keySize = strlen((char *)key);
   }
 
   taosHashRemove(pTable->iHandle, key, keySize);
-
-  pTable->numOfRows--;
-  pthread_mutex_unlock(&pTable->mutex);
-
-  sdbTrace("table:%s, delete record:%s from hash, numOfRows:%" PRId64 " version:%" PRIu64, pTable->tableName,
-           sdbGetKeyStrFromObj(pTable, pOper->pObj), pTable->numOfRows, sdbGetVersion());
+  atomic_sub_fetch_32(&pTable->numOfRows, 1);
+  
+  sdbDebug("table:%s, delete record:%s from hash, numOfRows:%" PRId64 " ver:%" PRIu64 ", msg:%p", pTable->tableName,
+           sdbGetKeyStrFromObj(pTable, pOper->pObj), pTable->numOfRows, sdbGetVersion(), pOper->pMsg);
 
   int8_t *updateEnd = pOper->pObj + pTable->refCountPos - 1;
   *updateEnd = 1;
@@ -515,8 +501,8 @@ static int32_t sdbDeleteHash(SSdbTable *pTable, SSdbOper *pOper) {
 }
 
 static int32_t sdbUpdateHash(SSdbTable *pTable, SSdbOper *pOper) {
-  sdbTrace("table:%s, update record:%s in hash, numOfRows:%" PRId64 " version:%" PRIu64, pTable->tableName,
-           sdbGetKeyStrFromObj(pTable, pOper->pObj), pTable->numOfRows, sdbGetVersion());
+  sdbDebug("table:%s, update record:%s in hash, numOfRows:%" PRId64 " ver:%" PRIu64 ", msg:%p", pTable->tableName,
+           sdbGetKeyStrFromObj(pTable, pOper->pObj), pTable->numOfRows, sdbGetVersion(), pOper->pMsg);
 
   (*pTable->updateFp)(pOper);
   return TSDB_CODE_SUCCESS;
@@ -532,24 +518,22 @@ static int sdbWrite(void *param, void *data, int type) {
   assert(pTable != NULL);
 
   pthread_mutex_lock(&tsSdbObj.mutex);
+  
   if (pHead->version == 0) {
-     // assign version
+    // assign version
     tsSdbObj.version++;
     pHead->version = tsSdbObj.version;
   } else {
     // for data from WAL or forward, version may be smaller
     if (pHead->version <= tsSdbObj.version) {
       pthread_mutex_unlock(&tsSdbObj.mutex);
-      if (type == TAOS_QTYPE_FWD && tsSdbObj.sync != NULL) {
-        sdbTrace("forward request is received, version:%" PRIu64 " confirm it", pHead->version);
-        syncConfirmForward(tsSdbObj.sync, pHead->version, TSDB_CODE_SUCCESS);
-      }
+      sdbDebug("table:%s, failed to restore %s record:%s from source(%d), ver:%" PRId64 " too large, sdb ver:%" PRId64,
+               pTable->tableName, sdbGetActionStr(action), sdbGetKeyStr(pTable, pHead->cont), type, pHead->version, tsSdbObj.version);
       return TSDB_CODE_SUCCESS;
     } else if (pHead->version != tsSdbObj.version + 1) {
       pthread_mutex_unlock(&tsSdbObj.mutex);
-      sdbError("table:%s, failed to restore %s record:%s from wal, version:%" PRId64 " too large, sdb version:%" PRId64,
-               pTable->tableName, sdbGetActionStr(action), sdbGetKeyStr(pTable, pHead->cont), pHead->version,
-               tsSdbObj.version);
+      sdbError("table:%s, failed to restore %s record:%s from source(%d), ver:%" PRId64 " too large, sdb ver:%" PRId64,
+               pTable->tableName, sdbGetActionStr(action), sdbGetKeyStr(pTable, pHead->cont), type, pHead->version, tsSdbObj.version);
       return TSDB_CODE_MND_APP_ERROR;
     } else {
       tsSdbObj.version = pHead->version;
@@ -561,24 +545,36 @@ static int sdbWrite(void *param, void *data, int type) {
     pthread_mutex_unlock(&tsSdbObj.mutex);
     return code;
   }
-  
-  code = sdbForwardToPeer(pHead);
+
   pthread_mutex_unlock(&tsSdbObj.mutex);
 
   // from app, oper is created
   if (pOper != NULL) {
-    sdbTrace("record from app is disposed, version:%" PRIu64 " result:%s", pHead->version, tstrerror(code));
-    return code;
-  }
-  
-  // from wal or forward msg, oper not created, should add into hash
-  if (tsSdbObj.sync != NULL) {
-    sdbTrace("record from wal forward is disposed, version:%" PRIu64 " confirm it", pHead->version);
-    syncConfirmForward(tsSdbObj.sync, pHead->version, code);
-  } else {
-    sdbTrace("record from wal restore is disposed, version:%" PRIu64 , pHead->version);
+    // forward to peers
+    pOper->processedCount = 0;
+    int32_t syncCode = syncForwardToPeer(tsSdbObj.sync, pHead, pOper, TAOS_QTYPE_RPC);
+    if (syncCode <= 0) pOper->processedCount = 1;
+
+    if (syncCode < 0) {
+      sdbError("table:%s, failed to forward request, result:%s action:%s record:%s ver:%" PRId64 ", msg:%p", pTable->tableName,
+               tstrerror(syncCode), sdbGetActionStr(action), sdbGetKeyStr(pTable, pHead->cont), pHead->version, pOper->pMsg);
+    } else if (syncCode > 0) {
+      sdbDebug("table:%s, forward request is sent, action:%s record:%s ver:%" PRId64 ", msg:%p", pTable->tableName,
+               sdbGetActionStr(action), sdbGetKeyStr(pTable, pHead->cont), pHead->version, pOper->pMsg);
+    } else {
+      sdbTrace("table:%s, no need to send fwd request, action:%s record:%s ver:%" PRId64 ", msg:%p", pTable->tableName,
+               sdbGetActionStr(action), sdbGetKeyStr(pTable, pHead->cont), pHead->version, pOper->pMsg);
+    }
+    return syncCode;
   }
 
+  sdbDebug("table:%s, record from wal/fwd is disposed, action:%s record:%s ver:%" PRId64, pTable->tableName,
+           sdbGetActionStr(action), sdbGetKeyStr(pTable, pHead->cont), pHead->version);
+
+  // even it is WAL/FWD, it shall be called to update version in sync
+  syncForwardToPeer(tsSdbObj.sync, pHead, pOper, TAOS_QTYPE_RPC);
+
+  // from wal or forward msg, oper not created, should add into hash
   if (action == SDB_ACTION_INSERT) {
     SSdbOper oper = {.rowSize = pHead->len, .rowData = pHead->cont, .table = pTable};
     code = (*pTable->decodeFp)(&oper);
@@ -608,14 +604,12 @@ int32_t sdbInsertRow(SSdbOper *pOper) {
   }
 
   if (pTable->keyType == SDB_KEY_AUTO) {
-    pthread_mutex_lock(&pTable->mutex);
-    *((uint32_t *)pOper->pObj) = ++pTable->autoIndex;
+    *((uint32_t *)pOper->pObj) = atomic_add_fetch_32(&pTable->autoIndex, 1);
 
     // let vgId increase from 2
     if (pTable->autoIndex == 1 && strcmp(pTable->tableName, "vgroups") == 0) {
-      *((uint32_t *)pOper->pObj) = ++pTable->autoIndex;
+      *((uint32_t *)pOper->pObj) = atomic_add_fetch_32(&pTable->autoIndex, 1);
     }
-    pthread_mutex_unlock(&pTable->mutex);
   }
 
   int32_t code = sdbInsertHash(pTable, pOper);
@@ -644,9 +638,11 @@ int32_t sdbInsertRow(SSdbOper *pOper) {
   memcpy(pNewOper, pOper, sizeof(SSdbOper));
 
   if (pNewOper->pMsg != NULL) {
-    sdbTrace("app:%p:%p, insert action is add to sdb queue", pNewOper->pMsg->rpcMsg.ahandle, pNewOper->pMsg);
+    sdbDebug("app:%p:%p, table:%s record:%p:%s, insert action is add to sdb queue", pNewOper->pMsg->rpcMsg.ahandle,
+             pNewOper->pMsg, pTable->tableName, pOper->pObj, sdbGetKeyStrFromObj(pTable, pOper->pObj));
   }
 
+  sdbIncRef(pNewOper->table, pNewOper->pObj);
   taosWriteQitem(tsSdbWriteQueue, TAOS_QTYPE_RPC, pNewOper);
   return TSDB_CODE_SUCCESS;
 }
@@ -657,7 +653,7 @@ int32_t sdbDeleteRow(SSdbOper *pOper) {
 
   SSdbRow *pMeta = sdbGetRowMetaFromObj(pTable, pOper->pObj);
   if (pMeta == NULL) {
-    sdbTrace("table:%s, record is not there, delete failed", pTable->tableName);
+    sdbDebug("table:%s, record is not there, delete failed", pTable->tableName);
     return TSDB_CODE_MND_SDB_OBJ_NOT_THERE;
   }
 
@@ -692,9 +688,11 @@ int32_t sdbDeleteRow(SSdbOper *pOper) {
   memcpy(pNewOper, pOper, sizeof(SSdbOper));
 
   if (pNewOper->pMsg != NULL) {
-    sdbTrace("app:%p:%p, delete action is add to sdb queue", pNewOper->pMsg->rpcMsg.ahandle, pNewOper->pMsg);
+    sdbDebug("app:%p:%p, table:%s record:%p:%s, delete action is add to sdb queue", pNewOper->pMsg->rpcMsg.ahandle,
+             pNewOper->pMsg, pTable->tableName, pOper->pObj, sdbGetKeyStrFromObj(pTable, pOper->pObj));
   }
 
+  sdbIncRef(pNewOper->table, pNewOper->pObj);
   taosWriteQitem(tsSdbWriteQueue, TAOS_QTYPE_RPC, pNewOper);
   return TSDB_CODE_SUCCESS;
 }
@@ -705,7 +703,7 @@ int32_t sdbUpdateRow(SSdbOper *pOper) {
 
   SSdbRow *pMeta = sdbGetRowMetaFromObj(pTable, pOper->pObj);
   if (pMeta == NULL) {
-    sdbTrace("table:%s, record is not there, update failed", pTable->tableName);
+    sdbDebug("table:%s, record is not there, update failed", pTable->tableName);
     return TSDB_CODE_MND_SDB_OBJ_NOT_THERE;
   }
 
@@ -740,9 +738,11 @@ int32_t sdbUpdateRow(SSdbOper *pOper) {
   memcpy(pNewOper, pOper, sizeof(SSdbOper));
 
   if (pNewOper->pMsg != NULL) {
-    sdbTrace("app:%p:%p, update action is add to sdb queue", pNewOper->pMsg->rpcMsg.ahandle, pNewOper->pMsg);
+    sdbDebug("app:%p:%p, table:%s record:%p:%s, update action is add to sdb queue", pNewOper->pMsg->rpcMsg.ahandle,
+             pNewOper->pMsg, pTable->tableName, pOper->pObj, sdbGetKeyStrFromObj(pTable, pOper->pObj));
   }
 
+  sdbIncRef(pNewOper->table, pNewOper->pObj);
   taosWriteQitem(tsSdbWriteQueue, TAOS_QTYPE_RPC, pNewOper);
   return TSDB_CODE_SUCCESS;
 }
@@ -800,12 +800,10 @@ void *sdbOpenTable(SSdbTableDesc *pDesc) {
   pTable->restoredFp   = pDesc->restoredFp;
 
   _hash_fn_t hashFp = taosGetDefaultHashFunction(TSDB_DATA_TYPE_INT);
-  if (pTable->keyType == SDB_KEY_STRING) {
+  if (pTable->keyType == SDB_KEY_STRING || pTable->keyType == SDB_KEY_VAR_STRING) {
     hashFp = taosGetDefaultHashFunction(TSDB_DATA_TYPE_BINARY);
   }
   pTable->iHandle = taosHashInit(pTable->hashSessions, hashFp, true);
-
-  pthread_mutex_init(&pTable->mutex, NULL);
 
   tsSdbObj.numOfTables++;
   tsSdbObj.tableList[pTable->tableId] = pTable;
@@ -835,9 +833,7 @@ void sdbCloseTable(void *handle) {
   taosHashDestroyIter(pIter);
   taosHashCleanup(pTable->iHandle);
 
-  pthread_mutex_destroy(&pTable->mutex);
-  
-  sdbTrace("table:%s, is closed, numOfTables:%d", pTable->tableName, tsSdbObj.numOfTables);
+  sdbDebug("table:%s, is closed, numOfTables:%d", pTable->tableName, tsSdbObj.numOfTables);
   free(pTable);
 }
 
@@ -853,7 +849,7 @@ int32_t sdbInitWriteWorker() {
 
   sdbAllocWriteQueue();
   
-  mPrint("sdb write is opened");
+  mInfo("sdb write is opened");
   return 0;
 }
 
@@ -873,8 +869,9 @@ void sdbCleanupWriteWorker() {
   }
 
   sdbFreeWritequeue();
+  tfree(tsSdbPool.writeWorker);
 
-  mPrint("sdb write is closed");
+  mInfo("sdb write is closed");
 }
 
 int32_t sdbAllocWriteQueue() {
@@ -912,10 +909,10 @@ int32_t sdbAllocWriteQueue() {
     }
 
     pthread_attr_destroy(&thAttr);
-    mTrace("sdb write worker:%d is launched, total:%d", pWorker->workerId, tsSdbPool.num);
+    mDebug("sdb write worker:%d is launched, total:%d", pWorker->workerId, tsSdbPool.num);
   }
 
-  mTrace("sdb write queue:%p is allocated", tsSdbWriteQueue);
+  mDebug("sdb write queue:%p is allocated", tsSdbWriteQueue);
   return TSDB_CODE_SUCCESS;
 }
 
@@ -949,7 +946,7 @@ static void *sdbWorkerFp(void *param) {
   while (1) {
     numOfMsgs = taosReadAllQitemsFromQset(tsSdbWriteQset, tsSdbWriteQall, &unUsed);
     if (numOfMsgs == 0) {
-      sdbTrace("sdbWorkerFp: got no message from qset, exiting...");
+      sdbDebug("sdbWorkerFp: got no message from qset, exiting...");
       break;
     }
 
@@ -957,18 +954,20 @@ static void *sdbWorkerFp(void *param) {
       taosGetQitem(tsSdbWriteQall, &type, &item);
       if (type == TAOS_QTYPE_RPC) {
         pOper = (SSdbOper *)item;
+        pOper->processedCount = 1;
         pHead = (void *)pOper + sizeof(SSdbOper) + SDB_SYNC_HACK;
+        if (pOper->pMsg != NULL) {
+          sdbDebug("app:%p:%p, table:%s record:%p:%s ver:%" PRIu64 ", will be processed in sdb queue",
+                   pOper->pMsg->rpcMsg.ahandle, pOper->pMsg, ((SSdbTable *)pOper->table)->tableName, pOper->pObj,
+                   sdbGetKeyStr(pOper->table, pHead->cont), pHead->version);
+        }
       } else {
         pHead = (SWalHead *)item;
         pOper = NULL;
       }
 
-      if (pOper != NULL && pOper->pMsg != NULL) {
-        sdbTrace("app:%p:%p, will be processed in sdb queue", pOper->pMsg->rpcMsg.ahandle, pOper->pMsg);
-      }
-
       int32_t code = sdbWrite(pOper, pHead, type);
-      if (pOper) pOper->retCode = code;
+      if (pOper && code <= 0) pOper->retCode = code;
     }
 
     walFsync(tsSdbObj.wal);
@@ -977,20 +976,18 @@ static void *sdbWorkerFp(void *param) {
     taosResetQitems(tsSdbWriteQall);
     for (int32_t i = 0; i < numOfMsgs; ++i) {
       taosGetQitem(tsSdbWriteQall, &type, &item);
+
       if (type == TAOS_QTYPE_RPC) {
         pOper = (SSdbOper *)item;
-        if (pOper != NULL && pOper->cb != NULL) {
-          pOper->retCode = (*pOper->cb)(pOper->pMsg, pOper->retCode);
-        }
-          
-        if (pOper != NULL && pOper->pMsg != NULL) {
-          sdbTrace("app:%p:%p, msg is processed, result:%s", pOper->pMsg->rpcMsg.ahandle, pOper->pMsg,
-                   tstrerror(pOper->retCode));
-        }
-
-        dnodeSendRpcMnodeWriteRsp(pOper->pMsg, pOper->retCode);
+        sdbDecRef(pOper->table, pOper->pObj);
+        sdbConfirmForward(NULL, pOper, pOper->retCode);
+      } else if (type == TAOS_QTYPE_FWD) {
+        pHead = (SWalHead *)item;
+        syncConfirmForward(tsSdbObj.sync, pHead->version, TSDB_CODE_SUCCESS);
+        taosFreeQitem(item);
+      } else {
+        taosFreeQitem(item);
       }
-      taosFreeQitem(item);
     }
   }
 

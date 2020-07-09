@@ -147,13 +147,13 @@ static void *taosThreadToOpenNewFile(void *param) {
     return NULL;
   }
   taosLockFile(fd);
-  lseek(fd, 0, SEEK_SET);
+  (void)lseek(fd, 0, SEEK_SET);
 
   int32_t oldFd = tsLogObj.logHandle->fd;
   tsLogObj.logHandle->fd = fd;
   tsLogObj.lines = 0;
   tsLogObj.openInProgress = 0;
-  uPrint("new log file is opened!!!");
+  uInfo("new log file is opened!!!");
 
   taosCloseLogByFd(oldFd);
   return NULL;
@@ -165,7 +165,7 @@ static int32_t taosOpenNewLogFile() {
   if (tsLogObj.lines > tsLogObj.maxLines && tsLogObj.openInProgress == 0) {
     tsLogObj.openInProgress = 1;
 
-    uPrint("open new log file ......");
+    uInfo("open new log file ......");
     pthread_t      thread;
     pthread_attr_t attr;
     pthread_attr_init(&attr);
@@ -190,8 +190,8 @@ void taosResetLog() {
   taosOpenNewLogFile();
   (void)remove(lastName);
 
-  uPrint("==================================");
-  uPrint("   reset log file ");
+  uInfo("==================================");
+  uInfo("   reset log file ");
 }
 
 static bool taosCheckFileIsOpen(char *logFileName) {
@@ -276,14 +276,15 @@ static int32_t taosOpenLogFile(char *fn, int32_t maxLines, int32_t maxFileNum) {
     }
   }
 
-  sprintf(name, "%s.%d", tsLogObj.logName, tsLogObj.flag);
+  char fileName[LOG_FILE_NAME_LEN + 50] = "\0";
+  sprintf(fileName, "%s.%d", tsLogObj.logName, tsLogObj.flag);
   pthread_mutex_init(&tsLogObj.logMutex, NULL);
 
   umask(0);
-  tsLogObj.logHandle->fd = open(name, O_WRONLY | O_CREAT, S_IRWXU | S_IRWXG | S_IRWXO);
+  tsLogObj.logHandle->fd = open(fileName, O_WRONLY | O_CREAT, S_IRWXU | S_IRWXG | S_IRWXO);
 
   if (tsLogObj.logHandle->fd < 0) {
-    printf("\nfailed to open log file:%s, reason:%s\n", name, strerror(errno));
+    printf("\nfailed to open log file:%s, reason:%s\n", fileName, strerror(errno));
     return -1;
   }
   taosLockFile(tsLogObj.logHandle->fd);
@@ -291,7 +292,7 @@ static int32_t taosOpenLogFile(char *fn, int32_t maxLines, int32_t maxFileNum) {
   // only an estimate for number of lines
   struct stat filestat;
   if (fstat(tsLogObj.logHandle->fd, &filestat) < 0) {
-    printf("\nfailed to fstat log file:%s, reason:%s\n", name, strerror(errno));
+    printf("\nfailed to fstat log file:%s, reason:%s\n", fileName, strerror(errno));
     return -1;
   }
   size = (int32_t)filestat.st_size;
@@ -327,7 +328,7 @@ void taosPrintLog(const char *flags, int32_t dflag, const char *format, ...) {
   curTime = timeSecs.tv_sec;
   ptm = localtime_r(&curTime, &Tm);
 
-  len = sprintf(buffer, "%02d/%02d %02d:%02d:%02d.%06d 0x%" PRIx64 " ", ptm->tm_mon + 1, ptm->tm_mday, ptm->tm_hour,
+  len = sprintf(buffer, "%02d/%02d %02d:%02d:%02d.%06d 0x%08" PRIx64 " ", ptm->tm_mon + 1, ptm->tm_mday, ptm->tm_hour,
                 ptm->tm_min, ptm->tm_sec, (int32_t)timeSecs.tv_usec, taosGetPthreadId());
   len += sprintf(buffer + len, "%s", flags);
 
@@ -414,7 +415,7 @@ void taosPrintLongString(const char *flags, int32_t dflag, const char *format, .
   curTime = timeSecs.tv_sec;
   ptm = localtime_r(&curTime, &Tm);
 
-  len = sprintf(buffer, "%02d/%02d %02d:%02d:%02d.%06d 0x%" PRIx64 " ", ptm->tm_mon + 1, ptm->tm_mday, ptm->tm_hour,
+  len = sprintf(buffer, "%02d/%02d %02d:%02d:%02d.%06d 0x%08" PRIx64 " ", ptm->tm_mon + 1, ptm->tm_mday, ptm->tm_hour,
                 ptm->tm_min, ptm->tm_sec, (int32_t)timeSecs.tv_usec, taosGetPthreadId());
   len += sprintf(buffer + len, "%s", flags);
 
