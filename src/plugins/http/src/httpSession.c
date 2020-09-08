@@ -16,7 +16,6 @@
 #define _DEFAULT_SOURCE
 #include "os.h"
 #include "taos.h"
-#include "ttime.h"
 #include "tglobal.h"
 #include "tcache.h"
 #include "httpInt.h"
@@ -35,7 +34,7 @@ void httpCreateSession(HttpContext *pContext, void *taos) {
   session.refCount = 1;
   int32_t len = snprintf(session.id, HTTP_SESSION_ID_LEN, "%s.%s", pContext->user, pContext->pass);
 
-  pContext->session = taosCachePut(server->sessionCache, session.id, len, &session, sizeof(HttpSession), tsHttpSessionExpire);
+  pContext->session = taosCachePut(server->sessionCache, session.id, len, &session, sizeof(HttpSession), tsHttpSessionExpire * 1000);
   // void *temp = pContext->session;
   // taosCacheRelease(server->sessionCache, (void **)&temp, false);
 
@@ -108,7 +107,7 @@ static void httpDestroySession(void *data) {
 void httpCleanUpSessions() {
   if (tsHttpServer.sessionCache != NULL) {
     SCacheObj *cache = tsHttpServer.sessionCache;
-    httpInfo("session cache is cleanuping, size:%zu", taosHashGetSize(cache->pHashTable));
+    httpInfo("session cache is cleanuping, size:%" PRIzu "", taosHashGetSize(cache->pHashTable));
     taosCacheCleanup(tsHttpServer.sessionCache);
     tsHttpServer.sessionCache = NULL;
   }

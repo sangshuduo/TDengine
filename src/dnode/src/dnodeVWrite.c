@@ -38,6 +38,8 @@ typedef struct {
 
 typedef struct {
   SRspRet  rspRet;
+  int32_t  processedCount;
+  int32_t  code;
   void    *pCont;
   int32_t  contLen;
   SRpcMsg  rpcMsg;
@@ -104,7 +106,7 @@ void dnodeDispatchToVnodeWriteQueue(SRpcMsg *pMsg) {
   pHead->vgId     = htonl(pHead->vgId);
   pHead->contLen  = htonl(pHead->contLen);
 
-  taos_queue queue = vnodeGetWqueue(pHead->vgId);
+  taos_queue queue = vnodeAcquireWqueue(pHead->vgId);
   if (queue) {
     // put message into queue
     SWriteMsg *pWrite = (SWriteMsg *)taosAllocateQitem(sizeof(SWriteMsg));
@@ -187,13 +189,16 @@ void dnodeFreeVnodeWqueue(void *wqueue) {
 void dnodeSendRpcVnodeWriteRsp(void *pVnode, void *param, int32_t code) {
   SWriteMsg *pWrite = (SWriteMsg *)param;
 
-  if (code > 0) return;
+  if (code < 0) pWrite->code = code;
+  int32_t count = atomic_add_fetch_32(&pWrite->processedCount, 1);
+
+  if (count <= 1) return;
 
   SRpcMsg rpcRsp = {
     .handle  = pWrite->rpcMsg.handle,
     .pCont   = pWrite->rspRet.rsp,
     .contLen = pWrite->rspRet.len,
-    .code    = code,
+    .code    = pWrite->code,
   };
 
   rpcSendResponse(&rpcRsp);
@@ -232,13 +237,17 @@ static void *dnodeProcessWriteQueue(void *param) {
         pHead->msgType = pWrite->rpcMsg.msgType;
         pHead->version = 0;
         pHead->len = pWrite->contLen;
-        dDebug("%p, msg:%s will be processed in vwrite queue", pWrite->rpcMsg.ahandle, taosMsg[pWrite->rpcMsg.msgType]);
+        dDebug("%p, rpc msg:%s will be processed in vwrite queue", pWrite->rpcMsg.ahandle, taosMsg[pWrite->rpcMsg.msgType]);
       } else {
         pHead = (SWalHead *)item;
+        dTrace("%p, wal msg:%s will be processed in vwrite queue, version:%" PRIu64, pHead, taosMsg[pHead->msgType], pHead->version);
       }
 
       int32_t code = vnodeProcessWrite(pVnode, type, pHead, pRspRet);
-      if (pWrite) pWrite->rpcMsg.code = code;
+      if (pWrite) { 
+        pWrite->rpcMsg.code = code;
+        if (code <= 0) pWrite->processedCount = 1; 
+      }
     }
 
     walFsync(vnodeGetWal(pVnode));

@@ -3,6 +3,7 @@ cd ../../../debug; make
 
 ./test.sh -f general/alter/cached_schema_after_alter.sim
 ./test.sh -f general/alter/count.sim
+./test.sh -f general/alter/dnode.sim
 ./test.sh -f general/alter/import.sim
 ./test.sh -f general/alter/insert1.sim
 ./test.sh -f general/alter/insert2.sim
@@ -117,8 +118,6 @@ cd ../../../debug; make
 ./test.sh -f general/parser/import_commit3.sim
 ./test.sh -f general/parser/insert_tb.sim
 ./test.sh -f general/parser/first_last.sim
-# dyh is processing this script
-#./test.sh -f general/parser/import_file.sim
 ./test.sh -f general/parser/lastrow.sim
 ./test.sh -f general/parser/nchar.sim
 ./test.sh -f general/parser/null_char.sim
@@ -136,7 +135,6 @@ cd ../../../debug; make
 ./test.sh -f general/parser/limit2.sim
 ./test.sh -f general/parser/fill.sim
 ./test.sh -f general/parser/fill_stb.sim
-#./test.sh -f general/parser/fill_us.sim
 ./test.sh -f general/parser/where.sim
 ./test.sh -f general/parser/slimit.sim
 ./test.sh -f general/parser/select_with_tags.sim
@@ -144,15 +142,14 @@ cd ../../../debug; make
 ./test.sh -f general/parser/tags_dynamically_specifiy.sim
 ./test.sh -f general/parser/groupby.sim
 ./test.sh -f general/parser/set_tag_vals.sim
-#./test.sh -f general/parser/sliding.sim
-./test.sh -f general/parser/tags_dynamically_specifiy.sim
 ./test.sh -f general/parser/tags_filter.sim
 ./test.sh -f general/parser/slimit_alter_tags.sim
 ./test.sh -f general/parser/join.sim
 ./test.sh -f general/parser/join_multivnode.sim
 ./test.sh -f general/parser/binary_escapeCharacter.sim
-./test.sh -f general/parser/bug.sim
 ./test.sh -f general/parser/repeatAlter.sim
+./test.sh -f general/parser/union.sim
+./test.sh -f general/parser/topbot.sim
 
 ./test.sh -f general/stable/disk.sim
 ./test.sh -f general/stable/dnode3.sim
@@ -251,6 +248,7 @@ cd ../../../debug; make
 ./test.sh -f unique/big/maxvnodes.sim
 ./test.sh -f unique/big/tcp.sim
 
+./test.sh -f unique/cluster/alter.sim
 ./test.sh -f unique/cluster/balance1.sim
 ./test.sh -f unique/cluster/balance2.sim
 ./test.sh -f unique/cluster/balance3.sim
@@ -295,6 +293,8 @@ cd ../../../debug; make
 ./test.sh -f unique/stable/replica3_dnode6.sim
 ./test.sh -f unique/stable/replica3_vnode3.sim
 
+./test.sh -f unique/mnode/mgmt20.sim
+./test.sh -f unique/mnode/mgmt21.sim
 ./test.sh -f unique/mnode/mgmt22.sim
 ./test.sh -f unique/mnode/mgmt23.sim
 ./test.sh -f unique/mnode/mgmt24.sim
@@ -311,10 +311,7 @@ cd ../../../debug; make
 ./test.sh -f unique/vnode/replica3_repeat.sim
 ./test.sh -f unique/vnode/replica3_vgroup.sim
 
-# stream still has bugs
-#./test.sh -f general/parser/stream_on_sys.sim
-#./test.sh -f general/parser/repeatStream.sim
-
+./test.sh -f general/parser/stream_on_sys.sim
 ./test.sh -f general/stream/metrics_del.sim
 ./test.sh -f general/stream/metrics_n.sim
 ./test.sh -f general/stream/metrics_replica1_vnoden.sim
@@ -327,15 +324,14 @@ cd ../../../debug; make
 ./test.sh -f general/stream/table_replica1_vnoden.sim
 
 ./test.sh -f unique/arbitrator/check_cluster_cfg_para.sim
-./test.sh -f unique/arbitrator/dn2_mn1_cache_file_sync.sim
+#./test.sh -f unique/arbitrator/dn2_mn1_cache_file_sync.sim
 ./test.sh -f unique/arbitrator/dn3_mn1_full_createTableFail.sim
-./test.sh -f unique/arbitrator/dn3_mn1_full_dropDnodeFail.sim
 ./test.sh -f unique/arbitrator/dn3_mn1_multiCreateDropTable.sim
-./test.sh -f unique/arbitrator/dn3_mn1_nw_disable_timeout_autoDropDnode.sim
-./test.sh -f unique/arbitrator/dn3_mn1_replica2_wal1_AddDelDnode.sim
+#./test.sh -f unique/arbitrator/dn3_mn1_nw_disable_timeout_autoDropDnode.sim
+#./test.sh -f unique/arbitrator/dn3_mn1_replica2_wal1_AddDelDnode.sim
 ./test.sh -f unique/arbitrator/dn3_mn1_replica_change_dropDnod.sim
 ./test.sh -f unique/arbitrator/dn3_mn1_replica_change.sim
-./test.sh -f unique/arbitrator/dn3_mn1_stopDnode_timeout.sim
+#./test.sh -f unique/arbitrator/dn3_mn1_stopDnode_timeout.sim
 # lower the priority while file corruption
 #./test.sh -f unique/arbitrator/dn3_mn1_vnode_change.sim
 #./test.sh -f unique/arbitrator/dn3_mn1_vnode_corruptFile_offline.sim
@@ -361,6 +357,7 @@ cd ../../../debug; make
 ./test.sh -f unique/arbitrator/replica_changeWithArbitrator.sim
 ./test.sh -f unique/arbitrator/sync_replica2_alterTable_add.sim
 ./test.sh -f unique/arbitrator/sync_replica2_alterTable_drop.sim
+
 ./test.sh -f unique/arbitrator/sync_replica2_dropDb.sim
 ./test.sh -f unique/arbitrator/sync_replica2_dropTable.sim
 ./test.sh -f unique/arbitrator/sync_replica3_alterTable_add.sim

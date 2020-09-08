@@ -16,14 +16,14 @@
 #include "os.h"
 #include "taosmsg.h"
 
-#include "tcache.h"
-#include "tscUtil.h"
-#include "tsclient.h"
+#include "qExtbuffer.h"
 #include "taosdef.h"
-#include "tscLog.h"
-#include "qextbuffer.h"
-#include "tschemautil.h"
+#include "tcache.h"
 #include "tname.h"
+#include "tscLog.h"
+#include "tscUtil.h"
+#include "tschemautil.h"
+#include "tsclient.h"
 
 static void tscSetLocalQueryResult(SSqlObj *pSql, const char *val, const char *columnName, int16_t type, size_t valueLength);
 
@@ -223,12 +223,12 @@ static int32_t tscBuildTableSchemaResultFields(SSqlObj *pSql, int32_t numOfCols,
   
   rowLen += ((TSDB_COL_NAME_LEN - 1) + VARSTR_HEADER_SIZE);
 
-  f.bytes = typeColLength + VARSTR_HEADER_SIZE;
+  f.bytes = (int16_t)(typeColLength + VARSTR_HEADER_SIZE);
   f.type = TSDB_DATA_TYPE_BINARY;
   tstrncpy(f.name, "Type", sizeof(f.name));
   
   pInfo = tscFieldInfoAppend(&pQueryInfo->fieldsInfo, &f);
-  pInfo->pSqlExpr = tscSqlExprAppend(pQueryInfo, TSDB_FUNC_TS_DUMMY, &index, TSDB_DATA_TYPE_BINARY, typeColLength + VARSTR_HEADER_SIZE,
+  pInfo->pSqlExpr = tscSqlExprAppend(pQueryInfo, TSDB_FUNC_TS_DUMMY, &index, TSDB_DATA_TYPE_BINARY, (int16_t)(typeColLength + VARSTR_HEADER_SIZE),
       typeColLength, false);
   
   rowLen += typeColLength + VARSTR_HEADER_SIZE;
@@ -243,12 +243,12 @@ static int32_t tscBuildTableSchemaResultFields(SSqlObj *pSql, int32_t numOfCols,
   
   rowLen += sizeof(int32_t);
 
-  f.bytes = noteColLength + VARSTR_HEADER_SIZE;
+  f.bytes = (int16_t)(noteColLength + VARSTR_HEADER_SIZE);
   f.type = TSDB_DATA_TYPE_BINARY;
   tstrncpy(f.name, "Note", sizeof(f.name));
   
   pInfo = tscFieldInfoAppend(&pQueryInfo->fieldsInfo, &f);
-  pInfo->pSqlExpr = tscSqlExprAppend(pQueryInfo, TSDB_FUNC_TS_DUMMY, &index, TSDB_DATA_TYPE_BINARY, noteColLength + VARSTR_HEADER_SIZE,
+  pInfo->pSqlExpr = tscSqlExprAppend(pQueryInfo, TSDB_FUNC_TS_DUMMY, &index, TSDB_DATA_TYPE_BINARY, (int16_t)(noteColLength + VARSTR_HEADER_SIZE),
       noteColLength, false);
   
   rowLen += noteColLength + VARSTR_HEADER_SIZE;
@@ -274,7 +274,7 @@ static int32_t tscProcessDescribeTable(SSqlObj *pSql) {
   return tscSetValueToResObj(pSql, rowLen);
 }
 
-static void tscProcessCurrentUser(SSqlObj *pSql) {
+static int32_t tscProcessCurrentUser(SSqlObj *pSql) {
   SQueryInfo* pQueryInfo = tscGetQueryInfoDetail(&pSql->cmd, 0);
   
   SSqlExpr* pExpr = taosArrayGetP(pQueryInfo->exprList, 0);
@@ -282,18 +282,24 @@ static void tscProcessCurrentUser(SSqlObj *pSql) {
   pExpr->resType = TSDB_DATA_TYPE_BINARY;
   
   char* vx = calloc(1, pExpr->resBytes);
+  if (vx == NULL) {
+    return TSDB_CODE_TSC_OUT_OF_MEMORY;
+  }
+
   size_t size = sizeof(pSql->pTscObj->user);
   STR_WITH_MAXSIZE_TO_VARSTR(vx, pSql->pTscObj->user, size);
   
   tscSetLocalQueryResult(pSql, vx, pExpr->aliasName, pExpr->resType, pExpr->resBytes);
   free(vx);
+
+  return TSDB_CODE_SUCCESS;
 }
 
-static void tscProcessCurrentDB(SSqlObj *pSql) {
+static int32_t tscProcessCurrentDB(SSqlObj *pSql) {
   char db[TSDB_DB_NAME_LEN] = {0};
   extractDBName(pSql->pTscObj->db, db);
   
-  SQueryInfo* pQueryInfo = tscGetQueryInfoDetail(&pSql->cmd, 0);
+  SQueryInfo* pQueryInfo = tscGetQueryInfoDetail(&pSql->cmd, pSql->cmd.clauseIndex);
   
   SSqlExpr* pExpr = taosArrayGetP(pQueryInfo->exprList, 0);
   pExpr->resType = TSDB_DATA_TYPE_BINARY;
@@ -302,60 +308,76 @@ static void tscProcessCurrentDB(SSqlObj *pSql) {
   pExpr->resBytes = TSDB_DB_NAME_LEN + VARSTR_HEADER_SIZE;
   
   char* vx = calloc(1, pExpr->resBytes);
+  if (vx == NULL) {
+    return TSDB_CODE_TSC_OUT_OF_MEMORY;
+  }
+
   if (t == 0) {
     setVardataNull(vx, TSDB_DATA_TYPE_BINARY);
   } else {
-    STR_WITH_SIZE_TO_VARSTR(vx, db, t);
+    STR_WITH_SIZE_TO_VARSTR(vx, db, (VarDataLenT)t);
   }
   
   tscSetLocalQueryResult(pSql, vx, pExpr->aliasName, pExpr->resType, pExpr->resBytes);
   free(vx);
+
+  return TSDB_CODE_SUCCESS;
 }
 
-static void tscProcessServerVer(SSqlObj *pSql) {
+static int32_t tscProcessServerVer(SSqlObj *pSql) {
   const char* v = pSql->pTscObj->sversion;
-  SQueryInfo* pQueryInfo = tscGetQueryInfoDetail(&pSql->cmd, 0);
+  SQueryInfo* pQueryInfo = tscGetQueryInfoDetail(&pSql->cmd, pSql->cmd.clauseIndex);
   
   SSqlExpr* pExpr = taosArrayGetP(pQueryInfo->exprList, 0);
   pExpr->resType = TSDB_DATA_TYPE_BINARY;
   
   size_t t = strlen(v);
-  pExpr->resBytes = t + VARSTR_HEADER_SIZE;
+  pExpr->resBytes = (int16_t)(t + VARSTR_HEADER_SIZE);
   
   char* vx = calloc(1, pExpr->resBytes);
-  STR_WITH_SIZE_TO_VARSTR(vx, v, t);
+  if (vx == NULL) {
+    return TSDB_CODE_TSC_OUT_OF_MEMORY;
+  }
+
+  STR_WITH_SIZE_TO_VARSTR(vx, v, (VarDataLenT)t);
   tscSetLocalQueryResult(pSql, vx, pExpr->aliasName, pExpr->resType, pExpr->resBytes);
   
-  tfree(vx);
+  free(vx);
+  return TSDB_CODE_SUCCESS;
 }
 
-static void tscProcessClientVer(SSqlObj *pSql) {
+static int32_t tscProcessClientVer(SSqlObj *pSql) {
   SQueryInfo* pQueryInfo = tscGetQueryInfoDetail(&pSql->cmd, 0);
   
   SSqlExpr* pExpr = taosArrayGetP(pQueryInfo->exprList, 0);
   pExpr->resType = TSDB_DATA_TYPE_BINARY;
   
   size_t t = strlen(version);
-  pExpr->resBytes = t + VARSTR_HEADER_SIZE;
+  pExpr->resBytes = (int16_t)(t + VARSTR_HEADER_SIZE);
   
   char* v = calloc(1, pExpr->resBytes);
-  STR_WITH_SIZE_TO_VARSTR(v, version, t);
+  if (v == NULL) {
+    return TSDB_CODE_TSC_OUT_OF_MEMORY;
+  }
+
+  STR_WITH_SIZE_TO_VARSTR(v, version, (VarDataLenT)t);
   tscSetLocalQueryResult(pSql, v, pExpr->aliasName, pExpr->resType, pExpr->resBytes);
   
-  tfree(v);
+  free(v);
+  return TSDB_CODE_SUCCESS;
 }
 
-static void tscProcessServStatus(SSqlObj *pSql) {
+static int32_t tscProcessServStatus(SSqlObj *pSql) {
   STscObj* pObj = pSql->pTscObj;
   
   if (pObj->pHb != NULL) {
     if (pObj->pHb->res.code == TSDB_CODE_RPC_NETWORK_UNAVAIL) {
       pSql->res.code = TSDB_CODE_RPC_NETWORK_UNAVAIL;
-      return;
+      return pSql->res.code;
     }
   } else {
     if (pSql->res.code == TSDB_CODE_RPC_NETWORK_UNAVAIL) {
-      return;
+      return pSql->res.code;
     }
   }
   
@@ -364,6 +386,7 @@ static void tscProcessServStatus(SSqlObj *pSql) {
   SSqlExpr* pExpr = taosArrayGetP(pQueryInfo->exprList, 0);
   int32_t val = 1;
   tscSetLocalQueryResult(pSql, (char*) &val, pExpr->aliasName, TSDB_DATA_TYPE_INT, sizeof(int32_t));
+  return TSDB_CODE_SUCCESS;
 }
 
 void tscSetLocalQueryResult(SSqlObj *pSql, const char *val, const char *columnName, int16_t type, size_t valueLength) {
@@ -379,10 +402,10 @@ void tscSetLocalQueryResult(SSqlObj *pSql, const char *val, const char *columnNa
   pQueryInfo->fieldsInfo.pFields = taosArrayInit(1, sizeof(TAOS_FIELD));
   pQueryInfo->fieldsInfo.pSupportInfo = taosArrayInit(1, sizeof(SFieldSupInfo));
   
-  TAOS_FIELD f = tscCreateField(type, columnName, valueLength);
+  TAOS_FIELD f = tscCreateField((int8_t)type, columnName, (int16_t)valueLength);
   tscFieldInfoAppend(&pQueryInfo->fieldsInfo, &f);
   
-  tscInitResObjForLocalQuery(pSql, 1, valueLength);
+  tscInitResObjForLocalQuery(pSql, 1, (int32_t)valueLength);
 
   TAOS_FIELD *pField = tscFieldInfoGetField(&pQueryInfo->fieldsInfo, 0);
   SFieldSupInfo* pInfo = tscFieldInfoGetSupp(&pQueryInfo->fieldsInfo, 0);
@@ -393,37 +416,39 @@ void tscSetLocalQueryResult(SSqlObj *pSql, const char *val, const char *columnNa
 
 int tscProcessLocalCmd(SSqlObj *pSql) {
   SSqlCmd *pCmd = &pSql->cmd;
+  SSqlRes *pRes = &pSql->res;
 
   if (pCmd->command == TSDB_SQL_CFG_LOCAL) {
-    pSql->res.code = (uint8_t)taosCfgDynamicOptions(pCmd->payload);
+    pRes->code = (uint8_t)taosCfgDynamicOptions(pCmd->payload);
   } else if (pCmd->command == TSDB_SQL_DESCRIBE_TABLE) {
-    pSql->res.code = (uint8_t)tscProcessDescribeTable(pSql);
+    pRes->code = (uint8_t)tscProcessDescribeTable(pSql);
   } else if (pCmd->command == TSDB_SQL_RETRIEVE_EMPTY_RESULT) {
     /*
      * set the qhandle to be 1 in order to pass the qhandle check, and to call partial release function to
      * free allocated resources and remove the SqlObj from sql query linked list
      */
-    pSql->res.qhandle = 0x1;
-    pSql->res.numOfRows = 0;
+    pRes->qhandle = 0x1;
+    pRes->numOfRows = 0;
   } else if (pCmd->command == TSDB_SQL_RESET_CACHE) {
     taosCacheEmpty(tscCacheHandle);
+    pRes->code = TSDB_CODE_SUCCESS;
   } else if (pCmd->command == TSDB_SQL_SERV_VERSION) {
-    tscProcessServerVer(pSql);
+    pRes->code = tscProcessServerVer(pSql);
   } else if (pCmd->command == TSDB_SQL_CLI_VERSION) {
-    tscProcessClientVer(pSql);
+    pRes->code = tscProcessClientVer(pSql);
   } else if (pCmd->command == TSDB_SQL_CURRENT_USER) {
-    tscProcessCurrentUser(pSql);
+    pRes->code = tscProcessCurrentUser(pSql);
   } else if (pCmd->command == TSDB_SQL_CURRENT_DB) {
-    tscProcessCurrentDB(pSql);
+    pRes->code = tscProcessCurrentDB(pSql);
   } else if (pCmd->command == TSDB_SQL_SERV_STATUS) {
-    tscProcessServStatus(pSql);
+    pRes->code = tscProcessServStatus(pSql);
   } else {
-    pSql->res.code = TSDB_CODE_TSC_INVALID_SQL;
+    pRes->code = TSDB_CODE_TSC_INVALID_SQL;
     tscError("%p not support command:%d", pSql, pCmd->command);
   }
 
   // keep the code in local variable in order to avoid invalid read in case of async query
-  int32_t code = pSql->res.code;
+  int32_t code = pRes->code;
   if (code == TSDB_CODE_SUCCESS) {
     (*pSql->fp)(pSql->param, pSql, code);
   } else {

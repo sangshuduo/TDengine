@@ -24,12 +24,14 @@
 #include "dnodeMgmt.h"
 #include "dnodePeer.h"
 #include "dnodeModule.h"
+#include "dnodeCheck.h"
 #include "dnodeVRead.h"
 #include "dnodeVWrite.h"
 #include "dnodeMRead.h"
 #include "dnodeMWrite.h"
 #include "dnodeMPeer.h"
 #include "dnodeShell.h"
+#include "dnodeTelemetry.h"
 
 static int32_t dnodeInitStorage();
 static void dnodeCleanupStorage();
@@ -47,17 +49,20 @@ typedef struct {
 } SDnodeComponent;
 
 static const SDnodeComponent tsDnodeComponents[] = {
-  {"storage", dnodeInitStorage,    dnodeCleanupStorage},
-  {"vread",   dnodeInitVnodeRead,  dnodeCleanupVnodeRead},
-  {"vwrite",  dnodeInitVnodeWrite, dnodeCleanupVnodeWrite},
-  {"mread",   dnodeInitMnodeRead,  dnodeCleanupMnodeRead},
-  {"mwrite",  dnodeInitMnodeWrite, dnodeCleanupMnodeWrite},
-  {"mpeer",   dnodeInitMnodePeer,  dnodeCleanupMnodePeer},  
-  {"client",  dnodeInitClient,     dnodeCleanupClient},
-  {"server",  dnodeInitServer,     dnodeCleanupServer},
-  {"mgmt",    dnodeInitMgmt,       dnodeCleanupMgmt},
-  {"modules", dnodeInitModules,    dnodeCleanupModules},
-  {"shell",   dnodeInitShell,      dnodeCleanupShell}
+  {"storage",   dnodeInitStorage,    dnodeCleanupStorage},
+  {"check",     dnodeInitCheck,      dnodeCleanupCheck},     // NOTES: dnodeInitCheck must be behind the dnodeinitStorage component !!!
+  {"vread",     dnodeInitVnodeRead,  dnodeCleanupVnodeRead},
+  {"vwrite",    dnodeInitVnodeWrite, dnodeCleanupVnodeWrite},
+  {"mread",     dnodeInitMnodeRead,  dnodeCleanupMnodeRead},
+  {"mwrite",    dnodeInitMnodeWrite, dnodeCleanupMnodeWrite},
+  {"mpeer",     dnodeInitMnodePeer,  dnodeCleanupMnodePeer},  
+  {"client",    dnodeInitClient,     dnodeCleanupClient},
+  {"server",    dnodeInitServer,     dnodeCleanupServer},
+  {"mgmt",      dnodeInitMgmt,       dnodeCleanupMgmt},
+  {"modules",   dnodeInitModules,    dnodeCleanupModules},
+  {"mgmt-tmr",  dnodeInitMgmtTimer,  dnodeCleanupMgmtTimer},
+  {"shell",     dnodeInitShell,      dnodeCleanupShell},
+  {"telemetry", dnodeInitTelemetry,  dnodeCleanupTelemetry},
 };
 
 static int dnodeCreateDir(const char *dir) {
@@ -122,7 +127,6 @@ int32_t dnodeInitSystem() {
 
   dnodeStartModules();
   dnodeSetRunStatus(TSDB_DNODE_RUN_STATUS_RUNING);
-  dnodeStartStream();
 
   dInfo("TDengine is initialized successfully");
 
@@ -157,7 +161,7 @@ static void dnodeCheckDataDirOpenned(char *dir) {
   }
   int32_t ret = flock(fd, LOCK_EX | LOCK_NB);
   if (ret != 0) {
-    dError("failed to lock file:%s ret:%d, database may be running, quit", filepath, ret);
+    dError("failed to lock file:%s ret:%d[%s], database may be running, quit", filepath, ret, strerror(errno));
     close(fd);
     exit(0);
   }

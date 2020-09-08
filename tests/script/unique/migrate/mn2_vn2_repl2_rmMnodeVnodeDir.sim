@@ -26,15 +26,10 @@ system sh/cfg.sh -n dnode2 -c balanceInterval -v 10
 #system sh/cfg.sh -n dnode3 -c balanceInterval -v 10
 #system sh/cfg.sh -n dnode4 -c balanceInterval -v 10
 
-system sh/cfg.sh -n dnode1 -c numOfTotalVnodes -v 4
-system sh/cfg.sh -n dnode2 -c numOfTotalVnodes -v 4
-#system sh/cfg.sh -n dnode3 -c numOfTotalVnodes -v 4
-#system sh/cfg.sh -n dnode4 -c numOfTotalVnodes -v 4
-
-system sh/cfg.sh -n dnode1 -c alternativeRole -v 0
-system sh/cfg.sh -n dnode2 -c alternativeRole -v 0
-#system sh/cfg.sh -n dnode3 -c alternativeRole -v 2
-#system sh/cfg.sh -n dnode4 -c alternativeRole -v 2
+system sh/cfg.sh -n dnode1 -c role -v 0
+system sh/cfg.sh -n dnode2 -c role -v 0
+#system sh/cfg.sh -n dnode3 -c role -v 2
+#system sh/cfg.sh -n dnode4 -c role -v 2
 
 system sh/cfg.sh -n dnode1 -c maxtablesPerVnode -v 4
 system sh/cfg.sh -n dnode2 -c maxtablesPerVnode -v 4
@@ -201,9 +196,9 @@ print $data0_1  $data1_1  $data2_1  $data3_1  $data4_1  $data5_1  $data6_1  $dat
 print $data0_2  $data1_2  $data2_2  $data3_2  $data4_2  $data5_2  $data6_2  $data7_2  $data8_2  $data9_2
 print $data0_3  $data1_3  $data2_3  $data3_3  $data4_3  $data5_3  $data6_3  $data7_3  $data8_3  $data9_3
 print $data0_4  $data1_4  $data2_4  $data3_4  $data4_4  $data5_4  $data6_4  $data7_4  $data8_4  $data9_4
-$d2v2status = $data4_4
-$d2v3status = $data4_2
-$d2v4status = $data4_3
+$d2v2status = $data5_4
+$d2v3status = $data5_2
+$d2v4status = $data5_3
 
 $d1v2status = $data7_4
 $d1v3status = $data7_2

@@ -31,7 +31,7 @@
 #include "dnodeShell.h"
 
 static void  (*dnodeProcessShellMsgFp[TSDB_MSG_TYPE_MAX])(SRpcMsg *);
-static void    dnodeProcessMsgFromShell(SRpcMsg *pMsg, SRpcIpSet *);
+static void    dnodeProcessMsgFromShell(SRpcMsg *pMsg, SRpcEpSet *);
 static int     dnodeRetrieveUserAuthInfo(char *user, char *spi, char *encrypt, char *secret, char *ckey);
 static void  * tsDnodeShellRpc = NULL;
 static int32_t tsDnodeQueryReqNum  = 0;
@@ -108,7 +108,7 @@ void dnodeCleanupShell() {
   }
 }
 
-void dnodeProcessMsgFromShell(SRpcMsg *pMsg, SRpcIpSet *pIpSet) {
+void dnodeProcessMsgFromShell(SRpcMsg *pMsg, SRpcEpSet *pEpSet) {
   SRpcMsg rpcMsg = {
     .handle  = pMsg->handle,
     .pCont   = NULL,
@@ -119,7 +119,7 @@ void dnodeProcessMsgFromShell(SRpcMsg *pMsg, SRpcIpSet *pIpSet) {
 
   if (dnodeGetRunStatus() != TSDB_DNODE_RUN_STATUS_RUNING) {
     dError("RPC %p, shell msg:%s is ignored since dnode not running", pMsg->handle, taosMsg[pMsg->msgType]);
-    rpcMsg.code = TSDB_CODE_RPC_NOT_READY;
+    rpcMsg.code = TSDB_CODE_APP_NOT_READY;
     rpcSendResponse(&rpcMsg);
     rpcFreeCont(pMsg->pCont);
     return;
@@ -144,7 +144,7 @@ void dnodeProcessMsgFromShell(SRpcMsg *pMsg, SRpcIpSet *pIpSet) {
 
 static int dnodeRetrieveUserAuthInfo(char *user, char *spi, char *encrypt, char *secret, char *ckey) {
   int code = mnodeRetriveAuth(user, spi, encrypt, secret, ckey);
-  if (code != TSDB_CODE_RPC_NOT_READY) return code;
+  if (code != TSDB_CODE_APP_NOT_READY) return code;
 
   SDMAuthMsg *pMsg = rpcMallocCont(sizeof(SDMAuthMsg));
   tstrncpy(pMsg->user, user, sizeof(pMsg->user));
@@ -154,15 +154,15 @@ static int dnodeRetrieveUserAuthInfo(char *user, char *spi, char *encrypt, char 
   rpcMsg.contLen = sizeof(SDMAuthMsg);
   rpcMsg.msgType = TSDB_MSG_TYPE_DM_AUTH;
   
-  dDebug("user:%s, send auth msg to mnode", user);
+  dDebug("user:%s, send auth msg to mnodes", user);
   SRpcMsg rpcRsp = {0};
   dnodeSendMsgToDnodeRecv(&rpcMsg, &rpcRsp);
 
   if (rpcRsp.code != 0) {
-    dError("user:%s, auth msg received from mnode, error:%s", user, tstrerror(rpcRsp.code));
+    dError("user:%s, auth msg received from mnodes, error:%s", user, tstrerror(rpcRsp.code));
   } else {
     SDMAuthRsp *pRsp = rpcRsp.pCont;
-    dDebug("user:%s, auth msg received from mnode", user);
+    dDebug("user:%s, auth msg received from mnodes", user);
     memcpy(secret, pRsp->secret, TSDB_KEY_LEN);
     memcpy(ckey, pRsp->ckey, TSDB_KEY_LEN);
     *spi = pRsp->spi;

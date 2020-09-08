@@ -22,7 +22,7 @@
 #include "dnodeMain.h"
 
 static void signal_handler(int32_t signum, siginfo_t *sigInfo, void *context);
-static sem_t exitSem;
+static tsem_t exitSem;
 
 int32_t main(int32_t argc, char *argv[]) {
   // Set global configuration file
@@ -39,7 +39,7 @@ int32_t main(int32_t argc, char *argv[]) {
         exit(EXIT_FAILURE);
       }
     } else if (strcmp(argv[i], "-V") == 0) {
-#ifdef _SYNC
+#ifdef _ACCT
       char *versionStr = "enterprise";
 #else
       char *versionStr = "community";
@@ -52,6 +52,8 @@ int32_t main(int32_t argc, char *argv[]) {
     } else if (strcmp(argv[i], "-k") == 0) {
       grantParseParameter();
       exit(EXIT_SUCCESS);
+    } else if (strcmp(argv[i], "-A") == 0) {
+      tsPrintAuth = 1;
     }
 #ifdef TAOS_MEM_CHECK
     else if (strcmp(argv[i], "--alloc-random-fail") == 0) {
@@ -68,9 +70,27 @@ int32_t main(int32_t argc, char *argv[]) {
       }
     }
 #endif
+#ifdef TAOS_RANDOM_FILE_FAIL
+    else if (strcmp(argv[i], "--random-file-fail-output") == 0) {
+      if ((i < argc - 1) && (argv[i + 1][0] != '-')) {
+        taosSetRandomFileFailOutput(argv[++i]);
+      } else {
+        taosSetRandomFileFailOutput(NULL);
+      }
+    } else if (strcmp(argv[i], "--random-file-fail-factor") == 0) {
+      if ( (i+1) < argc ) {
+        int factor = atoi(argv[i+1]);
+        printf("The factor of random failure is %d\n", factor);
+        taosSetRandomFileFailFactor(factor);
+      } else {
+        printf("Please specify a number for random failure factor!");
+        exit(EXIT_FAILURE);
+      }
+    }
+#endif
   }
 
-  if (sem_init(&exitSem, 0, 0) != 0) {
+  if (tsem_init(&exitSem, 0, 0) != 0) {
     printf("failed to create exit semphore\n");
     exit(EXIT_FAILURE);
   }
@@ -99,11 +119,8 @@ int32_t main(int32_t argc, char *argv[]) {
 
   syslog(LOG_INFO, "Started TDengine service successfully.");
 
-  for (int res = sem_wait(&exitSem); res != 0; res = sem_wait(&exitSem)) {
-    if (res != EINTR) {
-      syslog(LOG_ERR, "failed to wait exit semphore: %d", res);
-      break;
-    }
+  if (tsem_wait(&exitSem) != 0) {
+    syslog(LOG_ERR, "failed to wait exit semphore: %s", strerror(errno));
   }
 
   dnodeCleanUpSystem();
@@ -116,7 +133,7 @@ int32_t main(int32_t argc, char *argv[]) {
 
 static void signal_handler(int32_t signum, siginfo_t *sigInfo, void *context) {
   if (signum == SIGUSR1) {
-    taosCfgDynamicOptions("debugFlag 151");
+    taosCfgDynamicOptions("debugFlag 143");
     return;
   }
   if (signum == SIGUSR2) {
@@ -139,5 +156,5 @@ static void signal_handler(int32_t signum, siginfo_t *sigInfo, void *context) {
   sigaction(SIGUSR2, &act, NULL);
 
   // inform main thread to exit
-  sem_post(&exitSem);
+  tsem_post(&exitSem);
 }

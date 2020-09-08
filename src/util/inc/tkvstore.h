@@ -21,14 +21,17 @@ extern "C" {
 
 #include <stdint.h>
 
+#define KVSTORE_FILE_VERSION ((uint32_t)0)
+
 typedef int (*iterFunc)(void *, void *cont, int contLen);
 typedef void (*afterFunc)(void *);
 
 typedef struct {
-  int64_t size;  // including 512 bytes of header size
-  int64_t tombSize;
-  int64_t nRecords;
-  int64_t nDels;
+  int64_t  size;  // including 512 bytes of header size
+  int64_t  tombSize;
+  int64_t  nRecords;
+  int64_t  nDels;
+  uint32_t magic;
 } SStoreInfo;
 
 typedef struct {
@@ -45,6 +48,8 @@ typedef struct {
   SStoreInfo info;
 } SKVStore;
 
+#define KVSTORE_MAGIC(s) (s)->info.magic
+
 int       tdCreateKVStore(char *fname);
 int       tdDestroyKVStore(char *fname);
 SKVStore *tdOpenKVStore(char *fname, iterFunc iFunc, afterFunc aFunc, void *appH);
@@ -53,6 +58,7 @@ int       tdKVStoreStartCommit(SKVStore *pStore);
 int       tdUpdateKVStoreRecord(SKVStore *pStore, uint64_t uid, void *cont, int contLen);
 int       tdDropKVStoreRecord(SKVStore *pStore, uint64_t uid);
 int       tdKVStoreEndCommit(SKVStore *pStore);
+void      tsdbGetStoreInfo(char *fname, uint32_t *magic, int64_t *size);
 
 #ifdef __cplusplus
 }

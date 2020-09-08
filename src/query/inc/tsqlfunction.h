@@ -22,7 +22,7 @@ extern "C" {
 
 #include "os.h"
 
-#include "../../common/inc/tname.h"
+#include "tname.h"
 #include "taosdef.h"
 #include "trpc.h"
 #include "tvariant.h"
@@ -69,6 +69,15 @@ extern "C" {
 #define TSDB_FUNC_AVG_IRATE    33
 
 #define TSDB_FUNC_TID_TAG      34
+#define TSDB_FUNC_HISTOGRAM    35
+#define TSDB_FUNC_HLL          36
+#define TSDB_FUNC_MODE         37
+#define TSDB_FUNC_SAMPLE       38
+#define TSDB_FUNC_CEIL         39
+#define TSDB_FUNC_FLOOR        40
+#define TSDB_FUNC_ROUND        41
+#define TSDB_FUNC_MAVG         42
+#define TSDB_FUNC_CSUM         43
 
 #define TSDB_FUNCSTATE_SO           0x1u    // single output
 #define TSDB_FUNCSTATE_MO           0x2u    // dynamic number of output, not multinumber of output e.g., TOP/BOTTOM
@@ -91,16 +100,16 @@ extern "C" {
 #define QUERY_COND_REL_PREFIX_IN "IN|"
 #define QUERY_COND_REL_PREFIX_LIKE "LIKE|"
 
-#define QUERY_COND_REL_PREFIX_IN_LEN 3
+#define QUERY_COND_REL_PREFIX_IN_LEN   3
 #define QUERY_COND_REL_PREFIX_LIKE_LEN 5
 
-#define QUERY_ASC_FORWARD_STEP 1
+#define QUERY_ASC_FORWARD_STEP   1
 #define QUERY_DESC_FORWARD_STEP -1
 
 #define GET_FORWARD_DIRECTION_FACTOR(ord) (((ord) == TSDB_ORDER_ASC) ? QUERY_ASC_FORWARD_STEP : QUERY_DESC_FORWARD_STEP)
 
-#define MAX_RETRIEVE_ROWS_IN_INTERVAL_QUERY 10000000
-#define TOP_BOTTOM_QUERY_LIMIT 100
+#define MAX_INTERVAL_TIME_WINDOW 10000000
+#define TOP_BOTTOM_QUERY_LIMIT   100
 
 enum {
   MASTER_SCAN           = 0x0u,
@@ -125,27 +134,25 @@ typedef struct SArithmeticSupport {
 } SArithmeticSupport;
 
 typedef struct SQLPreAggVal {
-  bool    isSet;
+  bool        isSet;             // statistics info set or not
+  bool        dataBlockLoaded;   // data block is loaded or not
   SDataStatis statis;
 } SQLPreAggVal;
 
 typedef struct SInterpInfoDetail {
   TSKEY  ts;  // interp specified timestamp
-  int8_t hasResult;
   int8_t type;
   int8_t primaryCol;
 } SInterpInfoDetail;
 
-typedef struct SInterpInfo { SInterpInfoDetail *pInterpDetail; } SInterpInfo;
-
 typedef struct SResultInfo {
-  int8_t  hasResult;       // result generated, not NULL value
-  bool    initialized;     // output buffer has been initialized
-  bool    complete;        // query has completed
-  bool    superTableQ;     // is super table query
-  int32_t numOfRes;        // num of output result in current buffer
-  int32_t bufLen;          // buffer size
-  void *  interResultBuf;  // output result buffer
+  int8_t   hasResult;       // result generated, not NULL value
+  bool     initialized;   // output buffer has been initialized
+  bool     complete;      // query has completed
+  bool     superTableQ;   // is super table query
+  uint32_t bufLen;       // buffer size
+  uint64_t numOfRes;        // num of output result in current buffer
+  void*    interResultBuf;  // output result buffer
 } SResultInfo;
 
 struct SQLFunctionCtx;
@@ -170,6 +177,7 @@ typedef struct SQLFunctionCtx {
   int16_t      outputType;
   int16_t      outputBytes;  // size of results, determined by function and input column data type
   bool         hasNull;      // null value exist in current block
+  bool         requireNull;    // require null in some function
   int16_t      functionId;   // function id
   void *       aInputElemBuf;
   char *       aOutputBuf;            // final result output buffer, point to sdata->data
@@ -187,7 +195,7 @@ typedef struct SQLFunctionCtx {
 } SQLFunctionCtx;
 
 typedef struct SQLAggFuncElem {
-  char aName[TSDB_FUNCTIONS_NAME_MAX_LENGTH];
+  char     aName[TSDB_FUNCTIONS_NAME_MAX_LENGTH];
 
   uint8_t  nAggIdx;       // index of function in aAggs
   int8_t   stableFuncId;  // transfer function for super table query
@@ -224,24 +232,13 @@ int32_t getResultDataInfo(int32_t dataType, int32_t dataBytes, int32_t functionI
 #define IS_SINGLEOUTPUT(x)        (((x)&TSDB_FUNCSTATE_SO) != 0)
 #define IS_OUTER_FORWARD(x)       (((x)&TSDB_FUNCSTATE_OF) != 0)
 
-/*
- * the status of one block, used in metric query. all blocks are mixed together,
- * we need the status to decide if one block is a first/end/inter block of one meter
- */
-enum {
-  BLK_FILE_BLOCK = 0x1,
-  BLK_BLOCK_LOADED = 0x2,
-  BLK_CACHE_BLOCK = 0x4,  // in case of cache block, block must be loaded
-};
-
 /* determine the real data need to calculated the result */
 enum {
-  BLK_DATA_NO_NEEDED = 0x0,
+  BLK_DATA_NO_NEEDED     = 0x0,
   BLK_DATA_STATIS_NEEDED = 0x1,
-  BLK_DATA_ALL_NEEDED = 0x3,
+  BLK_DATA_ALL_NEEDED    = 0x3,
+  BLK_DATA_DISCARD       = 0x4,   // discard current data block since it is not qualified for filter
 };
-
-#define SET_DATA_BLOCK_NOT_LOADED(x) ((x) &= (~BLK_BLOCK_LOADED));
 
 typedef struct STwaInfo {
   TSKEY   lastKey;
@@ -264,14 +261,19 @@ typedef struct STwaInfo {
 /* global sql function array */
 extern struct SQLAggFuncElem aAggs[];
 
-/* compatible check array list */
-extern int32_t funcCompatDefList[];
+extern int32_t functionCompatList[]; // compatible check array list
 
-bool top_bot_datablock_filter(SQLFunctionCtx *pCtx, int32_t functionId, char *minval, char *maxval);
+bool topbot_datablock_filter(SQLFunctionCtx *pCtx, int32_t functionId, const char *minval, const char *maxval);
 
-bool stableQueryFunctChanged(int32_t funcId);
+/**
+ * the numOfRes should be kept, since it may be used later
+ * and allow the ResultInfo to be re initialized
+ */
+#define RESET_RESULT_INFO(_r)  \
+  do {                         \
+    (_r)->initialized = false; \
+  } while (0)
 
-void resetResultInfo(SResultInfo *pResInfo);
 void setResultInfoBuf(SResultInfo *pResInfo, int32_t size, bool superTable, char* buf);
 
 static FORCE_INLINE void initResultInfo(SResultInfo *pResInfo) {

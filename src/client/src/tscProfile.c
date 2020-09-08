@@ -16,7 +16,6 @@
 #include "os.h"
 #include "tscLog.h"
 #include "tsclient.h"
-#include "ttime.h"
 #include "ttimer.h"
 #include "tutil.h"
 #include "taosmsg.h"
@@ -97,7 +96,7 @@ void tscSaveSlowQuery(SSqlObj *pSql) {
   }
 
   tscDebug("%p query time:%" PRId64 " sql:%s", pSql, pSql->res.useconds, pSql->sqlstr);
-  int32_t sqlSize = TSDB_SLOW_QUERY_SQL_LEN + size;
+  int32_t sqlSize = (int32_t)(TSDB_SLOW_QUERY_SQL_LEN + size);
   
   char *sql = malloc(sqlSize);
   if (sql == NULL) {
@@ -260,11 +259,11 @@ int tscBuildQueryStreamDesc(void *pMsg, STscObj *pObj) {
     pSdesc->num = htobe64(pStream->num);
 
     pSdesc->useconds = htobe64(pStream->useconds);
-    pSdesc->stime = htobe64(pStream->stime - pStream->interval);
+    pSdesc->stime = htobe64(pStream->stime - pStream->intervalTime);
     pSdesc->ctime = htobe64(pStream->ctime);
 
     pSdesc->slidingTime = htobe64(pStream->slidingTime);
-    pSdesc->interval = htobe64(pStream->interval);
+    pSdesc->interval = htobe64(pStream->intervalTime);
 
     pHeartbeat->numOfStreams++;
     pSdesc++;
@@ -286,9 +285,9 @@ void tscKillConnection(STscObj *pObj) {
 
   SSqlObj *pSql = pObj->sqlList;
   while (pSql) {
-    //taosStopRpcConn(pSql->thandle);
     pSql = pSql->next;
   }
+  
 
   SSqlStream *pStream = pObj->streamList;
   while (pStream) {

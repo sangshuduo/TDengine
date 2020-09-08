@@ -23,15 +23,16 @@ extern "C" {
 struct SMnodeMsg;
 
 typedef enum {
-  SDB_TABLE_DNODE   = 0,
-  SDB_TABLE_MNODE   = 1,
-  SDB_TABLE_ACCOUNT = 2,
-  SDB_TABLE_USER    = 3,
-  SDB_TABLE_DB      = 4,
-  SDB_TABLE_VGROUP  = 5,
-  SDB_TABLE_STABLE  = 6,
-  SDB_TABLE_CTABLE  = 7,
-  SDB_TABLE_MAX     = 8
+  SDB_TABLE_CLUSTER = 0,
+  SDB_TABLE_DNODE   = 1,
+  SDB_TABLE_MNODE   = 2,
+  SDB_TABLE_ACCOUNT = 3,
+  SDB_TABLE_USER    = 4,
+  SDB_TABLE_DB      = 5,
+  SDB_TABLE_VGROUP  = 6,
+  SDB_TABLE_STABLE  = 7,
+  SDB_TABLE_CTABLE  = 8,
+  SDB_TABLE_MAX     = 9
 } ESdbTable;
 
 typedef enum {
@@ -46,15 +47,16 @@ typedef enum {
   SDB_OPER_LOCAL
 } ESdbOper;
 
-typedef struct {
+typedef struct SSdbOper {
   ESdbOper type;
-  void *   table;
-  void *   pObj;
-  void *   rowData;
   int32_t  rowSize;
   int32_t  retCode; // for callback in sdb queue
   int32_t  processedCount; // for sync fwd callback
-  int32_t  (*cb)(struct SMnodeMsg *pMsg, int32_t code);
+  int32_t  (*reqFp)(struct SMnodeMsg *pMsg);
+  int32_t  (*writeCb)(struct SMnodeMsg *pMsg, int32_t code);
+  void *   table;
+  void *   pObj;
+  void *   rowData;
   struct SMnodeMsg *pMsg;
 } SSdbOper;
 
@@ -85,6 +87,7 @@ void    sdbUpdateMnodeRoles();
 int32_t sdbInsertRow(SSdbOper *pOper);
 int32_t sdbDeleteRow(SSdbOper *pOper);
 int32_t sdbUpdateRow(SSdbOper *pOper);
+int32_t sdbInsertRowImp(SSdbOper *pOper);
 
 void    *sdbGetRow(void *handle, void *key);
 void    *sdbFetchRow(void *handle, void *pIter, void **ppRow);
@@ -94,6 +97,7 @@ void     sdbDecRef(void *thandle, void *pRow);
 int64_t  sdbGetNumOfRows(void *handle);
 int32_t  sdbGetId(void *handle);
 uint64_t sdbGetVersion();
+bool     sdbCheckRowDeleted(void *thandle, void *pRow);
 
 #ifdef __cplusplus
 }

@@ -72,8 +72,8 @@ DLL_EXPORT void  taos_close(TAOS *taos);
 typedef struct TAOS_BIND {
   int            buffer_type;
   void *         buffer;
-  unsigned long  buffer_length;  // unused
-  unsigned long *length;
+  uintptr_t      buffer_length;  // unused
+  uintptr_t      *length;
   int *          is_null;
   int            is_unsigned;  // unused
   int *          error;        // unused
@@ -93,7 +93,7 @@ DLL_EXPORT int taos_result_precision(TAOS_RES *res);  // get the time precision 
 DLL_EXPORT void taos_free_result(TAOS_RES *res);
 DLL_EXPORT int taos_field_count(TAOS_RES *tres);
 DLL_EXPORT int taos_num_fields(TAOS_RES *res);
-DLL_EXPORT int taos_affected_rows(TAOS_RES *taos);
+DLL_EXPORT int taos_affected_rows(TAOS_RES *res);
 DLL_EXPORT TAOS_FIELD *taos_fetch_fields(TAOS_RES *res);
 DLL_EXPORT int taos_select_db(TAOS *taos, const char *db);
 DLL_EXPORT int taos_print_row(char *str, TAOS_ROW row, TAOS_FIELD *fields, int num_fields);

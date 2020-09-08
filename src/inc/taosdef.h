@@ -22,6 +22,7 @@ extern "C" {
 
 #include <stdint.h>
 #include <stdbool.h>
+#include "osDef.h"
 #include "taos.h"
 
 #define TSDB__packed
@@ -62,7 +63,7 @@ typedef struct tstr {
 extern const int32_t TYPE_BYTES[11];
 // TODO: replace and remove code below
 #define CHAR_BYTES   sizeof(char)
-#define SHORT_BYTES  sizeof(short)
+#define SHORT_BYTES  sizeof(int16_t)
 #define INT_BYTES    sizeof(int)
 #define LONG_BYTES   sizeof(int64_t)
 #define FLOAT_BYTES  sizeof(float)
@@ -84,7 +85,11 @@ extern const int32_t TYPE_BYTES[11];
 #define TSDB_DATA_NULL_STR_L            "null"
 
 #define TSDB_DEFAULT_USER               "root"
+#ifdef _TD_POWER_
+#define TSDB_DEFAULT_PASS               "powerdb"
+#else
 #define TSDB_DEFAULT_PASS               "taosdata"
+#endif
 
 #define TSDB_TRUE   1
 #define TSDB_FALSE  0
@@ -160,7 +165,32 @@ extern tDataTypeDescriptor tDataTypeDesc[11];
 #define POINTER_BYTES sizeof(void *)  // 8 by default  assert(sizeof(ptrdiff_t) == sizseof(void*)
 
 bool isValidDataType(int32_t type);
-bool isNull(const char *val, int32_t type);
+//bool isNull(const char *val, int32_t type);
+static FORCE_INLINE bool isNull(const char *val, int32_t type) {
+  switch (type) {
+    case TSDB_DATA_TYPE_BOOL:
+      return *(uint8_t *)val == TSDB_DATA_BOOL_NULL;
+    case TSDB_DATA_TYPE_TINYINT:
+      return *(uint8_t *)val == TSDB_DATA_TINYINT_NULL;
+    case TSDB_DATA_TYPE_SMALLINT:
+      return *(uint16_t *)val == TSDB_DATA_SMALLINT_NULL;
+    case TSDB_DATA_TYPE_INT:
+      return *(uint32_t *)val == TSDB_DATA_INT_NULL;
+    case TSDB_DATA_TYPE_BIGINT:
+    case TSDB_DATA_TYPE_TIMESTAMP:
+      return *(uint64_t *)val == TSDB_DATA_BIGINT_NULL;
+    case TSDB_DATA_TYPE_FLOAT:
+      return *(uint32_t *)val == TSDB_DATA_FLOAT_NULL;
+    case TSDB_DATA_TYPE_DOUBLE:
+      return *(uint64_t *)val == TSDB_DATA_DOUBLE_NULL;
+    case TSDB_DATA_TYPE_NCHAR:
+      return *(uint32_t*) varDataVal(val) == TSDB_DATA_NCHAR_NULL;
+    case TSDB_DATA_TYPE_BINARY:
+      return *(uint8_t *) varDataVal(val) == TSDB_DATA_BINARY_NULL;
+    default:
+      return false;
+  };
+}
 
 void setVardataNull(char* val, int32_t type);
 void setNull(char *val, int32_t type, int32_t bytes);
@@ -206,7 +236,7 @@ void tsDataSwap(void *pLeft, void *pRight, int32_t type, int32_t size);
 #define TSDB_NODE_NAME_LEN        64
 #define TSDB_TABLE_NAME_LEN       193     // it is a null-terminated string
 #define TSDB_DB_NAME_LEN          33
-#define TSDB_TABLE_ID_LEN         (TSDB_ACCT_LEN + TSDB_DB_NAME_LEN + TSDB_TABLE_NAME_LEN)
+#define TSDB_TABLE_FNAME_LEN      (TSDB_ACCT_LEN + TSDB_DB_NAME_LEN + TSDB_TABLE_NAME_LEN)
 #define TSDB_COL_NAME_LEN         65
 #define TSDB_MAX_SAVED_SQL_LEN    TSDB_MAX_COLUMNS * 64
 #define TSDB_MAX_SQL_LEN          TSDB_PAYLOAD_SIZE
@@ -216,6 +246,7 @@ void tsDataSwap(void *pLeft, void *pRight, int32_t type, int32_t size);
 #define TSDB_MAX_BYTES_PER_ROW    16384
 #define TSDB_MAX_TAGS_LEN         16384
 #define TSDB_MAX_TAGS             128
+#define TSDB_MAX_TAG_CONDITIONS   1024
 
 #define TSDB_AUTH_LEN             16
 #define TSDB_KEY_LEN              16
@@ -225,9 +256,10 @@ void tsDataSwap(void *pLeft, void *pRight, int32_t type, int32_t size);
 #define TSDB_STATE_LEN            20
 #define TSDB_COUNTRY_LEN          20
 #define TSDB_LOCALE_LEN           64
-#define TSDB_TIMEZONE_LEN         64
+#define TSDB_TIMEZONE_LEN         96
 #define TSDB_LABEL_LEN            8 
 
+#define TSDB_CLUSTER_ID_LEN       40
 #define TSDB_FQDN_LEN             128
 #define TSDB_EP_LEN               (TSDB_FQDN_LEN+6)
 #define TSDB_IPv4ADDR_LEN      	  16
@@ -240,6 +272,13 @@ void tsDataSwap(void *pLeft, void *pRight, int32_t type, int32_t size);
 #define TSDB_SHOW_SQL_LEN         64
 #define TSDB_SLOW_QUERY_SQL_LEN   512
 
+#define TSDB_MQTT_HOSTNAME_LEN    64
+#define TSDB_MQTT_PORT_LEN        8
+#define TSDB_MQTT_USER_LEN        24
+#define TSDB_MQTT_PASS_LEN        24
+#define TSDB_MQTT_TOPIC_LEN       64
+#define TSDB_MQTT_CLIENT_ID_LEN   32
+
 #define TSDB_METER_STATE_OFFLINE  0
 #define TSDB_METER_STATE_ONLLINE  1
 
@@ -249,9 +288,8 @@ void tsDataSwap(void *pLeft, void *pRight, int32_t type, int32_t size);
 #define TSDB_DEFAULT_PAYLOAD_SIZE 5120   // default payload size, greater than PATH_MAX value
 #define TSDB_EXTRA_PAYLOAD_SIZE   128    // extra bytes for auth
 #define TSDB_CQ_SQL_SIZE          1024
-#define TSDB_MAX_VNODES           256
-#define TSDB_MIN_VNODES           50
-#define TSDB_INVALID_VNODE_NUM    0
+#define TSDB_MIN_VNODES           64
+#define TSDB_MAX_VNODES           2048
 
 #define TSDB_DNODE_ROLE_ANY       0
 #define TSDB_DNODE_ROLE_MGMT      1
@@ -259,24 +297,26 @@ void tsDataSwap(void *pLeft, void *pRight, int32_t type, int32_t size);
 
 #define TSDB_MAX_REPLICA          5
 
-#define TSDB_TBNAME_COLUMN_INDEX       (-1)
+#define TSDB_TBNAME_COLUMN_INDEX        (-1)
+#define TSDB_UD_COLUMN_INDEX            (-100)
 #define TSDB_MULTI_METERMETA_MAX_NUM    100000  // maximum batch size allowed to load metermeta
 
 #define TSDB_MIN_CACHE_BLOCK_SIZE       1
 #define TSDB_MAX_CACHE_BLOCK_SIZE       128     // 128MB for each vnode
 #define TSDB_DEFAULT_CACHE_BLOCK_SIZE   16
 
-#define TSDB_MIN_TOTAL_BLOCKS           2
+#define TSDB_MIN_TOTAL_BLOCKS           3
 #define TSDB_MAX_TOTAL_BLOCKS           10000
-#define TSDB_DEFAULT_TOTAL_BLOCKS       4
+#define TSDB_DEFAULT_TOTAL_BLOCKS       6
 
 #define TSDB_MIN_TABLES                 4
-#define TSDB_MAX_TABLES                 200000
-#define TSDB_DEFAULT_TABLES             1000
+#define TSDB_MAX_TABLES                 10000000
+#define TSDB_DEFAULT_TABLES             1000000
+#define TSDB_TABLES_STEP                1000
 
 #define TSDB_MIN_DAYS_PER_FILE          1
 #define TSDB_MAX_DAYS_PER_FILE          3650 
-#define TSDB_DEFAULT_DAYS_PER_FILE      10 
+#define TSDB_DEFAULT_DAYS_PER_FILE      2 
 
 #define TSDB_MIN_KEEP                   1        // data in db to be reserved.
 #define TSDB_MAX_KEEP                   365000   // data in db to be reserved.
@@ -306,9 +346,14 @@ void tsDataSwap(void *pLeft, void *pRight, int32_t type, int32_t size);
 #define TSDB_MAX_WAL_LEVEL              2
 #define TSDB_DEFAULT_WAL_LEVEL          1
 
-#define TSDB_MIN_REPLICA_NUM            1
-#define TSDB_MAX_REPLICA_NUM            3
-#define TSDB_DEFAULT_REPLICA_NUM        1
+#define TSDB_MIN_FSYNC_PERIOD           0
+#define TSDB_MAX_FSYNC_PERIOD           180000   // millisecond
+#define TSDB_DEFAULT_FSYNC_PERIOD       3000     // three second
+
+#define TSDB_MIN_DB_REPLICA_OPTION      1
+#define TSDB_MAX_DB_REPLICA_OPTION      3
+#define TSDB_DEFAULT_DB_REPLICA_OPTION  1
+#define TSDB_DEFAULT_DB_QUORUM_OPTION   1
 
 #define TSDB_MAX_JOIN_TABLE_NUM         5
 #define TSDB_MAX_UNION_CLAUSE           5
@@ -348,6 +393,7 @@ void tsDataSwap(void *pLeft, void *pRight, int32_t type, int32_t size);
 #define TSDB_ORDER_ASC   1
 #define TSDB_ORDER_DESC  2
 
+#define TSDB_DEFAULT_CLUSTER_HASH_SIZE  1
 #define TSDB_DEFAULT_MNODES_HASH_SIZE   5
 #define TSDB_DEFAULT_DNODES_HASH_SIZE   10
 #define TSDB_DEFAULT_ACCOUNTS_HASH_SIZE 10
@@ -360,6 +406,8 @@ void tsDataSwap(void *pLeft, void *pRight, int32_t type, int32_t size);
 #define TSDB_PORT_DNODESHELL 0 
 #define TSDB_PORT_DNODEDNODE 5 
 #define TSDB_PORT_SYNC       10 
+#define TSDB_PORT_HTTP       11 
+#define TSDB_PORT_ARBITRATOR 12 
 
 #define TAOS_QTYPE_RPC      0
 #define TAOS_QTYPE_FWD      1
@@ -382,6 +430,19 @@ typedef enum {
   TSDB_MOD_MQTT,
   TSDB_MOD_MAX
 } EModuleType;
+
+  typedef enum {
+    TSDB_CHECK_ITEM_NETWORK,
+    TSDB_CHECK_ITEM_MEM,
+    TSDB_CHECK_ITEM_CPU,
+    TSDB_CHECK_ITEM_DISK,
+    TSDB_CHECK_ITEM_OS,    
+    TSDB_CHECK_ITEM_ACCESS,    
+    TSDB_CHECK_ITEM_VERSION,
+    TSDB_CHECK_ITEM_DATAFILE,
+    TSDB_CHECK_ITEM_MAX
+  } ECheckItemType;
+
 
 #ifdef __cplusplus
 }

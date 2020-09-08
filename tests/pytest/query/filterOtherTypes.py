@@ -231,10 +231,12 @@ class TDTestCase:
         tdSql.error("select * from st where tagcol1 like '____'")
 
         # > for nchar type on tag
-        tdSql.error("select * from st where tagcol2 > 'table'")
+        tdSql.query("select * from st where tagcol2 > 'table1'")
+        tdSql.checkRows(5)
 
         # >= for nchar type on tag
-        tdSql.error("select * from st where tagcol2 >= 'table'")
+        tdSql.query("select * from st where tagcol2 >= 'table1'")
+        tdSql.checkRows(10)
 
         # = for nchar type on tag
         tdSql.query("select * from st where tagcol2 = 'table1'")
@@ -249,10 +251,12 @@ class TDTestCase:
         tdSql.checkRows(10)
 
         # > for nchar type on tag
-        tdSql.error("select * from st where tagcol2 < 'table'")
+        tdSql.query("select * from st where tagcol2 < 'table'")
+        tdSql.checkRows(0)
 
         # >= for nchar type on tag
-        tdSql.error("select * from st where tagcol2 <= 'table'")
+        tdSql.query("select * from st where tagcol2 <= 'table'")
+        tdSql.checkRows(0)
 
         # % for nchar type on tag case 1
         tdSql.query("select * from st where tagcol2 like '%'")
@@ -291,10 +295,12 @@ class TDTestCase:
         tdSql.checkRows(10)
 
         # > for binary type on tag
-        tdSql.error("select * from st where tagcol3 > '表'")
+        tdSql.query("select * from st where tagcol3 > '表'")
+        tdSql.checkRows(10)
 
         # >= for binary type on tag
-        tdSql.error("select * from st where tagcol3 >= '表'")
+        tdSql.query("select * from st where tagcol3 >= '表'")
+        tdSql.checkRows(10)
 
         # = for binary type on tag
         tdSql.query("select * from st where tagcol3 = '水表'")
@@ -309,10 +315,12 @@ class TDTestCase:
         tdSql.checkRows(5)
 
         # > for binary type on tag
-        tdSql.error("select * from st where tagcol3 < '水表'")
+        tdSql.query("select * from st where tagcol3 < '水表'")
+        tdSql.checkRows(0)
 
         # >= for binary type on tag
-        tdSql.error("select * from st where tagcol3 <= '水表'")
+        tdSql.query("select * from st where tagcol3 <= '水表'")
+        tdSql.checkRows(5)
 
         # % for binary type on tag case 1
         tdSql.query("select * from st where tagcol3 like '%'")
@@ -357,6 +365,54 @@ class TDTestCase:
         # _ for binary type on tag case 5
         tdSql.query("select * from st where tagcol3 like '_据'")
         tdSql.checkRows(0)
+        
+        # test case for https://jira.taosdata.com:18080/browse/TD-857
+        tdSql.execute("create database test")
+        tdSql.execute("use test")
+        tdSql.execute("create table meters(ts timestamp, voltage int) tags(tag1 binary(20))")
+        tdSql.execute("create table t1 using meters tags('beijing')")
+        tdSql.execute("create table t2 using meters tags('nanjing')")        
+
+        tdSql.execute("insert into t1 values(1538548685000, 1) (1538548685001, 2) (1538548685002, 3)")
+        tdSql.execute("insert into t2 values(1538548685000, 4) (1538548685001, 5) (1538548685002, 6)")
+
+        tdSql.query("select * from t1 where tag1 like '%g'")
+        tdSql.checkRows(3)
+
+        tdSql.query("select * from t2 where tag1 like '%g'")
+        tdSql.checkRows(3)
+
+        tdSql.query("select * from meters where tag1 like '%g'")
+        tdSql.checkRows(6)
+
+        tdSql.execute("create table meters1(ts timestamp, voltage int) tags(tag1 nchar(20))")
+        tdSql.execute("create table t3 using meters1 tags('北京')")
+        tdSql.execute("create table t4 using meters1 tags('南京')")
+        tdSql.execute("create table t5 using meters1 tags('beijing')")
+        tdSql.execute("create table t6 using meters1 tags('nanjing')")        
+
+        tdSql.execute("insert into t3 values(1538548685000, 1) (1538548685001, 2) (1538548685002, 3)")
+        tdSql.execute("insert into t4 values(1538548685000, 4) (1538548685001, 5) (1538548685002, 6)")
+        tdSql.execute("insert into t5 values(1538548685000, 1) (1538548685001, 2) (1538548685002, 3)")
+        tdSql.execute("insert into t6 values(1538548685000, 1) (1538548685001, 2) (1538548685002, 3)")
+
+        tdSql.query("select * from t3 where tag1 like '%京'")
+        tdSql.checkRows(3)
+
+        tdSql.query("select * from t4 where tag1 like '%京'")
+        tdSql.checkRows(3)
+
+        tdSql.query("select * from meters1 where tag1 like '%京'")
+        tdSql.checkRows(6)
+        
+        tdSql.query("select * from t5 where tag1 like '%g'")
+        tdSql.checkRows(3)
+
+        tdSql.query("select * from t6 where tag1 like '%g'")
+        tdSql.checkRows(3)
+
+        tdSql.query("select * from meters1 where tag1 like '%g'")
+        tdSql.checkRows(6)
 
     def stop(self):
         tdSql.close()

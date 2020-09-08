@@ -15,9 +15,9 @@
 
 #define _DEFAULT_SOURCE
 #include "os.h"
+#include "taoserror.h"
 #include "taos.h"
 #include "tulog.h"
-#include "ttime.h"
 #include "tutil.h"
 #include "tglobal.h"
 #include "hash.h"
@@ -30,7 +30,6 @@ char    dbName[32] = "db";
 char    stableName[64] = "st";
 int32_t numOfThreads = 30;
 int32_t numOfTables = 100000;
-int32_t maxTables = 5000;
 int32_t replica = 1;
 int32_t numOfColumns = 2;
 
@@ -97,7 +96,7 @@ void createDbAndSTable() {
     exit(1);
   }
 
-  sprintf(qstr, "create database if not exists %s maxtables %d replica %d", dbName, maxTables, replica);
+  sprintf(qstr, "create database if not exists %s replica %d", dbName, replica);
   TAOS_RES *pSql = taos_query(con, qstr);
   int32_t code = taos_errno(pSql);
   if (code != 0) {
@@ -154,7 +153,7 @@ void *threadFunc(void *param) {
     TAOS_RES *pSql = taos_query(con, qstr);
     code = taos_errno(pSql);
     if (code != 0) {
-      pError("failed to create table %s%d, reason:%s", stableName, t, taos_errstr(con));
+      pError("failed to create table %s%d, reason:%s", stableName, t, tstrerror(code));
     }
     taos_free_result(pSql);
   }
@@ -194,8 +193,6 @@ void printHelp() {
   printf("%s%s%s%d\n", indent, indent, "replica, default is ", replica);
   printf("%s%s\n", indent, "-columns");
   printf("%s%s%s%d\n", indent, indent, "numOfColumns, default is ", numOfColumns);
-  printf("%s%s\n", indent, "-tables");
-  printf("%s%s%s%d\n", indent, indent, "Database parameters tables, default is ", maxTables);
   
   exit(EXIT_SUCCESS);
 }
@@ -217,8 +214,6 @@ void shellParseArgument(int argc, char *argv[]) {
       numOfTables = atoi(argv[++i]);
     } else if (strcmp(argv[i], "-r") == 0) {
       replica = atoi(argv[++i]);
-    } else if (strcmp(argv[i], "-tables") == 0) {
-      maxTables = atoi(argv[++i]);
     } else if (strcmp(argv[i], "-columns") == 0) {
       numOfColumns = atoi(argv[++i]);
     } else {
@@ -232,7 +227,6 @@ void shellParseArgument(int argc, char *argv[]) {
   pPrint("%s numOfThreads:%d %s", GREEN, numOfThreads, NC);
   pPrint("%s numOfColumns:%d %s", GREEN, numOfColumns, NC);
   pPrint("%s replica:%d %s", GREEN, replica, NC);
-  pPrint("%s dbPara maxTables:%d %s", GREEN, maxTables, NC);
   
   pPrint("%s start create table performace test %s", GREEN, NC);
 }

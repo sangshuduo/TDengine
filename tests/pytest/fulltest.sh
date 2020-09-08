@@ -12,7 +12,7 @@ python3 ./test.py -f insert/tinyint.py
 python3 ./test.py -f insert/date.py
 python3 ./test.py -f insert/binary.py
 python3 ./test.py -f insert/nchar.py
-python3 ./test.py -f insert/nchar-boundary.py
+#python3 ./test.py -f insert/nchar-boundary.py
 python3 ./test.py -f insert/nchar-unicode.py
 python3 ./test.py -f insert/multi.py
 python3 ./test.py -f insert/randomNullCommit.py
@@ -20,7 +20,7 @@ python3 ./test.py -f insert/randomNullCommit.py
 python3 ./test.py -f table/column_name.py
 python3 ./test.py -f table/column_num.py
 python3 ./test.py -f table/db_table.py
-python3 ./test.py -f table/tablename-boundary.py
+#python3 ./test.py -f table/tablename-boundary.py
 
 # tag
 python3 ./test.py -f tag_lite/filter.py
@@ -52,7 +52,7 @@ python3 ./test.py -f tag_lite/set.py
 python3 ./test.py -f tag_lite/smallint.py
 python3 ./test.py -f tag_lite/tinyint.py
 
-python3 ./test.py -f dbmgmt/database-name-boundary.py
+#python3 ./test.py -f dbmgmt/database-name-boundary.py
 
 python3 ./test.py -f import_merge/importBlock1HO.py
 python3 ./test.py -f import_merge/importBlock1HPO.py
@@ -121,7 +121,7 @@ python3 ./test.py -f import_merge/importTORestart.py
 python3 ./test.py -f import_merge/importTPORestart.py
 python3 ./test.py -f import_merge/importTRestart.py
 python3 ./test.py -f import_merge/importInsertThenImport.py
-
+python3 ./test.py -f import_merge/importCSV.py
 # user
 python3 ./test.py -f user/user_create.py
 python3 ./test.py -f user/pass_len.py
@@ -143,6 +143,10 @@ python3 ./test.py -f query/filterOtherTypes.py
 python3 ./test.py -f query/querySort.py
 python3 ./test.py -f query/queryJoin.py
 python3 ./test.py -f query/select_last_crash.py
+python3 ./test.py -f query/queryNullValueTest.py
+python3 ./test.py -f query/queryInsertValue.py
+python3 ./test.py -f query/queryConnection.py
+python3 ./test.py -f query/natualInterval.py
 
 #stream
 python3 ./test.py -f stream/metric_1.py
@@ -156,3 +160,31 @@ python3 ./test.py -f alter/alter_table_crash.py
 
 # client
 python3 ./test.py -f client/client.py
+python3 ./test.py -f client/version.py
+
+# Misc
+python3 testCompress.py
+python3 testNoCompress.py
+python3 testMinTablesPerVnode.py
+
+# functions
+python3 ./test.py -f functions/function_avg.py
+python3 ./test.py -f functions/function_bottom.py
+python3 ./test.py -f functions/function_count.py
+python3 ./test.py -f functions/function_diff.py
+python3 ./test.py -f functions/function_first.py
+python3 ./test.py -f functions/function_last.py
+python3 ./test.py -f functions/function_last_row.py
+python3 ./test.py -f functions/function_leastsquares.py
+python3 ./test.py -f functions/function_max.py
+python3 ./test.py -f functions/function_min.py
+python3 ./test.py -f functions/function_operations.py
+python3 ./test.py -f functions/function_percentile.py
+python3 ./test.py -f functions/function_spread.py
+python3 ./test.py -f functions/function_stddev.py
+python3 ./test.py -f functions/function_sum.py
+python3 ./test.py -f functions/function_top.py
+#python3 ./test.py -f functions/function_twa.py
+
+# tools
+python3 test.py -f tools/taosdemo.py

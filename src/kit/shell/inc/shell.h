@@ -39,6 +39,7 @@ typedef struct SShellArguments {
   char* host;
   char* password;
   char* user;
+  char* auth;
   char* database;
   char* timezone;
   bool  is_raw_time;
@@ -49,6 +50,9 @@ typedef struct SShellArguments {
   char* commands;
   int   abort;
   int   port;
+  int   endPort;
+  int   pktLen;
+  char* netTestRole;
 } SShellArguments;
 
 /**************** Function declarations ****************/

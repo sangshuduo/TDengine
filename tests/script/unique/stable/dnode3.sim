@@ -5,9 +5,6 @@ system sh/deploy.sh -n dnode3 -i 3
 system sh/cfg.sh -n dnode1 -c walLevel -v 0
 system sh/cfg.sh -n dnode2 -c walLevel -v 0
 system sh/cfg.sh -n dnode3 -c walLevel -v 0
-system sh/cfg.sh -n dnode1 -c numOfTotalVnodes -v 4
-system sh/cfg.sh -n dnode2 -c numOfTotalVnodes -v 4
-system sh/cfg.sh -n dnode3 -c numOfTotalVnodes -v 4
 system sh/cfg.sh -n dnode1 -c maxtablesPerVnode -v 4
 system sh/cfg.sh -n dnode2 -c maxtablesPerVnode -v 4
 system sh/cfg.sh -n dnode3 -c maxtablesPerVnode -v 4
@@ -50,7 +47,7 @@ $i = 0
 $db = $dbPrefix . $i
 $mt = $mtPrefix . $i
 
-sql create database $db maxTables 4
+sql create database $db 
 sql use $db
 sql create table $mt (ts timestamp, tbcol int) TAGS(tgcol int)
 

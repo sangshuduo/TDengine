@@ -204,8 +204,8 @@ static void getStatics_i64(const TSKEY *primaryKey, const void *pData, int32_t n
 static void getStatics_f(const TSKEY *primaryKey, const void *pData, int32_t numOfRow, int64_t *min, int64_t *max,
                          int64_t *sum, int16_t *minIndex, int16_t *maxIndex, int16_t *numOfNull) {
   float *data = (float *)pData;
-  float fmin      = DBL_MAX;
-  float fmax      = -DBL_MAX;
+  float fmin      = FLT_MAX;
+  float fmax      = -FLT_MAX;
   double dsum     = 0;
   *minIndex       = 0;
   *maxIndex       = 0;
@@ -367,31 +367,31 @@ bool isValidDataType(int32_t type) {
   return type >= TSDB_DATA_TYPE_NULL && type <= TSDB_DATA_TYPE_NCHAR;
 }
 
-bool isNull(const char *val, int32_t type) {
-  switch (type) {
-    case TSDB_DATA_TYPE_BOOL:
-      return *(uint8_t *)val == TSDB_DATA_BOOL_NULL;
-    case TSDB_DATA_TYPE_TINYINT:
-      return *(uint8_t *)val == TSDB_DATA_TINYINT_NULL;
-    case TSDB_DATA_TYPE_SMALLINT:
-      return *(uint16_t *)val == TSDB_DATA_SMALLINT_NULL;
-    case TSDB_DATA_TYPE_INT:
-      return *(uint32_t *)val == TSDB_DATA_INT_NULL;
-    case TSDB_DATA_TYPE_BIGINT:
-    case TSDB_DATA_TYPE_TIMESTAMP:
-      return *(uint64_t *)val == TSDB_DATA_BIGINT_NULL;
-    case TSDB_DATA_TYPE_FLOAT:
-      return *(uint32_t *)val == TSDB_DATA_FLOAT_NULL;
-    case TSDB_DATA_TYPE_DOUBLE:
-      return *(uint64_t *)val == TSDB_DATA_DOUBLE_NULL;
-    case TSDB_DATA_TYPE_NCHAR:
-      return *(uint32_t*) varDataVal(val) == TSDB_DATA_NCHAR_NULL;
-    case TSDB_DATA_TYPE_BINARY:
-      return *(uint8_t *) varDataVal(val) == TSDB_DATA_BINARY_NULL;
-    default:
-      return false;
-  };
-}
+//bool isNull(const char *val, int32_t type) {
+//  switch (type) {
+//    case TSDB_DATA_TYPE_BOOL:
+//      return *(uint8_t *)val == TSDB_DATA_BOOL_NULL;
+//    case TSDB_DATA_TYPE_TINYINT:
+//      return *(uint8_t *)val == TSDB_DATA_TINYINT_NULL;
+//    case TSDB_DATA_TYPE_SMALLINT:
+//      return *(uint16_t *)val == TSDB_DATA_SMALLINT_NULL;
+//    case TSDB_DATA_TYPE_INT:
+//      return *(uint32_t *)val == TSDB_DATA_INT_NULL;
+//    case TSDB_DATA_TYPE_BIGINT:
+//    case TSDB_DATA_TYPE_TIMESTAMP:
+//      return *(uint64_t *)val == TSDB_DATA_BIGINT_NULL;
+//    case TSDB_DATA_TYPE_FLOAT:
+//      return *(uint32_t *)val == TSDB_DATA_FLOAT_NULL;
+//    case TSDB_DATA_TYPE_DOUBLE:
+//      return *(uint64_t *)val == TSDB_DATA_DOUBLE_NULL;
+//    case TSDB_DATA_TYPE_NCHAR:
+//      return *(uint32_t*) varDataVal(val) == TSDB_DATA_NCHAR_NULL;
+//    case TSDB_DATA_TYPE_BINARY:
+//      return *(uint8_t *) varDataVal(val) == TSDB_DATA_BINARY_NULL;
+//    default:
+//      return false;
+//  };
+//}
 
 void setVardataNull(char* val, int32_t type) {
   if (type == TSDB_DATA_TYPE_BINARY) {

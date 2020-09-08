@@ -18,13 +18,11 @@
 #include "cJSON.h"
 #include "taoserror.h"
 #include "taosmsg.h"
-#include "ttime.h"
 #include "ttimer.h"
 #include "tsdb.h"
 #include "twal.h"
 #include "tqueue.h"
 #include "tsync.h"
-#include "ttime.h"
 #include "ttimer.h"
 #include "tbalance.h"
 #include "tglobal.h"
@@ -52,7 +50,7 @@ void *          tsDnodeTmr = NULL;
 static void *   tsStatusTimer = NULL;
 static uint32_t tsRebootTime;
 
-static SRpcIpSet     tsDMnodeIpSet = {0};
+static SRpcEpSet     tsDMnodeEpSet = {0};
 static SDMMnodeInfos tsDMnodeInfos = {0};
 static SDMDnodeCfg   tsDnodeCfg = {0};
 static taos_qset     tsMgmtQset = NULL;
@@ -72,6 +70,7 @@ static void  *dnodeProcessMgmtQueue(void *param);
 static int32_t  dnodeOpenVnodes();
 static void     dnodeCloseVnodes();
 static int32_t  dnodeProcessCreateVnodeMsg(SRpcMsg *pMsg);
+static int32_t  dnodeProcessAlterVnodeMsg(SRpcMsg *pMsg);
 static int32_t  dnodeProcessDropVnodeMsg(SRpcMsg *pMsg);
 static int32_t  dnodeProcessAlterStreamMsg(SRpcMsg *pMsg);
 static int32_t  dnodeProcessConfigDnodeMsg(SRpcMsg *pMsg);
@@ -79,6 +78,7 @@ static int32_t (*dnodeProcessMgmtMsgFp[TSDB_MSG_TYPE_MAX])(SRpcMsg *pMsg);
 
 int32_t dnodeInitMgmt() {
   dnodeProcessMgmtMsgFp[TSDB_MSG_TYPE_MD_CREATE_VNODE] = dnodeProcessCreateVnodeMsg;
+  dnodeProcessMgmtMsgFp[TSDB_MSG_TYPE_MD_ALTER_VNODE] = dnodeProcessAlterVnodeMsg;
   dnodeProcessMgmtMsgFp[TSDB_MSG_TYPE_MD_DROP_VNODE]   = dnodeProcessDropVnodeMsg;
   dnodeProcessMgmtMsgFp[TSDB_MSG_TYPE_MD_ALTER_STREAM] = dnodeProcessAlterStreamMsg;
   dnodeProcessMgmtMsgFp[TSDB_MSG_TYPE_MD_CONFIG_DNODE] = dnodeProcessConfigDnodeMsg;
@@ -88,21 +88,21 @@ int32_t dnodeInitMgmt() {
   tsRebootTime = taosGetTimestampSec();
 
   if (!dnodeReadMnodeInfos()) {
-    memset(&tsDMnodeIpSet, 0, sizeof(SRpcIpSet));
+    memset(&tsDMnodeEpSet, 0, sizeof(SRpcEpSet));
     memset(&tsDMnodeInfos, 0, sizeof(SDMMnodeInfos));
 
-    tsDMnodeIpSet.numOfIps = 1;
-    taosGetFqdnPortFromEp(tsFirst, tsDMnodeIpSet.fqdn[0], &tsDMnodeIpSet.port[0]);
+    tsDMnodeEpSet.numOfEps = 1;
+    taosGetFqdnPortFromEp(tsFirst, tsDMnodeEpSet.fqdn[0], &tsDMnodeEpSet.port[0]);
     
     if (strcmp(tsSecond, tsFirst) != 0) {
-      tsDMnodeIpSet.numOfIps = 2;
-      taosGetFqdnPortFromEp(tsSecond, tsDMnodeIpSet.fqdn[1], &tsDMnodeIpSet.port[1]);
+      tsDMnodeEpSet.numOfEps = 2;
+      taosGetFqdnPortFromEp(tsSecond, tsDMnodeEpSet.fqdn[1], &tsDMnodeEpSet.port[1]);
     }
   } else {
-    tsDMnodeIpSet.inUse = tsDMnodeInfos.inUse;
-    tsDMnodeIpSet.numOfIps = tsDMnodeInfos.nodeNum;
+    tsDMnodeEpSet.inUse = tsDMnodeInfos.inUse;
+    tsDMnodeEpSet.numOfEps = tsDMnodeInfos.nodeNum;
     for (int32_t i = 0; i < tsDMnodeInfos.nodeNum; i++) {
-      taosGetFqdnPortFromEp(tsDMnodeInfos.nodeInfos[i].nodeEp, tsDMnodeIpSet.fqdn[i], &tsDMnodeIpSet.port[i]);
+      taosGetFqdnPortFromEp(tsDMnodeInfos.nodeInfos[i].nodeEp, tsDMnodeEpSet.fqdn[i], &tsDMnodeEpSet.port[i]);
     }
   }
 
@@ -147,6 +147,12 @@ int32_t dnodeInitMgmt() {
     return -1;
   }
 
+  dInfo("dnode mgmt is initialized");
+ 
+  return TSDB_CODE_SUCCESS;
+}
+
+int32_t dnodeInitMgmtTimer() {
   tsDnodeTmr = taosTmrInit(100, 200, 60000, "DND-DM");
   if (tsDnodeTmr == NULL) {
     dError("failed to init dnode timer");
@@ -155,13 +161,18 @@ int32_t dnodeInitMgmt() {
   }
 
   taosTmrReset(dnodeSendStatusMsg, 500, NULL, tsDnodeTmr, &tsStatusTimer);
-  
-  dInfo("dnode mgmt is initialized");
- 
+  dInfo("dnode mgmt timer is initialized");
   return TSDB_CODE_SUCCESS;
 }
 
-void dnodeCleanupMgmt() {
+void dnodeSendStatusMsgToMnode() {
+  if (tsDnodeTmr != NULL && tsStatusTimer != NULL) {
+    dInfo("force send status msg to mnode");
+    taosTmrReset(dnodeSendStatusMsg, 3, NULL, tsDnodeTmr, &tsStatusTimer);
+  }
+}
+
+void dnodeCleanupMgmtTimer() {
   if (tsStatusTimer != NULL) {
     taosTmrStopA(&tsStatusTimer);
     tsStatusTimer = NULL;
@@ -171,7 +182,10 @@ void dnodeCleanupMgmt() {
     taosTmrCleanUp(tsDnodeTmr);
     tsDnodeTmr = NULL;
   }
+}
 
+void dnodeCleanupMgmt() {
+  dnodeCleanupMgmtTimer();
   dnodeCloseVnodes();
 
   if (tsMgmtQset) taosQsetThreadResume(tsMgmtQset);
@@ -345,23 +359,6 @@ static int32_t dnodeOpenVnodes() {
   return TSDB_CODE_SUCCESS;
 }
 
-void dnodeStartStream() {
-  int32_t vnodeList[TSDB_MAX_VNODES] = {0};
-  int32_t numOfVnodes = 0;
-  int32_t status = vnodeGetVnodeList(vnodeList, &numOfVnodes);
-
-  if (status != TSDB_CODE_SUCCESS) {
-    dInfo("get dnode list failed");
-    return;
-  }
-
-  for (int32_t i = 0; i < numOfVnodes; ++i) {
-    vnodeStartStream(vnodeList[i]);
-  }
-
-  dInfo("streams started");
-}
-
 static void dnodeCloseVnodes() {
   int32_t vnodeList[TSDB_MAX_VNODES]= {0};
   int32_t numOfVnodes = 0;
@@ -381,7 +378,7 @@ static void dnodeCloseVnodes() {
   dInfo("total vnodes:%d are all closed", numOfVnodes);
 }
 
-static int32_t dnodeProcessCreateVnodeMsg(SRpcMsg *rpcMsg) {
+static void* dnodeParseVnodeMsg(SRpcMsg *rpcMsg) {
   SMDCreateVnodeMsg *pCreate = rpcMsg->pCont;
   pCreate->cfg.vgId                = htonl(pCreate->cfg.vgId);
   pCreate->cfg.cfgVersion          = htonl(pCreate->cfg.cfgVersion);
@@ -394,20 +391,42 @@ static int32_t dnodeProcessCreateVnodeMsg(SRpcMsg *rpcMsg) {
   pCreate->cfg.daysToKeep          = htonl(pCreate->cfg.daysToKeep);
   pCreate->cfg.minRowsPerFileBlock = htonl(pCreate->cfg.minRowsPerFileBlock);
   pCreate->cfg.maxRowsPerFileBlock = htonl(pCreate->cfg.maxRowsPerFileBlock);
+  pCreate->cfg.fsyncPeriod         = htonl(pCreate->cfg.fsyncPeriod);
   pCreate->cfg.commitTime          = htonl(pCreate->cfg.commitTime);
 
   for (int32_t j = 0; j < pCreate->cfg.replications; ++j) {
     pCreate->nodes[j].nodeId = htonl(pCreate->nodes[j].nodeId);
   }
 
-  void *pVnode = vnodeAcquireVnode(pCreate->cfg.vgId);
+  return pCreate;
+}
+
+static int32_t dnodeProcessCreateVnodeMsg(SRpcMsg *rpcMsg) {
+  SMDCreateVnodeMsg *pCreate = dnodeParseVnodeMsg(rpcMsg);
+
+  void *pVnode = vnodeAcquire(pCreate->cfg.vgId);
   if (pVnode != NULL) {
-    dDebug("vgId:%d, already exist, processed as alter msg", pCreate->cfg.vgId);
-    int32_t code = vnodeAlter(pVnode, pCreate);
+    dDebug("vgId:%d, already exist, return success", pCreate->cfg.vgId);
+    vnodeRelease(pVnode);
+    return TSDB_CODE_SUCCESS;
+  } else {
+    dDebug("vgId:%d, create vnode msg is received", pCreate->cfg.vgId);
+    return vnodeCreate(pCreate);
+  }
+}
+
+static int32_t dnodeProcessAlterVnodeMsg(SRpcMsg *rpcMsg) {
+  SMDAlterVnodeMsg *pAlter = dnodeParseVnodeMsg(rpcMsg);
+
+  void *pVnode = vnodeAcquire(pAlter->cfg.vgId);
+  if (pVnode != NULL) {
+    dDebug("vgId:%d, alter vnode msg is received", pAlter->cfg.vgId);
+    int32_t code = vnodeAlter(pVnode, pAlter);
     vnodeRelease(pVnode);
     return code;
   } else {
-    return vnodeCreate(pCreate);
+    dError("vgId:%d, vnode not exist, can't alter it", pAlter->cfg.vgId);
+    return TSDB_CODE_VND_INVALID_VGROUP_ID;
   }
 }
 
@@ -436,27 +455,32 @@ static int32_t dnodeProcessConfigDnodeMsg(SRpcMsg *pMsg) {
   return taosCfgDynamicOptions(pCfg->config);
 }
 
-void dnodeUpdateMnodeIpSetForPeer(SRpcIpSet *pIpSet) {
-  dInfo("mnode IP list for is changed, numOfIps:%d inUse:%d", pIpSet->numOfIps, pIpSet->inUse);
-  for (int i = 0; i < pIpSet->numOfIps; ++i) {
-    pIpSet->port[i] -= TSDB_PORT_DNODEDNODE;
-    dInfo("mnode index:%d %s:%u", i, pIpSet->fqdn[i], pIpSet->port[i])
+void dnodeUpdateMnodeEpSetForPeer(SRpcEpSet *pEpSet) {
+  if (pEpSet->numOfEps <= 0) {
+    dError("mnode EP list for peer is changed, but content is invalid, discard it");
+    return;
   }
 
-  tsDMnodeIpSet = *pIpSet;
+  dInfo("mnode EP list for peer is changed, numOfEps:%d inUse:%d", pEpSet->numOfEps, pEpSet->inUse);
+  for (int i = 0; i < pEpSet->numOfEps; ++i) {
+    pEpSet->port[i] -= TSDB_PORT_DNODEDNODE;
+    dInfo("mnode index:%d %s:%u", i, pEpSet->fqdn[i], pEpSet->port[i])
+  }
+
+  tsDMnodeEpSet = *pEpSet;
 }
 
-void dnodeGetMnodeIpSetForPeer(void *ipSetRaw) {
-  SRpcIpSet *ipSet = ipSetRaw;
-  *ipSet = tsDMnodeIpSet;
+void dnodeGetMnodeEpSetForPeer(void *epSetRaw) {
+  SRpcEpSet *epSet = epSetRaw;
+  *epSet = tsDMnodeEpSet;
 
-  for (int i=0; i<ipSet->numOfIps; ++i) 
-    ipSet->port[i] += TSDB_PORT_DNODEDNODE;
+  for (int i=0; i<epSet->numOfEps; ++i) 
+    epSet->port[i] += TSDB_PORT_DNODEDNODE;
 }
 
-void dnodeGetMnodeIpSetForShell(void *ipSetRaw) {
-  SRpcIpSet *ipSet = ipSetRaw;
-  *ipSet = tsDMnodeIpSet;
+void dnodeGetMnodeEpSetForShell(void *epSetRaw) {
+  SRpcEpSet *epSet = epSetRaw;
+  *epSet = tsDMnodeEpSet;
 }
 
 static void dnodeProcessStatusRsp(SRpcMsg *pMsg) {
@@ -477,7 +501,7 @@ static void dnodeProcessStatusRsp(SRpcMsg *pMsg) {
   SDMDnodeCfg *pCfg = &pStatusRsp->dnodeCfg;
   pCfg->numOfVnodes  = htonl(pCfg->numOfVnodes);
   pCfg->moduleStatus = htonl(pCfg->moduleStatus);
-  pCfg->dnodeId      = htonl(pCfg->dnodeId);
+  pCfg->dnodeId = htonl(pCfg->dnodeId);
 
   for (int32_t i = 0; i < pMnodes->nodeNum; ++i) {
     SDMMnodeInfo *pMnodeInfo = &pMnodes->nodeInfos[i];
@@ -522,10 +546,10 @@ static void dnodeUpdateMnodeInfos(SDMMnodeInfos *pMnodes) {
     dInfo("mnode index:%d, %s", tsDMnodeInfos.nodeInfos[i].nodeId, tsDMnodeInfos.nodeInfos[i].nodeEp);
   }
 
-  tsDMnodeIpSet.inUse = tsDMnodeInfos.inUse;
-  tsDMnodeIpSet.numOfIps = tsDMnodeInfos.nodeNum;
+  tsDMnodeEpSet.inUse = tsDMnodeInfos.inUse;
+  tsDMnodeEpSet.numOfEps = tsDMnodeInfos.nodeNum;
   for (int32_t i = 0; i < tsDMnodeInfos.nodeNum; i++) {
-    taosGetFqdnPortFromEp(tsDMnodeInfos.nodeInfos[i].nodeEp, tsDMnodeIpSet.fqdn[i], &tsDMnodeIpSet.port[i]);
+    taosGetFqdnPortFromEp(tsDMnodeInfos.nodeInfos[i].nodeEp, tsDMnodeEpSet.fqdn[i], &tsDMnodeEpSet.port[i]);
   }
 
   dnodeSaveMnodeInfos();
@@ -535,10 +559,10 @@ static void dnodeUpdateMnodeInfos(SDMMnodeInfos *pMnodes) {
 static bool dnodeReadMnodeInfos() {
   char ipFile[TSDB_FILENAME_LEN*2] = {0};
   
-  sprintf(ipFile, "%s/mnodeIpList.json", tsDnodeDir);
+  sprintf(ipFile, "%s/mnodeEpSet.json", tsDnodeDir);
   FILE *fp = fopen(ipFile, "r");
   if (!fp) {
-    dDebug("failed to read mnodeIpList.json, file not exist");
+    dDebug("failed to read mnodeEpSet.json, file not exist");
     return false;
   }
 
@@ -549,65 +573,65 @@ static bool dnodeReadMnodeInfos() {
   if (len <= 0) {
     free(content);
     fclose(fp);
-    dError("failed to read mnodeIpList.json, content is null");
+    dError("failed to read mnodeEpSet.json, content is null");
     return false;
   }
 
   content[len] = 0;
   cJSON* root = cJSON_Parse(content);
   if (root == NULL) {
-    dError("failed to read mnodeIpList.json, invalid json format");
+    dError("failed to read mnodeEpSet.json, invalid json format");
     goto PARSE_OVER;
   }
 
   cJSON* inUse = cJSON_GetObjectItem(root, "inUse");
   if (!inUse || inUse->type != cJSON_Number) {
-    dError("failed to read mnodeIpList.json, inUse not found");
+    dError("failed to read mnodeEpSet.json, inUse not found");
     goto PARSE_OVER;
   }
   tsDMnodeInfos.inUse = inUse->valueint;
 
   cJSON* nodeNum = cJSON_GetObjectItem(root, "nodeNum");
   if (!nodeNum || nodeNum->type != cJSON_Number) {
-    dError("failed to read mnodeIpList.json, nodeNum not found");
+    dError("failed to read mnodeEpSet.json, nodeNum not found");
     goto PARSE_OVER;
   }
   tsDMnodeInfos.nodeNum = nodeNum->valueint;
 
   cJSON* nodeInfos = cJSON_GetObjectItem(root, "nodeInfos");
   if (!nodeInfos || nodeInfos->type != cJSON_Array) {
-    dError("failed to read mnodeIpList.json, nodeInfos not found");
+    dError("failed to read mnodeEpSet.json, nodeInfos not found");
     goto PARSE_OVER;
   }
 
   int size = cJSON_GetArraySize(nodeInfos);
   if (size != tsDMnodeInfos.nodeNum) {
-    dError("failed to read mnodeIpList.json, nodeInfos size not matched");
+    dError("failed to read mnodeEpSet.json, nodeInfos size not matched");
     goto PARSE_OVER;
   }
 
   for (int i = 0; i < size; ++i) {
-    cJSON* nodeInfo = cJSON_GetArrayItem(nodeInfos, i);
+    cJSON *nodeInfo = cJSON_GetArrayItem(nodeInfos, i);
     if (nodeInfo == NULL) continue;
 
     cJSON *nodeId = cJSON_GetObjectItem(nodeInfo, "nodeId");
     if (!nodeId || nodeId->type != cJSON_Number) {
-      dError("failed to read mnodeIpList.json, nodeId not found");
+      dError("failed to read mnodeEpSet.json, nodeId not found");
       goto PARSE_OVER;
     }
     tsDMnodeInfos.nodeInfos[i].nodeId = nodeId->valueint;
 
     cJSON *nodeEp = cJSON_GetObjectItem(nodeInfo, "nodeEp");
     if (!nodeEp || nodeEp->type != cJSON_String || nodeEp->valuestring == NULL) {
-      dError("failed to read mnodeIpList.json, nodeName not found");
+      dError("failed to read mnodeEpSet.json, nodeName not found");
       goto PARSE_OVER;
     }
     strncpy(tsDMnodeInfos.nodeInfos[i].nodeEp, nodeEp->valuestring, TSDB_EP_LEN);
- }
+  }
 
   ret = true;
 
-  dInfo("read mnode iplist successed, numOfIps:%d inUse:%d", tsDMnodeInfos.nodeNum, tsDMnodeInfos.inUse);
+  dInfo("read mnode epSet successed, numOfEps:%d inUse:%d", tsDMnodeInfos.nodeNum, tsDMnodeInfos.inUse);
   for (int32_t i = 0; i < tsDMnodeInfos.nodeNum; i++) {
     dInfo("mnode:%d, %s", tsDMnodeInfos.nodeInfos[i].nodeId, tsDMnodeInfos.nodeInfos[i].nodeEp);
   }
@@ -621,7 +645,7 @@ PARSE_OVER:
 
 static void dnodeSaveMnodeInfos() {
   char ipFile[TSDB_FILENAME_LEN] = {0};
-  sprintf(ipFile, "%s/mnodeIpList.json", tsDnodeDir);
+  sprintf(ipFile, "%s/mnodeEpSet.json", tsDnodeDir);
   FILE *fp = fopen(ipFile, "w");
   if (!fp) return;
 
@@ -649,11 +673,11 @@ static void dnodeSaveMnodeInfos() {
   fclose(fp);
   free(content);
   
-  dInfo("save mnode iplist successed");
+  dInfo("save mnode epSet successed");
 }
 
 char *dnodeGetMnodeMasterEp() {
-  return tsDMnodeInfos.nodeInfos[tsDMnodeIpSet.inUse].nodeEp;
+  return tsDMnodeInfos.nodeInfos[tsDMnodeEpSet.inUse].nodeEp;
 }
 
 void* dnodeGetMnodeInfos() {
@@ -683,22 +707,28 @@ static void dnodeSendStatusMsg(void *handle, void *tmrId) {
   //strcpy(pStatus->dnodeName, tsDnodeName);
   pStatus->version          = htonl(tsVersion);
   pStatus->dnodeId          = htonl(tsDnodeCfg.dnodeId);
-  strcpy(pStatus->dnodeEp, tsLocalEp);
   pStatus->lastReboot       = htonl(tsRebootTime);
-  pStatus->numOfTotalVnodes = htons((uint16_t) tsNumOfTotalVnodes);
   pStatus->numOfCores       = htons((uint16_t) tsNumOfCores);
   pStatus->diskAvailable    = tsAvailDataDirGB;
   pStatus->alternativeRole  = (uint8_t) tsAlternativeRole;
+  tstrncpy(pStatus->clusterId, tsDnodeCfg.clusterId, TSDB_CLUSTER_ID_LEN);
+  tstrncpy(pStatus->dnodeEp, tsLocalEp, TSDB_EP_LEN);
 
   // fill cluster cfg parameters
-  pStatus->clusterCfg.numOfMnodes        = tsNumOfMnodes;
-  pStatus->clusterCfg.mnodeEqualVnodeNum = tsMnodeEqualVnodeNum;
-  pStatus->clusterCfg.offlineThreshold   = tsOfflineThreshold;
-  pStatus->clusterCfg.statusInterval     = tsStatusInterval;
-  strcpy(pStatus->clusterCfg.arbitrator, tsArbitrator);
-  strcpy(pStatus->clusterCfg.timezone, tsTimezone);
-  strcpy(pStatus->clusterCfg.locale, tsLocale);
-  strcpy(pStatus->clusterCfg.charset, tsCharset);  
+  pStatus->clusterCfg.numOfMnodes        = htonl(tsNumOfMnodes);
+  pStatus->clusterCfg.enableBalance      = htonl(tsEnableBalance);
+  pStatus->clusterCfg.mnodeEqualVnodeNum = htonl(tsMnodeEqualVnodeNum);
+  pStatus->clusterCfg.offlineThreshold   = htonl(tsOfflineThreshold);
+  pStatus->clusterCfg.statusInterval     = htonl(tsStatusInterval);
+  pStatus->clusterCfg.maxtablesPerVnode  = htonl(tsMaxTablePerVnode);
+  pStatus->clusterCfg.maxVgroupsPerDb    = htonl(tsMaxVgroupsPerDb);
+  tstrncpy(pStatus->clusterCfg.arbitrator, tsArbitrator, TSDB_EP_LEN);
+  tstrncpy(pStatus->clusterCfg.timezone, tsTimezone, 64);
+  pStatus->clusterCfg.checkTime = 0;
+  char timestr[32] = "1970-01-01 00:00:00.00";
+  (void)taosParseTime(timestr, &pStatus->clusterCfg.checkTime, strlen(timestr), TSDB_TIME_PRECISION_MILLI, 0);
+  tstrncpy(pStatus->clusterCfg.locale, tsLocale, TSDB_LOCALE_LEN);
+  tstrncpy(pStatus->clusterCfg.charset, tsCharset, TSDB_LOCALE_LEN);  
   
   vnodeBuildStatusMsg(pStatus);
   contLen = sizeof(SDMStatusMsg) + pStatus->openVnodes * sizeof(SVnodeLoad);
@@ -710,9 +740,9 @@ static void dnodeSendStatusMsg(void *handle, void *tmrId) {
     .msgType = TSDB_MSG_TYPE_DM_STATUS
   };
 
-  SRpcIpSet ipSet;
-  dnodeGetMnodeIpSetForPeer(&ipSet);
-  dnodeSendMsgToDnode(&ipSet, &rpcMsg);
+  SRpcEpSet epSet;
+  dnodeGetMnodeEpSetForPeer(&epSet);
+  dnodeSendMsgToDnode(&epSet, &rpcMsg);
 }
 
 static bool dnodeReadDnodeCfg() {
@@ -751,6 +781,13 @@ static bool dnodeReadDnodeCfg() {
   }
   tsDnodeCfg.dnodeId = dnodeId->valueint;
 
+  cJSON* clusterId = cJSON_GetObjectItem(root, "clusterId");
+  if (!clusterId || clusterId->type != cJSON_String) {
+    dError("failed to read dnodeCfg.json, clusterId not found");
+    goto PARSE_CFG_OVER;
+  }
+  tstrncpy(tsDnodeCfg.clusterId, clusterId->valuestring, TSDB_CLUSTER_ID_LEN);
+
   ret = true;
 
   dInfo("read numOfVnodes successed, dnodeId:%d", tsDnodeCfg.dnodeId);
@@ -770,12 +807,13 @@ static void dnodeSaveDnodeCfg() {
   if (!fp) return;
 
   int32_t len = 0;
-  int32_t maxLen = 100;
+  int32_t maxLen = 200;
   char *  content = calloc(1, maxLen + 1);
 
   len += snprintf(content + len, maxLen - len, "{\n");
-  len += snprintf(content + len, maxLen - len, "  \"dnodeId\": %d\n", tsDnodeCfg.dnodeId);
-  len += snprintf(content + len, maxLen - len, "}\n"); 
+  len += snprintf(content + len, maxLen - len, "  \"dnodeId\": %d,\n", tsDnodeCfg.dnodeId);
+  len += snprintf(content + len, maxLen - len, "  \"clusterId\": \"%s\"\n", tsDnodeCfg.clusterId);
+  len += snprintf(content + len, maxLen - len, "}\n");
 
   fwrite(content, 1, len, fp);
   fflush(fp);
@@ -787,8 +825,9 @@ static void dnodeSaveDnodeCfg() {
 
 void dnodeUpdateDnodeCfg(SDMDnodeCfg *pCfg) {
   if (tsDnodeCfg.dnodeId == 0) {
-    dInfo("dnodeId is set to %d", pCfg->dnodeId);  
+    dInfo("dnodeId is set to %d, clusterId is set to %s", pCfg->dnodeId, pCfg->clusterId);  
     tsDnodeCfg.dnodeId = pCfg->dnodeId;
+    tstrncpy(tsDnodeCfg.clusterId, pCfg->clusterId, TSDB_CLUSTER_ID_LEN);
     dnodeSaveDnodeCfg();
   }
 }
@@ -801,20 +840,20 @@ void dnodeSendRedirectMsg(SRpcMsg *rpcMsg, bool forShell) {
   SRpcConnInfo connInfo = {0};
   rpcGetConnInfo(rpcMsg->handle, &connInfo);
 
-  SRpcIpSet ipSet = {0};
+  SRpcEpSet epSet = {0};
   if (forShell) {
-    dnodeGetMnodeIpSetForShell(&ipSet);
+    dnodeGetMnodeEpSetForShell(&epSet);
   } else {
-    dnodeGetMnodeIpSetForPeer(&ipSet);
+    dnodeGetMnodeEpSetForPeer(&epSet);
   }
   
-  dDebug("msg:%s will be redirected, dnodeIp:%s user:%s, numOfIps:%d inUse:%d", taosMsg[rpcMsg->msgType],
-         taosIpStr(connInfo.clientIp), connInfo.user, ipSet.numOfIps, ipSet.inUse);
+  dDebug("msg:%s will be redirected, dnodeIp:%s user:%s, numOfEps:%d inUse:%d", taosMsg[rpcMsg->msgType],
+         taosIpStr(connInfo.clientIp), connInfo.user, epSet.numOfEps, epSet.inUse);
 
-  for (int i = 0; i < ipSet.numOfIps; ++i) {
-    dDebug("mnode index:%d %s:%d", i, ipSet.fqdn[i], ipSet.port[i]);
-    ipSet.port[i] = htons(ipSet.port[i]);
+  for (int i = 0; i < epSet.numOfEps; ++i) {
+    dDebug("mnode index:%d %s:%d", i, epSet.fqdn[i], epSet.port[i]);
+    epSet.port[i] = htons(epSet.port[i]);
   }
 
-  rpcSendRedirectRsp(rpcMsg->handle, &ipSet);
+  rpcSendRedirectRsp(rpcMsg->handle, &epSet);
 }

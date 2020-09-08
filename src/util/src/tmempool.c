@@ -13,11 +13,7 @@
  * along with this program. If not, see <http://www.gnu.org/licenses/>.
  */
 
-#include <pthread.h>
-#include <stdio.h>
-#include <stdlib.h>
-#include <string.h>
-
+#include "os.h"
 #include "tulog.h"
 #include "tmempool.h"
 #include "tutil.h"
@@ -56,9 +52,9 @@ mpool_h taosMemPoolInit(int numOfBlock, int blockSize) {
 
   if (pool_p->pool == NULL || pool_p->freeList == NULL) {
     uError("failed to allocate memory\n");
-    tfree(pool_p->freeList);
-    tfree(pool_p->pool);
-    tfree(pool_p);
+    taosTFree(pool_p->freeList);
+    taosTFree(pool_p->pool);
+    taosTFree(pool_p);
     return NULL;
   }
 

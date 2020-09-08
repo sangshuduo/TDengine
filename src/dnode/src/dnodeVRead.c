@@ -49,7 +49,7 @@ static taos_qset       readQset;
 int32_t dnodeInitVnodeRead() {
   readQset = taosOpenQset();
 
-  readPool.min = 2;
+  readPool.min = tsNumOfCores;
   readPool.max = tsNumOfCores * tsNumOfThreadsPerCore;
   if (readPool.max <= readPool.min * 2) readPool.max = 2 * readPool.min;
   readPool.readWorker = (SReadWorker *)calloc(sizeof(SReadWorker), readPool.max);
@@ -91,23 +91,21 @@ void dnodeDispatchToVnodeReadQueue(SRpcMsg *pMsg) {
   int32_t     queuedMsgNum = 0;
   int32_t     leftLen      = pMsg->contLen;
   char        *pCont       = (char *) pMsg->pCont;
-  void        *pVnode;
 
   while (leftLen > 0) {
     SMsgHead *pHead = (SMsgHead *) pCont;
     pHead->vgId    = htonl(pHead->vgId);
     pHead->contLen = htonl(pHead->contLen);
 
-    pVnode = vnodeAcquireVnode(pHead->vgId);
+    taos_queue queue = vnodeAcquireRqueue(pHead->vgId);
 
-    if (pVnode == NULL) {
+    if (queue == NULL) {
       leftLen -= pHead->contLen;
       pCont -= pHead->contLen;
       continue;
     }
 
     // put message into queue
-    taos_queue queue = vnodeGetRqueue(pVnode);
     SReadMsg *pRead = (SReadMsg *)taosAllocateQitem(sizeof(SReadMsg));
     pRead->rpcMsg      = *pMsg;
     pRead->pCont       = pCont;
@@ -175,18 +173,6 @@ void dnodeFreeVnodeRqueue(void *rqueue) {
   // dynamically adjust the number of threads
 }
 
-void dnodePutItemIntoReadQueue(void *pVnode, void *qhandle) {
-  SReadMsg *pRead = (SReadMsg *)taosAllocateQitem(sizeof(SReadMsg));
-  pRead->rpcMsg.msgType = TSDB_MSG_TYPE_QUERY;
-  pRead->pCont = qhandle;
-  pRead->contLen = 0;
-
-  assert(pVnode != NULL);
-  taos_queue queue = vnodeAcquireRqueue(pVnode);
-
-  taosWriteQitem(queue, TAOS_QTYPE_QUERY, pRead);
-}
-
 void dnodeSendRpcReadRsp(void *pVnode, SReadMsg *pRead, int32_t code) {
   SRpcMsg rpcRsp = {
     .handle  = pRead->rpcMsg.handle,
@@ -216,14 +202,19 @@ static void *dnodeProcessReadQueue(void *param) {
       break;
     }
 
-    dDebug("%p, msg:%s will be processed in vread queue, qtype:%d", pReadMsg->rpcMsg.ahandle,
-           taosMsg[pReadMsg->rpcMsg.msgType], type);
+    dDebug("%p, msg:%s will be processed in vread queue, qtype:%d, msg:%p", pReadMsg->rpcMsg.ahandle,
+           taosMsg[pReadMsg->rpcMsg.msgType], type, pReadMsg);
+
     int32_t code = vnodeProcessRead(pVnode, pReadMsg);
 
-    if (type == TAOS_QTYPE_RPC) {
+    if (type == TAOS_QTYPE_RPC && code != TSDB_CODE_QRY_NOT_READY) {
       dnodeSendRpcReadRsp(pVnode, pReadMsg, code);
     } else {
-      dnodeDispatchNonRspMsg(pVnode, pReadMsg, code);
+      if (code == TSDB_CODE_QRY_HAS_RSP) {
+        dnodeSendRpcReadRsp(pVnode, pReadMsg, pReadMsg->rpcMsg.code);
+      } else { // code == TSDB_CODE_NOT_READY, do not return msg to client
+        dnodeDispatchNonRspMsg(pVnode, pReadMsg, code);
+      }
     }
 
     taosFreeQitem(pReadMsg);

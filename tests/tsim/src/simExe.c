@@ -20,8 +20,9 @@
 #include "tglobal.h"
 #include "tutil.h"
 #include "cJSON.h"
+#undef TAOS_MEM_CHECK
 
-void simLogSql(char *sql) {
+void simLogSql(char *sql, bool useSharp) {
   static FILE *fp = NULL;
   char filename[256];
   sprintf(filename, "%s/sim.sql", tsScriptDir);
@@ -32,7 +33,12 @@ void simLogSql(char *sql) {
       return;
     }
   }
-  fprintf(fp, "%s;\n", sql);
+  if (useSharp) {
+    fprintf(fp, "# %s;\n", sql);
+  } else {
+    fprintf(fp, "%s;\n", sql);
+  }
+  
   fflush(fp);
 }
 
@@ -76,6 +82,23 @@ char *simGetVariable(SScript *script, char *varName, int varLen) {
       for (int i = 0; i < MAX_QUERY_ROW_NUM; ++i) {
         if (strncmp(keyName, script->data[i][0], keyLen) == 0) {
           simDebug("script:%s, keyName:%s, keyValue:%s", script->fileName, script->data[i][0], script->data[i][col]);
+          return script->data[i][col];
+        }
+      }
+      return "null";
+    } else if (varName[6] == '_') {
+      int col = (varName[4] - '0') * 10 + (varName[5] - '0');
+      if (col < 0 || col >= MAX_QUERY_COL_NUM) {
+        return "null";
+      }
+
+      char *keyName;
+      int keyLen;
+      paGetToken(varName + 7, &keyName, &keyLen);
+
+      for (int i = 0; i < MAX_QUERY_ROW_NUM; ++i) {
+        if (strncmp(keyName, script->data[i][0], keyLen) == 0) {
+          simTrace("script:%s, keyName:%s, keyValue:%s", script->fileName, script->data[i][0], script->data[i][col]);
           return script->data[i][col];
         }
       }
@@ -283,13 +306,16 @@ bool simExecuteSystemCmd(SScript *script, char *option) {
   sprintf(buf, "cd %s; ", tsScriptDir);
   simVisuallizeOption(script, option, buf + strlen(buf));
 
+  simLogSql(buf, true);
   int code = system(buf);
   int repeatTimes = 0;
   while (code < 0) {
     simError("script:%s, failed to execute %s , code %d, errno:%d %s, repeatTimes:%d",
         script->fileName, buf, code, errno, strerror(errno), repeatTimes);
     taosMsleep(1000);
+#ifdef LINUX    
     signal(SIGCHLD, SIG_DFL);
+#endif
     if (repeatTimes++ >= 10) {
       exit(0);
     }
@@ -355,6 +381,10 @@ bool simExecuteSleepCmd(SScript *script, char *option) {
   taosMsleep(delta);
   simInfo("script:%s, sleep %dms finished", script->fileName, delta);
 
+  char sleepStr[32] = {0};
+  sprintf(sleepStr, "sleep %d", delta);
+  simLogSql(sleepStr, true);
+
   script->linePos++;
   return true;
 }
@@ -390,14 +420,14 @@ void simVisuallizeOption(SScript *script, char *src, char *dst) {
     var = strchr(src, '$');
     if (var == NULL) break;
     if (var && ((var - src - 1) > 0) && *(var - 1) == '\\') {
-      srcLen = var - src - 1;
+      srcLen = (int)(var - src - 1);
       memcpy(dst + dstLen, src, srcLen);
       dstLen += srcLen;
       src = var;
       break;
     }
 
-    srcLen = var - src;
+    srcLen = (int)(var - src);
     memcpy(dst + dstLen, src, srcLen);
     dstLen += srcLen;
 
@@ -405,7 +435,7 @@ void simVisuallizeOption(SScript *script, char *src, char *dst) {
     value = simGetVariable(script, token, tokenLen);
 
     strcpy(dst + dstLen, value);
-    dstLen += strlen(value);
+    dstLen += (int)strlen(value);
   }
 
   strcpy(dst + dstLen, src);
@@ -427,9 +457,9 @@ void simCloseNativeConnect(SScript *script) {
 
 void simCloseTaosdConnect(SScript *script) {
   if (simAsyncQuery) {
-    return simCloseRestFulConnect(script);
+    simCloseRestFulConnect(script);
   } else {
-    return simCloseNativeConnect(script);
+    simCloseNativeConnect(script);
   }
 }
 //  {"status":"succ","code":0,"desc":"/KfeAzX/f9na8qdtNZmtONryp201ma04bEl8LcvLUd7a8qdtNZmtONryp201ma04"}
@@ -547,7 +577,7 @@ int simExecuteRestFulCommand(SScript *script, char *command) {
 
   while (!feof(fp)) {
     int availSize = mallocSize - alreadyReadSize;
-    int len = fread(content + alreadyReadSize, 1, availSize, fp);
+    int len = (int)fread(content + alreadyReadSize, 1, availSize, fp);
     if (len >= availSize) {
       alreadyReadSize += len;
       mallocSize *= 2;
@@ -562,7 +592,7 @@ int simExecuteRestFulCommand(SScript *script, char *command) {
 
 bool simCreateRestFulConnect(SScript *script, char *user, char *pass) {
   char command[4096];
-  sprintf(command, "curl 127.0.0.1:6020/rest/login/%s/%s", user, pass);
+  sprintf(command, "curl 127.0.0.1:6041/rest/login/%s/%s", user, pass);
 
   bool success = false;
   for (int attempt = 0; attempt < 10; ++attempt) {
@@ -638,17 +668,17 @@ bool simExecuteNativeSqlCommand(SScript *script, char *rest, bool isSlow) {
   TAOS_RES* pSql = NULL;
   
   for (int attempt = 0; attempt < 3; ++attempt) {
-    simLogSql(rest);
+    simLogSql(rest, false);
     pSql = taos_query(script->taos, rest);
     ret = taos_errno(pSql);
     
     if (ret == TSDB_CODE_MND_TABLE_ALREADY_EXIST || ret == TSDB_CODE_MND_DB_ALREADY_EXIST) {
-      simDebug("script:%s, taos:%p, %s success, ret:%d:%s", script->fileName, script->taos, rest, ret, tstrerror(ret));
+      simDebug("script:%s, taos:%p, %s success, ret:%d:%s", script->fileName, script->taos, rest, ret & 0XFFFF, tstrerror(ret));
       ret = 0;
       break;
     } else if (ret != 0) {
       simDebug("script:%s, taos:%p, %s failed, ret:%d:%s, error:%s",
-               script->fileName, script->taos, rest, ret, tstrerror(ret), taos_errstr(pSql));
+               script->fileName, script->taos, rest, ret & 0XFFFF, tstrerror(ret), taos_errstr(pSql));
 
       if (line->errorJump == SQL_JUMP_TRUE) {
         script->linePos = line->jump;
@@ -664,7 +694,7 @@ bool simExecuteNativeSqlCommand(SScript *script, char *rest, bool isSlow) {
   }
 
   if (ret) {
-    sprintf(script->error, "lineNum:%d. sql:%s failed, ret:%d:%s", line->lineNum, rest, ret, tstrerror(ret));
+    sprintf(script->error, "lineNum:%d. sql:%s failed, ret:%d:%s", line->lineNum, rest, ret & 0XFFFF, tstrerror(ret));
     return false;
   }
 
@@ -718,11 +748,7 @@ bool simExecuteNativeSqlCommand(SScript *script, char *rest, bool isSlow) {
               sprintf(value, "%d", *((int *)row[i]));
               break;
             case TSDB_DATA_TYPE_BIGINT:
-#ifdef _TD_ARM_32_
-              sprintf(value, "%lld", *((int64_t *)row[i]));
-#else
-              sprintf(value, "%ld", *((int64_t *)row[i]));
-#endif
+              sprintf(value, "%" PRId64, *((int64_t *)row[i]));
               break;
             case TSDB_DATA_TYPE_FLOAT:{
 #ifdef _TD_ARM_32_
@@ -753,10 +779,23 @@ bool simExecuteNativeSqlCommand(SScript *script, char *rest, bool isSlow) {
               break;
             case TSDB_DATA_TYPE_TIMESTAMP:
               tt = *(int64_t *)row[i] / 1000;
+              /* comment out as it make testcases like select_with_tags.sim fail.
+                but in windows, this may cause the call to localtime crash if tt < 0,
+                need to find a better solution.
+              if (tt < 0) {
+                tt = 0;
+              }
+              */
+
+#ifdef WINDOWS
+              if (tt < 0) tt = 0;
+#endif
+
               tp = localtime(&tt);
               strftime(timeStr, 64, "%y-%m-%d %H:%M:%S", tp);
               sprintf(value, "%s.%03d", timeStr,
-                      (int)(*((int64_t *)row[i]) % 1000));
+                (int)(*((int64_t *)row[i]) % 1000));
+              
               break;
             default:
               break;
@@ -787,14 +826,14 @@ bool simExecuteNativeSqlCommand(SScript *script, char *rest, bool isSlow) {
 bool simExecuteRestFulSqlCommand(SScript *script, char *rest) {
   SCmdLine *line = &script->lines[script->linePos];
   char command[4096];
-  sprintf(command, "curl -H 'Authorization: Taosd %s' -d \"%s\" 127.0.0.1:6020/rest/sql", script->auth, rest);
+  sprintf(command, "curl -H 'Authorization: Taosd %s' -d \"%s\" 127.0.0.1:6041/rest/sql", script->auth, rest);
 
   int ret = -1;
   for (int attempt = 0; attempt < 10; ++attempt) {
     ret = simExecuteRestFulCommand(script, command);
     if (ret == TSDB_CODE_MND_TABLE_ALREADY_EXIST ||
         ret == TSDB_CODE_MND_DB_ALREADY_EXIST) {
-      simDebug("script:%s, taos:%p, %s success, ret:%d:%s", script->fileName, script->taos, rest, ret, tstrerror(ret));
+      simDebug("script:%s, taos:%p, %s success, ret:%d:%s", script->fileName, script->taos, rest, ret & 0XFFFF, tstrerror(ret));
       ret = 0;
       break;
     } else if (ret != 0) {
@@ -919,7 +958,7 @@ bool simExecuteSqlErrorCmd(SScript *script, char *rest) {
   TAOS_RES* pSql = NULL;
   if (simAsyncQuery) {
     char command[4096];
-    sprintf(command, "curl -H 'Authorization: Taosd %s' -d '%s' 127.0.0.1:6020/rest/sql", script->auth, rest);
+    sprintf(command, "curl -H 'Authorization: Taosd %s' -d '%s' 127.0.0.1:6041/rest/sql", script->auth, rest);
     ret = simExecuteRestFulCommand(script, command);
   }
   else {
@@ -930,12 +969,12 @@ bool simExecuteSqlErrorCmd(SScript *script, char *rest) {
 
   if (ret != TSDB_CODE_SUCCESS) {
     simDebug("script:%s, taos:%p, %s execute, expect failed, so success, ret:%d:%s",
-        script->fileName, script->taos, rest, ret, tstrerror(ret));
+        script->fileName, script->taos, rest, ret & 0XFFFF, tstrerror(ret));
     script->linePos++;
     return true;
   }
   
-  sprintf(script->error, "lineNum:%d. sql:%s expect failed, but success, ret:%d:%s", line->lineNum, rest, ret, tstrerror(ret));
+  sprintf(script->error, "lineNum:%d. sql:%s expect failed, but success, ret:%d:%s", line->lineNum, rest, ret & 0XFFFF, tstrerror(ret));
 
   return false;
 }

@@ -49,8 +49,8 @@ static int32_t mnodeProcessUseMsg(SMnodeMsg *mnodeMsg);
 static void  mnodeFreeShowObj(void *data);
 static bool  mnodeAccquireShowObj(SShowObj *pShow);
 static bool  mnodeCheckShowFinished(SShowObj *pShow);
-static void *mnodePutShowObj(SShowObj *pShow, int32_t size);
-static void  mnodeReleaseShowObj(void *pShow, bool forceRemove);
+static void *mnodePutShowObj(SShowObj *pShow);
+static void  mnodeReleaseShowObj(SShowObj *pShow, bool forceRemove);
 
 extern void *tsMnodeTmr;
 static void *tsMnodeShowCache = NULL;
@@ -65,7 +65,7 @@ int32_t mnodeInitShow() {
   mnodeAddReadMsgHandle(TSDB_MSG_TYPE_CM_CONNECT, mnodeProcessConnectMsg);
   mnodeAddReadMsgHandle(TSDB_MSG_TYPE_CM_USE_DB, mnodeProcessUseMsg);
   
-  tsMnodeShowCache = taosCacheInit(TSDB_DATA_TYPE_INT, 5, false, mnodeFreeShowObj, "show");
+  tsMnodeShowCache = taosCacheInit(TSDB_DATA_TYPE_BIGINT, 5, false, mnodeFreeShowObj, "show");
   return 0;
 }
 
@@ -98,11 +98,13 @@ static char *mnodeGetShowType(int32_t showType) {
     case TSDB_MGMT_TABLE_MODULE:  return "show modules";
     case TSDB_MGMT_TABLE_QUERIES: return "show queries";
     case TSDB_MGMT_TABLE_STREAMS: return "show streams";
-    case TSDB_MGMT_TABLE_CONFIGS: return "show configs";
+    case TSDB_MGMT_TABLE_VARIABLES: return "show configs";
     case TSDB_MGMT_TABLE_CONNS:   return "show connections";
     case TSDB_MGMT_TABLE_SCORES:  return "show scores";
     case TSDB_MGMT_TABLE_GRANTS:  return "show grants";
     case TSDB_MGMT_TABLE_VNODES:  return "show vnodes";
+    case TSDB_MGMT_TABLE_CLUSTER: return "show clusters";
+    case TSDB_MGMT_TABLE_STREAMTABLES : return "show streamtables";
     default:                      return "undefined";
   }
 }
@@ -119,13 +121,13 @@ static int32_t mnodeProcessShowMsg(SMnodeMsg *pMsg) {
   }
 
   int32_t showObjSize = sizeof(SShowObj) + htons(pShowMsg->payloadLen);
-  SShowObj *pShow = (SShowObj *) calloc(1, showObjSize);
+  SShowObj *pShow = calloc(1, showObjSize);
   pShow->type       = pShowMsg->type;
   pShow->payloadLen = htons(pShowMsg->payloadLen);
   tstrncpy(pShow->db, pShowMsg->db, TSDB_DB_NAME_LEN);
   memcpy(pShow->payload, pShowMsg->payload, pShow->payloadLen);
 
-  pShow = mnodePutShowObj(pShow, showObjSize);
+  pShow = mnodePutShowObj(pShow);
   if (pShow == NULL) {    
     return TSDB_CODE_MND_OUT_OF_MEMORY;
   }
@@ -236,7 +238,7 @@ static int32_t mnodeProcessHeartBeatMsg(SMnodeMsg *pMsg) {
   }
 
   SCMHeartBeatMsg *pHBMsg = pMsg->rpcMsg.pCont;
-  SRpcConnInfo connInfo;
+  SRpcConnInfo connInfo = {0};
   rpcGetConnInfo(pMsg->rpcMsg.handle, &connInfo);
     
   int32_t connId = htonl(pHBMsg->connId);
@@ -268,9 +270,9 @@ static int32_t mnodeProcessHeartBeatMsg(SMnodeMsg *pMsg) {
     }
   }
 
-  pHBRsp->onlineDnodes = htonl(mnodeGetOnlinDnodesNum());
+  pHBRsp->onlineDnodes = htonl(mnodeGetOnlineDnodesNum());
   pHBRsp->totalDnodes = htonl(mnodeGetDnodesNum());
-  mnodeGetMnodeIpSetForShell(&pHBRsp->ipList);
+  mnodeGetMnodeEpSetForShell(&pHBRsp->epSet);
 
   pMsg->rpcRsp.rsp = pHBRsp;
   pMsg->rpcRsp.len = sizeof(SCMHeartBeatRsp);
@@ -284,7 +286,7 @@ static int32_t mnodeProcessConnectMsg(SMnodeMsg *pMsg) {
   SCMConnectRsp *pConnectRsp = NULL;
   int32_t code = TSDB_CODE_SUCCESS;
 
-  SRpcConnInfo connInfo;
+  SRpcConnInfo connInfo = {0};
   if (rpcGetConnInfo(pMsg->rpcMsg.handle, &connInfo) != 0) {
     mError("thandle:%p is already released while process connect msg", pMsg->rpcMsg.handle);
     code = TSDB_CODE_MND_INVALID_CONNECTION;
@@ -300,7 +302,7 @@ static int32_t mnodeProcessConnectMsg(SMnodeMsg *pMsg) {
   SAcctObj *pAcct = pUser->pAcct;
 
   if (pConnectMsg->db[0]) {
-    char dbName[TSDB_TABLE_ID_LEN * 3] = {0};
+    char dbName[TSDB_TABLE_FNAME_LEN * 3] = {0};
     sprintf(dbName, "%x%s%s", pAcct->acctId, TS_PATH_DELIMITER, pConnectMsg->db);
     SDbObj *pDb = mnodeGetDb(dbName);
     if (pDb == NULL) {
@@ -311,6 +313,7 @@ static int32_t mnodeProcessConnectMsg(SMnodeMsg *pMsg) {
     if (pDb->status != TSDB_DB_STATUS_READY) {
       mError("db:%s, status:%d, in dropping", pDb->name, pDb->status);
       code = TSDB_CODE_MND_DB_IN_DROPPING;
+      mnodeDecDbRef(pDb);
       goto connect_over;
     }
     mnodeDecDbRef(pDb);
@@ -335,7 +338,7 @@ static int32_t mnodeProcessConnectMsg(SMnodeMsg *pMsg) {
   pConnectRsp->writeAuth = pUser->writeAuth;
   pConnectRsp->superAuth = pUser->superAuth;
   
-  mnodeGetMnodeIpSetForShell(&pConnectRsp->ipList);
+  mnodeGetMnodeEpSetForShell(&pConnectRsp->epSet);
 
 connect_over:
   if (code != TSDB_CODE_SUCCESS) {
@@ -375,37 +378,43 @@ static bool mnodeCheckShowFinished(SShowObj *pShow) {
 }
 
 static bool mnodeAccquireShowObj(SShowObj *pShow) {
-  SShowObj *pSaved = taosCacheAcquireByKey(tsMnodeShowCache, &pShow->index, sizeof(int32_t));
-  if (pSaved == pShow) {
-    mDebug("%p, show is accquired from cache", pShow);
+  uint64_t handleVal = (uint64_t)pShow;
+  SShowObj **ppShow = taosCacheAcquireByKey(tsMnodeShowCache, &handleVal, sizeof(int64_t));
+  if (ppShow) {
+    mDebug("%p, show is accquired from cache, data:%p, index:%d", pShow, ppShow, pShow->index);
     return true;
-  } else {
-    return false;
   }
+
+  return false;
 }
 
-static void *mnodePutShowObj(SShowObj *pShow, int32_t size) {
+static void* mnodePutShowObj(SShowObj *pShow) {
   if (tsMnodeShowCache != NULL) {
     pShow->index = atomic_add_fetch_32(&tsShowObjIndex, 1);
-    SShowObj *newQhandle = taosCachePut(tsMnodeShowCache, &pShow->index, sizeof(int32_t), pShow, size, 6);
-    mDebug("%p, show is put into cache, index:%d", newQhandle, pShow->index);
-    free(pShow);
-
-    return newQhandle;
+    uint64_t handleVal = (uint64_t)pShow;
+    SShowObj **ppShow = taosCachePut(tsMnodeShowCache, &handleVal, sizeof(int64_t), &pShow, sizeof(int64_t), 6000);
+    pShow->ppShow = (void**)ppShow;
+    mDebug("%p, show is put into cache, data:%p index:%d", pShow, ppShow, pShow->index);
+    return pShow;
   }
 
   return NULL;
 }
 
 static void mnodeFreeShowObj(void *data) {
-  SShowObj *pShow = data;
+  SShowObj *pShow = *(SShowObj **)data;
   sdbFreeIter(pShow->pIter);
-  mDebug("%p, show is destroyed", pShow);
+
+  mDebug("%p, show is destroyed, data:%p index:%d", pShow, data, pShow->index);
+  taosTFree(pShow);
 }
 
-static void mnodeReleaseShowObj(void *pShow, bool forceRemove) {
-  mDebug("%p, show is released, force:%s", pShow, forceRemove ? "true" : "false");
-  taosCacheRelease(tsMnodeShowCache, &pShow, forceRemove);
+static void mnodeReleaseShowObj(SShowObj *pShow, bool forceRemove) {
+  SShowObj **ppShow = (SShowObj **)pShow->ppShow;
+  mDebug("%p, show is released, force:%s data:%p index:%d", pShow, forceRemove ? "true" : "false", ppShow,
+         pShow->index);
+
+  taosCacheRelease(tsMnodeShowCache, (void **)(&ppShow), forceRemove);
 }
 
 void mnodeVacuumResult(char *data, int32_t numOfCols, int32_t rows, int32_t capacity, SShowObj *pShow) {

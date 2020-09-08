@@ -21,7 +21,6 @@
 #include "shell.h"
 #include "shellCommand.h"
 #include "tglobal.h"
-#include "ttime.h"
 #include "tutil.h"
 
 static char **shellSQLFiles = NULL;
@@ -136,7 +135,7 @@ static void shellGetDirectoryFileList(char *inputDir)
 static void shellSourceFile(TAOS *con, char *fptr) {
   wordexp_t full_path;
   int       read_len = 0;
-  char *    cmd = malloc(MAX_COMMAND_SIZE);
+  char *    cmd = malloc(tsMaxSQLStringLen);
   size_t    cmd_len = 0;
   char *    line = NULL;
   size_t    line_len = 0;
@@ -185,7 +184,7 @@ static void shellSourceFile(TAOS *con, char *fptr) {
   int lineNo = 0;
   while ((read_len = getline(&line, &line_len, f)) != -1) {
     ++lineNo;
-    if (read_len >= MAX_COMMAND_SIZE) continue;
+    if (read_len >= tsMaxSQLStringLen) continue;
     line[--read_len] = '\0';
 
     if (read_len == 0 || isCommentLine(line)) {  // line starts with #

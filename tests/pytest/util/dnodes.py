@@ -28,16 +28,19 @@ class TDSimClient:
             "locale": "en_US.UTF-8",
             "charset": "UTF-8",
             "asyncLog": "0",
-            "anyIp": "0",
-            "sdbDebugFlag": "135",
+            "minTablesPerVnode": "4",
+            "maxTablesPerVnode": "1000",
+            "tableIncStepPerVnode": "10000",
+            "maxVgroupsPerDb": "1000",
+            "sdbDebugFlag": "143",
             "rpcDebugFlag": "135",
             "tmrDebugFlag": "131",
             "cDebugFlag": "135",
             "udebugFlag": "135",
             "jnidebugFlag": "135",
             "qdebugFlag": "135",
+            "telemetryReporting": "0",
             }
-
     def init(self, path):
         self.__init__()
         self.path = path
@@ -175,9 +178,9 @@ class TDDnode:
         self.cfg("logDir", self.logDir)
         self.cfg("numOfLogLines", "100000000")
         self.cfg("mnodeEqualVnodeNum", "0")
-        self.cfg("walLevel", "1")
+        self.cfg("walLevel", "2")
+        self.cfg("fsync", "1000")
         self.cfg("statusInterval", "1")
-        self.cfg("numOfTotalVnodes", "64")
         self.cfg("numOfMnodes", "3")
         self.cfg("numOfThreadsPerCore", "2.0")
         self.cfg("monitor", "0")
@@ -189,6 +192,7 @@ class TDDnode:
         self.cfg("charset", "UTF-8")
         self.cfg("asyncLog", "0")
         self.cfg("anyIp", "0")
+        self.cfg("tsEnableTelemetryReporting", "0")
         self.cfg("dDebugFlag", "135")
         self.cfg("mDebugFlag", "135")
         self.cfg("sdbDebugFlag", "135")
@@ -349,7 +353,7 @@ class TDDnodes:
         psCmd = "ps -ef|grep -w taosd| grep -v grep | awk '{print $2}'"
         processID = subprocess.check_output(psCmd, shell=True).decode("utf-8")
         while(processID):
-            killCmd = "kill -KILL %s > /dev/null 2>&1" % processID
+            killCmd = "kill -TERM %s > /dev/null 2>&1" % processID
             os.system(killCmd)
             time.sleep(1)
             processID = subprocess.check_output(
@@ -358,7 +362,7 @@ class TDDnodes:
         psCmd = "ps -ef|grep -w valgrind.bin| grep -v grep | awk '{print $2}'"
         processID = subprocess.check_output(psCmd, shell=True).decode("utf-8")
         while(processID):
-            killCmd = "kill -KILL %s > /dev/null 2>&1" % processID
+            killCmd = "kill -TERM %s > /dev/null 2>&1" % processID
             os.system(killCmd)
             time.sleep(1)
             processID = subprocess.check_output(
@@ -465,7 +469,7 @@ class TDDnodes:
         psCmd = "ps -ef|grep -w taosd| grep -v grep | awk '{print $2}'"
         processID = subprocess.check_output(psCmd, shell=True).decode("utf-8")
         while(processID):
-            killCmd = "kill -KILL %s > /dev/null 2>&1" % processID
+            killCmd = "kill -TERM %s > /dev/null 2>&1" % processID
             os.system(killCmd)
             time.sleep(1)
             processID = subprocess.check_output(
@@ -474,7 +478,7 @@ class TDDnodes:
         psCmd = "ps -ef|grep -w valgrind.bin| grep -v grep | awk '{print $2}'"
         processID = subprocess.check_output(psCmd, shell=True).decode("utf-8")
         while(processID):
-            killCmd = "kill -KILL %s > /dev/null 2>&1" % processID
+            killCmd = "kill -TERM %s > /dev/null 2>&1" % processID
             os.system(killCmd)
             time.sleep(1)
             processID = subprocess.check_output(

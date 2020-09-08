@@ -26,6 +26,7 @@
 #include "httpServer.h"
 #include "httpResp.h"
 #include "httpHandle.h"
+#include "httpQueue.h"
 #include "gcHandle.h"
 #include "restHandle.h"
 #include "tgHandle.h"
@@ -67,6 +68,11 @@ int httpStartSystem() {
     return -1;
   }
 
+  if (!httpInitResultQueue()) {
+    httpError("http init result queue failed");
+    return -1;
+  }
+
   if (!httpInitContexts()) {
     httpError("http init contexts failed");
     return -1;
@@ -98,8 +104,10 @@ void httpCleanUpSystem() {
   httpCleanUpConnect();
   httpCleanupContexts();
   httpCleanUpSessions();
+  httpCleanupResultQueue();
+
   pthread_mutex_destroy(&tsHttpServer.serverMutex);
-  tfree(tsHttpServer.pThreads);
+  taosTFree(tsHttpServer.pThreads);
   tsHttpServer.pThreads = NULL;
   
   tsHttpServer.status = HTTP_SERVER_CLOSED;

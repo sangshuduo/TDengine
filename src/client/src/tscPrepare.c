@@ -155,7 +155,7 @@ static int normalStmtPrepare(STscStmt* stmt) {
   uint32_t i = 0, start = 0;
 
   while (sql[i] != 0) {
-    SSQLToken token = {0};
+    SStrToken token = {0};
     token.n = tSQLGetToken(sql + i, &token.type);
 
     if (token.type == TK_QUESTION) {
@@ -298,7 +298,7 @@ static int doBindParam(char* data, SParamInfo* param, TAOS_BIND* bind) {
       break;
 
     case TSDB_DATA_TYPE_BINARY:
-      if ((*bind->length) > param->bytes) {
+      if ((*bind->length) > (uintptr_t)param->bytes) {
         return TSDB_CODE_TSC_INVALID_VALUE;
       }
       size = (short)*bind->length;
@@ -497,7 +497,7 @@ TAOS_STMT* taos_stmt_init(TAOS* taos) {
   tsem_init(&pSql->rspSem, 0, 0);
   pSql->signature     = pSql;
   pSql->pTscObj       = pObj;
-  pSql->maxRetry      = TSDB_MAX_REPLICA_NUM;
+  pSql->maxRetry      = TSDB_MAX_REPLICA;
 
   pStmt->pSql = pSql;
   return pStmt;
@@ -613,11 +613,13 @@ int taos_stmt_execute(TAOS_STMT* stmt) {
     if (sql == NULL) {
       ret = TSDB_CODE_TSC_OUT_OF_MEMORY;
     } else {
-      tfree(pStmt->pSql->sqlstr);
-      pStmt->pSql->sqlstr = sql;
-      SSqlObj* pSql = taos_query((TAOS*)pStmt->taos, pStmt->pSql->sqlstr);
-      ret = taos_errno(pSql);
-      taos_free_result(pSql);
+      if (pStmt->pSql != NULL) {
+        taos_free_result(pStmt->pSql);
+        pStmt->pSql = NULL;
+      }
+      pStmt->pSql = taos_query((TAOS*)pStmt->taos, sql);
+      ret = taos_errno(pStmt->pSql);
+      free(sql);
     }
   }
   return ret;

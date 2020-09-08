@@ -58,7 +58,7 @@ TAOS_DEFINE_MESSAGE_TYPE( TSDB_MSG_TYPE_MD_DROP_VNODE, "drop-vnode" )
 TAOS_DEFINE_MESSAGE_TYPE( TSDB_MSG_TYPE_MD_DROP_STABLE, "drop-stable" )
 TAOS_DEFINE_MESSAGE_TYPE( TSDB_MSG_TYPE_MD_ALTER_STREAM, "alter-stream" )
 TAOS_DEFINE_MESSAGE_TYPE( TSDB_MSG_TYPE_MD_CONFIG_DNODE, "config-dnode" )
-TAOS_DEFINE_MESSAGE_TYPE( TSDB_MSG_TYPE_DUMMY4, "dummy4" )
+TAOS_DEFINE_MESSAGE_TYPE( TSDB_MSG_TYPE_MD_ALTER_VNODE, "alter-vnode" )
 TAOS_DEFINE_MESSAGE_TYPE( TSDB_MSG_TYPE_DUMMY5, "dummy5" )
 TAOS_DEFINE_MESSAGE_TYPE( TSDB_MSG_TYPE_DUMMY6, "dummy6" )
 TAOS_DEFINE_MESSAGE_TYPE( TSDB_MSG_TYPE_DUMMY7, "dummy7" )
@@ -133,12 +133,13 @@ enum _mgmt_table {
   TSDB_MGMT_TABLE_MODULE,
   TSDB_MGMT_TABLE_QUERIES,
   TSDB_MGMT_TABLE_STREAMS,
-  TSDB_MGMT_TABLE_CONFIGS,
+  TSDB_MGMT_TABLE_VARIABLES,
   TSDB_MGMT_TABLE_CONNS,
   TSDB_MGMT_TABLE_SCORES,
   TSDB_MGMT_TABLE_GRANTS,
   TSDB_MGMT_TABLE_VNODES,
   TSDB_MGMT_TABLE_STREAMTABLES,
+  TSDB_MGMT_TABLE_CLUSTER,
   TSDB_MGMT_TABLE_MAX,
 };
 
@@ -149,6 +150,7 @@ enum _mgmt_table {
 
 #define TSDB_ALTER_TABLE_ADD_COLUMN        5
 #define TSDB_ALTER_TABLE_DROP_COLUMN       6
+#define TSDB_ALTER_TABLE_CHANGE_COLUMN     7
 
 #define TSDB_FILL_NONE      0
 #define TSDB_FILL_NULL      1
@@ -165,9 +167,16 @@ enum _mgmt_table {
 #define TSDB_VN_WRITE_ACCCESS ((char)0x2)
 #define TSDB_VN_ALL_ACCCESS (TSDB_VN_READ_ACCCESS | TSDB_VN_WRITE_ACCCESS)
 
-#define TSDB_COL_NORMAL 0x0u
-#define TSDB_COL_TAG    0x1u
-#define TSDB_COL_JOIN   0x2u
+#define TSDB_COL_NORMAL          0x0u    // the normal column of the table
+#define TSDB_COL_TAG             0x1u    // the tag column type
+#define TSDB_COL_UDC             0x2u    // the user specified normal string column, it is a dummy column
+#define TSDB_COL_NULL            0x4u    // the column filter NULL or not
+
+#define TSDB_COL_IS_TAG(f)    (((f&(~(TSDB_COL_NULL)))&TSDB_COL_TAG) != 0)
+#define TSDB_COL_IS_NORMAL_COL(f)    ((f&(~(TSDB_COL_NULL))) == TSDB_COL_NORMAL)
+#define TSDB_COL_IS_UD_COL(f)   ((f&(~(TSDB_COL_NULL))) == TSDB_COL_UDC)
+#define TSDB_COL_REQ_NULL(f) (((f)&TSDB_COL_NULL) != 0)
+
 
 extern char *taosMsg[];
 
@@ -176,7 +185,7 @@ extern char *taosMsg[];
 typedef struct {
   char     fqdn[TSDB_FQDN_LEN];
   uint16_t port;
-} SIpAddr;
+} SEpAddr;
 
 typedef struct {
   int32_t numOfVnodes;
@@ -204,7 +213,7 @@ typedef struct SSubmitMsg {
   SMsgHead   header;
   int32_t    length;
   int32_t    numOfBlocks;
-  SSubmitBlk blocks[];
+  char       blocks[];
 } SSubmitMsg;
 
 typedef struct {
@@ -244,13 +253,13 @@ typedef struct {
   uint64_t uid;
   uint64_t superTableUid;
   uint64_t createdTime;
-  char     tableId[TSDB_TABLE_ID_LEN];
-  char     superTableId[TSDB_TABLE_ID_LEN];
+  char     tableId[TSDB_TABLE_FNAME_LEN];
+  char     superTableId[TSDB_TABLE_FNAME_LEN];
   char     data[];
 } SMDCreateTableMsg;
 
 typedef struct {
-  char    tableId[TSDB_TABLE_ID_LEN];
+  char    tableId[TSDB_TABLE_FNAME_LEN];
   char    db[TSDB_ACCT_LEN + TSDB_DB_NAME_LEN];
   int8_t  igExists;
   int8_t  getMeta;
@@ -263,12 +272,12 @@ typedef struct {
 } SCMCreateTableMsg;
 
 typedef struct {
-  char   tableId[TSDB_TABLE_ID_LEN];
+  char   tableId[TSDB_TABLE_FNAME_LEN];
   int8_t igNotExists;
 } SCMDropTableMsg;
 
 typedef struct {
-  char    tableId[TSDB_TABLE_ID_LEN];
+  char    tableId[TSDB_TABLE_FNAME_LEN];
   char    db[TSDB_ACCT_LEN + TSDB_DB_NAME_LEN];
   int16_t type; /* operation type   */
   int16_t numOfCols; /* number of schema */
@@ -295,7 +304,7 @@ typedef struct {
 typedef struct {
   char clientVersion[TSDB_VERSION_LEN];
   char msgVersion[TSDB_VERSION_LEN];
-  char db[TSDB_TABLE_ID_LEN];
+  char db[TSDB_TABLE_FNAME_LEN];
 } SCMConnectMsg;
 
 typedef struct {
@@ -306,7 +315,7 @@ typedef struct {
   int8_t    reserved1;
   int8_t    reserved2;
   int32_t   connId;
-  SRpcIpSet ipList;
+  SRpcEpSet epSet;
 } SCMConnectRsp;
 
 typedef struct {
@@ -345,14 +354,14 @@ typedef struct {
   int32_t  vgId;
   int32_t  sid;
   uint64_t uid;
-  char     tableId[TSDB_TABLE_ID_LEN];
+  char     tableId[TSDB_TABLE_FNAME_LEN];
 } SMDDropTableMsg;
 
 typedef struct {
   int32_t  contLen;
   int32_t  vgId;
   uint64_t uid;
-  char    tableId[TSDB_TABLE_ID_LEN];
+  char    tableId[TSDB_TABLE_FNAME_LEN];
 } SMDDropSTableMsg;
 
 typedef struct {
@@ -422,7 +431,10 @@ typedef struct SColumnInfo {
   int16_t            type;
   int16_t            bytes;
   int16_t            numOfFilters;
-  SColumnFilterInfo *filters;
+  union{
+    int64_t placeholder;
+    SColumnFilterInfo *filters;
+  };
 } SColumnInfo;
 
 typedef struct STableIdInfo {
@@ -451,6 +463,7 @@ typedef struct {
   int64_t     intervalTime;     // time interval for aggregation, in million second
   int64_t     intervalOffset;   // start offset for interval query
   int64_t     slidingTime;      // value for sliding window
+  char        intervalTimeUnit;
   char        slidingTimeUnit;  // time interval type, for revisement of interval(1d)
   uint16_t    tagCondLen;       // tag length in current query
   int16_t     numOfGroupCols;   // num of group by columns
@@ -515,15 +528,17 @@ typedef struct {
   int32_t  minRowsPerFileBlock;
   int32_t  maxRowsPerFileBlock;
   int32_t  commitTime;
+  int32_t  fsyncPeriod;
   uint8_t  precision;   // time resolution
   int8_t   compression;
   int8_t   walLevel;
   int8_t   replications;
+  int8_t   quorum;
   int8_t   ignoreExist;
 } SCMCreateDbMsg, SCMAlterDbMsg;
 
 typedef struct {
-  char    db[TSDB_TABLE_ID_LEN];
+  char    db[TSDB_TABLE_FNAME_LEN];
   uint8_t ignoreNotExists;
 } SCMDropDbMsg, SCMUseDbMsg;
 
@@ -546,7 +561,8 @@ typedef struct {
   int32_t  dnodeId;
   uint32_t moduleStatus;
   uint32_t numOfVnodes;
-  uint32_t reserved;
+  char     clusterId[TSDB_CLUSTER_ID_LEN];
+  char     reserved[16];
 } SDMDnodeCfg;
 
 typedef struct {
@@ -562,11 +578,15 @@ typedef struct {
 
 typedef struct {
   int32_t  numOfMnodes;               // tsNumOfMnodes
+  int32_t  enableBalance;             // tsEnableBalance
   int32_t  mnodeEqualVnodeNum;        // tsMnodeEqualVnodeNum
   int32_t  offlineThreshold;          // tsOfflineThreshold
   int32_t  statusInterval;            // tsStatusInterval
+  int32_t  maxtablesPerVnode;
+  int32_t  maxVgroupsPerDb;
   char     arbitrator[TSDB_EP_LEN];   // tsArbitrator
   char     timezone[64];              // tsTimezone
+  int64_t  checkTime;                 // 1970-01-01 00:00:00.000
   char     locale[TSDB_LOCALE_LEN];   // tsLocale
   char     charset[TSDB_LOCALE_LEN];  // tsCharset
 } SClusterCfg;
@@ -577,12 +597,13 @@ typedef struct {
   char        dnodeEp[TSDB_EP_LEN];
   uint32_t    moduleStatus;
   uint32_t    lastReboot;        // time stamp for last reboot
-  uint16_t    numOfTotalVnodes;  // from config file
+  uint16_t    reserve1;          // from config file
   uint16_t    openVnodes;
   uint16_t    numOfCores;
   float       diskAvailable;  // GB
+  char        clusterId[TSDB_CLUSTER_ID_LEN];
   uint8_t     alternativeRole;
-  uint8_t     reserve[15];
+  uint8_t     reserve2[15];
   SClusterCfg clusterCfg;
   SVnodeLoad  load[];
 } SDMStatusMsg;
@@ -606,6 +627,7 @@ typedef struct {
   int32_t  minRowsPerFileBlock;
   int32_t  maxRowsPerFileBlock;
   int32_t  commitTime;
+  int32_t  fsyncPeriod;
   int8_t   precision;
   int8_t   compression;
   int8_t   walLevel;
@@ -624,10 +646,10 @@ typedef struct {
   char db[TSDB_ACCT_LEN + TSDB_DB_NAME_LEN];
   SMDVnodeCfg  cfg;
   SMDVnodeDesc nodes[TSDB_MAX_REPLICA];
-} SMDCreateVnodeMsg;
+} SMDCreateVnodeMsg, SMDAlterVnodeMsg;
 
 typedef struct {
-  char    tableId[TSDB_TABLE_ID_LEN];
+  char    tableId[TSDB_TABLE_FNAME_LEN];
   int16_t createFlag;
   char    tags[];
 } SCMTableInfoMsg;
@@ -643,8 +665,8 @@ typedef struct SCMSTableVgroupMsg {
 
 typedef struct {
   int32_t   vgId;
-  int8_t    numOfIps;
-  SIpAddr   ipAddr[TSDB_MAX_REPLICA_NUM];
+  int8_t    numOfEps;
+  SEpAddr   epAddr[TSDB_MAX_REPLICA];
 } SCMVgroupInfo;
 
 typedef struct {
@@ -654,7 +676,7 @@ typedef struct {
 
 typedef struct STableMetaMsg {
   int32_t       contLen;
-  char          tableId[TSDB_TABLE_ID_LEN];   // table id
+  char          tableId[TSDB_TABLE_FNAME_LEN];   // table id
   uint8_t       numOfTags;
   uint8_t       precision;
   uint8_t       tableType;
@@ -670,12 +692,12 @@ typedef struct STableMetaMsg {
 typedef struct SMultiTableMeta {
   int32_t       numOfTables;
   int32_t       contLen;
-  STableMetaMsg metas[];
+  char          metas[];
 } SMultiTableMeta;
 
 typedef struct {
   int32_t dataLen;
-  char name[TSDB_TABLE_ID_LEN];
+  char name[TSDB_TABLE_FNAME_LEN];
   char data[TSDB_MAX_TAGS_LEN + TD_KV_ROW_HEAD_SIZE + sizeof(SColIdx) * TSDB_MAX_TAGS];
 } STagData;
 
@@ -748,7 +770,7 @@ typedef struct {
   uint32_t  onlineDnodes;
   uint32_t  connId;
   int8_t    killConnection;
-  SRpcIpSet ipList;
+  SRpcEpSet epSet;
 } SCMHeartBeatRsp;
 
 typedef struct {
@@ -761,7 +783,7 @@ typedef struct {
   uint64_t uid;
   uint64_t stime;  // stream starting time
   int32_t  status;
-  char     tableId[TSDB_TABLE_ID_LEN];
+  char     tableId[TSDB_TABLE_FNAME_LEN];
 } SMDAlterStreamMsg;
 
 typedef struct {

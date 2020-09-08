@@ -30,6 +30,7 @@ enum _TSDB_DB_STATUS {
 // api
 int32_t mnodeInitDbs();
 void    mnodeCleanupDbs();
+int64_t mnodeGetDbNum();
 SDbObj *mnodeGetDb(char *db);
 SDbObj *mnodeGetDbByTableId(char *db);
 void *  mnodeGetNextDb(void *pIter, SDbObj **pDb);
@@ -44,10 +45,7 @@ void mnodeRemoveSuperTableFromDb(SDbObj *pDb);
 void mnodeAddTableIntoDb(SDbObj *pDb);
 void mnodeRemoveTableFromDb(SDbObj *pDb);
 void mnodeAddVgroupIntoDb(SVgObj *pVgroup);
-void mnodeAddVgroupIntoDbTail(SVgObj *pVgroup);
 void mnodeRemoveVgroupFromDb(SVgObj *pVgroup);
-void mnodeMoveVgroupToTail(SVgObj *pVgroup);
-void mnodeMoveVgroupToHead(SVgObj *pVgroup);
 
 #ifdef __cplusplus
 }

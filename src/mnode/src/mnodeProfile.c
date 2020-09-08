@@ -18,7 +18,6 @@
 #include "taosmsg.h"
 #include "taoserror.h"
 #include "tutil.h"
-#include "ttime.h"
 #include "tcache.h"
 #include "tglobal.h"
 #include "tdataformat.h"
@@ -68,19 +67,19 @@ int32_t mnodeInitProfile() {
   mnodeAddWriteMsgHandle(TSDB_MSG_TYPE_CM_KILL_STREAM, mnodeProcessKillStreamMsg);
   mnodeAddWriteMsgHandle(TSDB_MSG_TYPE_CM_KILL_CONN, mnodeProcessKillConnectionMsg);
 
-  tsMnodeConnCache = taosCacheInit(TSDB_DATA_TYPE_INT, CONN_CHECK_TIME, false, mnodeFreeConn, "conn");
+  tsMnodeConnCache = taosCacheInit(TSDB_DATA_TYPE_INT, CONN_CHECK_TIME, true, mnodeFreeConn, "conn");
   return 0;
 }
 
 void mnodeCleanupProfile() {
   if (tsMnodeConnCache != NULL) {
-    mInfo("conn cache is cleanup");
     taosCacheCleanup(tsMnodeConnCache);
     tsMnodeConnCache = NULL;
   }
 }
 
 SConnObj *mnodeCreateConn(char *user, uint32_t ip, uint16_t port) {
+#if 0
   int32_t connSize = taosHashGetSize(tsMnodeConnCache->pHashTable);
   if (connSize > tsMaxShellConns) {
     mError("failed to create conn for user:%s ip:%s:%u, conns:%d larger than maxShellConns:%d, ", user, taosIpStr(ip),
@@ -88,6 +87,7 @@ SConnObj *mnodeCreateConn(char *user, uint32_t ip, uint16_t port) {
     terrno = TSDB_CODE_MND_TOO_MANY_SHELL_CONNS;
     return NULL;
   }
+#endif  
 
   int32_t connId = atomic_add_fetch_32(&tsConnIndex, 1);
   if (connId == 0) atomic_add_fetch_32(&tsConnIndex, 1);
@@ -98,10 +98,12 @@ SConnObj *mnodeCreateConn(char *user, uint32_t ip, uint16_t port) {
     .connId = connId,
     .stime  = taosGetTimestampMs()
   };
+
   tstrncpy(connObj.user, user, sizeof(connObj.user));
-  
-  SConnObj *pConn = taosCachePut(tsMnodeConnCache, &connId, sizeof(int32_t), &connObj, sizeof(connObj), CONN_KEEP_TIME);
-  
+  connObj.lastAccess = connObj.stime;
+
+  SConnObj *pConn = taosCachePut(tsMnodeConnCache, &connId, sizeof(int32_t), &connObj, sizeof(connObj), CONN_KEEP_TIME * 1000);
+
   mDebug("connId:%d, is created, user:%s ip:%s:%u", connId, user, taosIpStr(ip), port);
   return pConn;
 }
@@ -113,14 +115,14 @@ void mnodeReleaseConn(SConnObj *pConn) {
 
 SConnObj *mnodeAccquireConn(int32_t connId, char *user, uint32_t ip, uint16_t port) {
   uint64_t expireTime = CONN_KEEP_TIME * 1000 + (uint64_t)taosGetTimestampMs();
-  SConnObj *pConn = taosCacheUpdateExpireTimeByName(tsMnodeConnCache, &connId, sizeof(int32_t), expireTime);
+  SConnObj *pConn = taosCacheAcquireByKey(tsMnodeConnCache, &connId, sizeof(int32_t));
   if (pConn == NULL) {
-    mError("connId:%d, is already destroyed, user:%s ip:%s:%u", connId, user, taosIpStr(ip), port);
+    mDebug("connId:%d, is already destroyed, user:%s ip:%s:%u", connId, user, taosIpStr(ip), port);
     return NULL;
   }
 
-  if (pConn->ip != ip || pConn->port != port /* || strcmp(pConn->user, user) != 0 */) {
-    mError("connId:%d, incoming conn user:%s ip:%s:%u, not match exist conn user:%s ip:%s:%u", connId, user,
+  if (/* pConn->ip != ip || */ pConn->port != port /* || strcmp(pConn->user, user) != 0 */) {
+    mDebug("connId:%d, incoming conn user:%s ip:%s:%u, not match exist conn user:%s ip:%s:%u", connId, user,
            taosIpStr(ip), port, pConn->user, taosIpStr(pConn->ip), pConn->port);
     taosCacheRelease(tsMnodeConnCache, (void **)&pConn, false);
     return NULL;
@@ -133,8 +135,8 @@ SConnObj *mnodeAccquireConn(int32_t connId, char *user, uint32_t ip, uint16_t po
 
 static void mnodeFreeConn(void *data) {
   SConnObj *pConn = data;
-  tfree(pConn->pQueries);
-  tfree(pConn->pStreams);
+  taosTFree(pConn->pQueries);
+  taosTFree(pConn->pStreams);
 
   mDebug("connId:%d, is destroyed", pConn->connId);
 }
@@ -244,6 +246,7 @@ static int32_t mnodeRetrieveConns(SShowObj *pShow, char *data, int32_t rows, voi
     cols++;
 
     pWrite = data + pShow->offset[cols] * rows + pShow->bytes[cols] * numOfRows;
+    if (pConnObj->lastAccess < pConnObj->stime) pConnObj->lastAccess = pConnObj->stime;
     *(int64_t *)pWrite = pConnObj->lastAccess;
     cols++;
 

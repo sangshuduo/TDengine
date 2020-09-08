@@ -13,18 +13,15 @@
  * along with this program. If not, see <http://www.gnu.org/licenses/>.
  */
 
-#include <stdint.h>
-#include <stdio.h>
-#include <stdlib.h>
-#include <sys/types.h>
-#include <dirent.h>
-#include <unistd.h>
-#include <fcntl.h> 
+#define _DEFAULT_SOURCE
+
+#define TAOS_RANDOM_FILE_FAIL_TEST
 
 #include "os.h"
 #include "tlog.h"
 #include "tchecksum.h"
 #include "tutil.h"
+#include "ttimer.h"
 #include "taoserror.h"
 #include "twal.h"
 #include "tqueue.h"
@@ -33,16 +30,19 @@
 
 #define wFatal(...) { if (wDebugFlag & DEBUG_FATAL) { taosPrintLog("WAL FATAL ", 255, __VA_ARGS__); }}
 #define wError(...) { if (wDebugFlag & DEBUG_ERROR) { taosPrintLog("WAL ERROR ", 255, __VA_ARGS__); }}
-#define wWarn(...)  { if (wDebugFlag & DEBUG_WARN)  { taosPrintLog("WAL WARN  ", 255, __VA_ARGS__); }}
-#define wInfo(...)  { if (wDebugFlag & DEBUG_INFO)  { taosPrintLog("WAL INFO  ", 255, __VA_ARGS__); }}
-#define wDebug(...) { if (wDebugFlag & DEBUG_DEBUG) { taosPrintLog("WAL DEBUG ", wDebugFlag, __VA_ARGS__); }}
-#define wTrace(...) { if (wDebugFlag & DEBUG_TRACE) { taosPrintLog("WAL TRACE ", wDebugFlag, __VA_ARGS__); }}
+#define wWarn(...)  { if (wDebugFlag & DEBUG_WARN)  { taosPrintLog("WAL WARN ", 255, __VA_ARGS__); }}
+#define wInfo(...)  { if (wDebugFlag & DEBUG_INFO)  { taosPrintLog("WAL ", 255, __VA_ARGS__); }}
+#define wDebug(...) { if (wDebugFlag & DEBUG_DEBUG) { taosPrintLog("WAL ", wDebugFlag, __VA_ARGS__); }}
+#define wTrace(...) { if (wDebugFlag & DEBUG_TRACE) { taosPrintLog("WAL ", wDebugFlag, __VA_ARGS__); }}
 
 typedef struct {
   uint64_t version;
   int      fd;
   int      keep;
   int      level;
+  int32_t  fsyncPeriod;
+  void    *timer;
+  void    *signature;
   int      max;  // maximum number of wal files
   uint32_t id;   // increase continuously
   int      num;  // number of wal files
@@ -51,10 +51,23 @@ typedef struct {
   pthread_mutex_t mutex;
 } SWal;
 
+static void    *walTmrCtrl = NULL;
+static int     tsWalNum = 0;
+static pthread_once_t walModuleInit = PTHREAD_ONCE_INIT;
 static uint32_t walSignature = 0xFAFBFDFE;
-static int walHandleExistingFiles(const char *path);
-static int walRestoreWalFile(SWal *pWal, void *pVnode, FWalWrite writeFp);
-static int walRemoveWalFiles(const char *path);
+static int  walHandleExistingFiles(const char *path);
+static int  walRestoreWalFile(SWal *pWal, void *pVnode, FWalWrite writeFp);
+static int  walRemoveWalFiles(const char *path);
+static void walProcessFsyncTimer(void *param, void *tmrId);
+static void walRelease(SWal *pWal);
+
+static void walModuleInitFunc() {
+  walTmrCtrl = taosTmrInit(1000, 100, 300000, "WAL");
+  if (walTmrCtrl == NULL) 
+    walModuleInit = PTHREAD_ONCE_INIT;
+  else
+    wDebug("WAL module is initialized");
+}
 
 void *walOpen(const char *path, const SWalCfg *pCfg) {
   SWal *pWal = calloc(sizeof(SWal), 1);
@@ -63,20 +76,38 @@ void *walOpen(const char *path, const SWalCfg *pCfg) {
     return NULL;
   }
 
+  pthread_once(&walModuleInit, walModuleInitFunc);
+  if (walTmrCtrl == NULL) {
+    free(pWal);
+    terrno = TAOS_SYSTEM_ERROR(errno);
+    return NULL;
+  }
+
+  atomic_add_fetch_32(&tsWalNum, 1);    
   pWal->fd = -1;
   pWal->max = pCfg->wals;
   pWal->id = 0;
   pWal->num = 0;
   pWal->level = pCfg->walLevel;
   pWal->keep = pCfg->keep;
+  pWal->fsyncPeriod = pCfg->fsyncPeriod;
+  pWal->signature = pWal;
   tstrncpy(pWal->path, path, sizeof(pWal->path));
   pthread_mutex_init(&pWal->mutex, NULL);
 
-  if (tmkdir(path, 0755) != 0) {
+  if (pWal->fsyncPeriod > 0  && pWal->level == TAOS_WAL_FSYNC) {
+    pWal->timer = taosTmrStart(walProcessFsyncTimer, pWal->fsyncPeriod, pWal, walTmrCtrl);
+    if (pWal->timer == NULL) {
+      terrno = TAOS_SYSTEM_ERROR(errno);
+      walRelease(pWal);
+      return NULL;
+    }
+  }
+
+  if (taosMkDir(path, 0755) != 0) {
     terrno = TAOS_SYSTEM_ERROR(errno);
     wError("wal:%s, failed to create directory(%s)", path, strerror(errno));
-    pthread_mutex_destroy(&pWal->mutex);
-    free(pWal);
+    walRelease(pWal);
     pWal = NULL;
   }
      
@@ -88,12 +119,11 @@ void *walOpen(const char *path, const SWalCfg *pCfg) {
   if (pWal && pWal->fd <0) {
     terrno = TAOS_SYSTEM_ERROR(errno);
     wError("wal:%s, failed to open(%s)", path, strerror(errno));
-    pthread_mutex_destroy(&pWal->mutex);
-    free(pWal);
+    walRelease(pWal);
     pWal = NULL;
   } 
 
-  if (pWal) wDebug("wal:%s, it is open, level:%d", path, pWal->level);
+  if (pWal) wDebug("wal:%s, it is open, level:%d fsyncPeriod:%d", path, pWal->level, pWal->fsyncPeriod);
   return pWal;
 }
 
@@ -101,7 +131,8 @@ void walClose(void *handle) {
   if (handle == NULL) return;
   
   SWal *pWal = handle;  
-  close(pWal->fd);
+  taosClose(pWal->fd);
+  if (pWal->timer) taosTmrStopA(&pWal->timer);
 
   if (pWal->keep == 0) {
     // remove all files in the directory
@@ -117,9 +148,7 @@ void walClose(void *handle) {
     wDebug("wal:%s, it is closed and kept", pWal->name);
   }
 
-  pthread_mutex_destroy(&pWal->mutex);
-
-  free(pWal);
+  walRelease(pWal);
 }
 
 int walRenew(void *handle) {
@@ -180,7 +209,7 @@ int walWrite(void *handle, SWalHead *pHead) {
   taosCalcChecksumAppend(0, (uint8_t *)pHead, sizeof(SWalHead));
   int contLen = pHead->len + sizeof(SWalHead);
 
-  if(write(pWal->fd, pHead, contLen) != contLen) {
+  if(taosTWrite(pWal->fd, pHead, contLen) != contLen) {
     wError("wal:%s, failed to write(%s)", pWal->name, strerror(errno));
     terrno = TAOS_SYSTEM_ERROR(errno);
   } else {
@@ -193,9 +222,9 @@ int walWrite(void *handle, SWalHead *pHead) {
 void walFsync(void *handle) {
 
   SWal *pWal = handle;
-  if (pWal == NULL) return;
+  if (pWal == NULL || pWal->level != TAOS_WAL_FSYNC || pWal->fd < 0) return;
 
-  if (pWal->level == TAOS_WAL_FSYNC && pWal->fd >=0) {
+  if (pWal->fsyncPeriod == 0) {
     if (fsync(pWal->fd) < 0) {
       wError("wal:%s, fsync failed(%s)", pWal->name, strerror(errno));
     }
@@ -302,6 +331,20 @@ int walGetWalFile(void *handle, char *name, uint32_t *index) {
   return code;
 }  
 
+static void walRelease(SWal *pWal) {
+
+  pthread_mutex_destroy(&pWal->mutex);
+  pWal->signature = NULL;
+  free(pWal);
+
+  if (atomic_sub_fetch_32(&tsWalNum, 1) == 0) {
+    if (walTmrCtrl) taosTmrCleanUp(walTmrCtrl);
+    walTmrCtrl = NULL;
+    walModuleInit = PTHREAD_ONCE_INIT;
+    wDebug("WAL module is cleaned up");
+  }
+}
+
 static int walRestoreWalFile(SWal *pWal, void *pVnode, FWalWrite writeFp) {
   char *name = pWal->name;
 
@@ -325,7 +368,7 @@ static int walRestoreWalFile(SWal *pWal, void *pVnode, FWalWrite writeFp) {
   wDebug("wal:%s, start to restore", name);
 
   while (1) {
-    int ret = read(fd, pHead, sizeof(SWalHead));
+    int ret = taosTRead(fd, pHead, sizeof(SWalHead));
     if ( ret == 0)  break;  
 
     if (ret != sizeof(SWalHead)) {
@@ -340,7 +383,7 @@ static int walRestoreWalFile(SWal *pWal, void *pVnode, FWalWrite writeFp) {
       break;
     } 
 
-    ret = read(fd, pHead->cont, pHead->len);
+    ret = taosTRead(fd, pHead->cont, pHead->len);
     if ( ret != pHead->len) {
       wWarn("wal:%s, failed to read body, skip, len:%d ret:%d", name, pHead->len, ret);
       terrno = TAOS_SYSTEM_ERROR(errno);
@@ -380,7 +423,7 @@ int walHandleExistingFiles(const char *path) {
       if ( strncmp(ent->d_name, walPrefix, plen) == 0) {
         snprintf(oname, sizeof(oname), "%s/%s", path, ent->d_name);
         snprintf(nname, sizeof(nname), "%s/old/%s", path, ent->d_name);
-        if (tmkdir(opath, 0755) != 0) {
+        if (taosMkDir(opath, 0755) != 0) {
           wError("wal:%s, failed to create directory:%s(%s)", oname, opath, strerror(errno));
           terrno = TAOS_SYSTEM_ERROR(errno);
           break; 
@@ -432,3 +475,15 @@ static int walRemoveWalFiles(const char *path) {
   return terrno;
 }
 
+static void walProcessFsyncTimer(void *param, void *tmrId) {
+  SWal *pWal = param;
+
+  if (pWal->signature != pWal) return;
+  if (pWal->fd < 0) return;
+
+  if (fsync(pWal->fd) < 0) {
+    wError("wal:%s, fsync failed(%s)", pWal->name, strerror(errno));
+  }
+  
+  pWal->timer = taosTmrStart(walProcessFsyncTimer, pWal->fsyncPeriod, pWal, walTmrCtrl);
+}

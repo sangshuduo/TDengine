@@ -18,16 +18,15 @@
 #include "tlog.h"
 #include "tscUtil.h"
 #include "tsclient.h"
-#include "ttime.h"
 
 #include "com_taosdata_jdbc_TSDBJNIConnector.h"
 
 #define jniFatal(...) { if (jniDebugFlag & DEBUG_FATAL) { taosPrintLog("JNI FATAL ", tscEmbedded ? 255 : jniDebugFlag, __VA_ARGS__); }}
 #define jniError(...) { if (jniDebugFlag & DEBUG_ERROR) { taosPrintLog("JNI ERROR ", tscEmbedded ? 255 : jniDebugFlag, __VA_ARGS__); }}
-#define jniWarn(...)  { if (jniDebugFlag & DEBUG_WARN)  { taosPrintLog("JNI WARN  ", tscEmbedded ? 255 : jniDebugFlag, __VA_ARGS__); }}
-#define jniInfo(...)  { if (jniDebugFlag & DEBUG_INFO)  { taosPrintLog("JNI INFO  ", tscEmbedded ? 255 : jniDebugFlag, __VA_ARGS__); }}
-#define jniDebug(...) { if (jniDebugFlag & DEBUG_DEBUG) { taosPrintLog("JNI DEBUG ", jniDebugFlag, __VA_ARGS__); }}
-#define jniTrace(...) { if (jniDebugFlag & DEBUG_TRACE) { taosPrintLog("JNI TRACE ", jniDebugFlag, __VA_ARGS__); }}
+#define jniWarn(...)  { if (jniDebugFlag & DEBUG_WARN)  { taosPrintLog("JNI WARN ", tscEmbedded ? 255 : jniDebugFlag, __VA_ARGS__); }}
+#define jniInfo(...)  { if (jniDebugFlag & DEBUG_INFO)  { taosPrintLog("JNI ", tscEmbedded ? 255 : jniDebugFlag, __VA_ARGS__); }}
+#define jniDebug(...) { if (jniDebugFlag & DEBUG_DEBUG) { taosPrintLog("JNI ", jniDebugFlag, __VA_ARGS__); }}
+#define jniTrace(...) { if (jniDebugFlag & DEBUG_TRACE) { taosPrintLog("JNI ", jniDebugFlag, __VA_ARGS__); }}
 
 int __init = 0;
 
@@ -225,7 +224,7 @@ JNIEXPORT jlong JNICALL Java_com_taosdata_jdbc_TSDBJNIConnector_connectImp(JNIEn
    */
   tsNumOfThreadsPerCore = 0.0;
 
-  ret = (jlong)taos_connect((char *)host, (char *)user, (char *)pass, (char *)dbname, jport);
+  ret = (jlong)taos_connect((char *)host, (char *)user, (char *)pass, (char *)dbname, (uint16_t)jport);
   if (ret == 0) {
     jniError("jobj:%p, conn:%p, connect to database failed, host=%s, user=%s, dbname=%s, port=%d", jobj, (void *)ret,
              (char *)host, (char *)user, (char *)dbname, jport);
@@ -328,13 +327,30 @@ JNIEXPORT jlong JNICALL Java_com_taosdata_jdbc_TSDBJNIConnector_getResultSetImp(
   STscObj *pObj = pSql->pTscObj;
 
   if (tscIsUpdateQuery(pSql)) {
-    // taos_free_result(pSql);  // free result here
-    jniDebug("jobj:%p, conn:%p, no resultset, %p", jobj, pObj, (void *)tres);
-    return 0;
+    jniDebug("jobj:%p, conn:%p, update query, no resultset, %p", jobj, pObj, (void *)tres);
   } else {
     jniDebug("jobj:%p, conn:%p, get resultset, %p", jobj, pObj, (void *)tres);
-    return tres;
   }
+
+  return tres;
+}
+
+JNIEXPORT jint JNICALL Java_com_taosdata_jdbc_TSDBJNIConnector_isUpdateQueryImp(JNIEnv *env, jobject jobj, jlong con,
+                                                                                jlong tres) {
+  TAOS *tscon = (TAOS *)con;
+  if (tscon == NULL) {
+    jniError("jobj:%p, connection is closed", jobj);
+    return JNI_CONNECTION_NULL;
+  }
+
+  if ((void *)tres == NULL) {
+    jniError("jobj:%p, conn:%p, resultset is null", jobj, tscon);
+    return JNI_RESULT_SET_NULL;
+  }
+
+  SSqlObj *pSql = (TAOS_RES *)tres;
+
+  return (tscIsUpdateQuery(pSql)? 1:0);
 }
 
 JNIEXPORT jint JNICALL Java_com_taosdata_jdbc_TSDBJNIConnector_freeResultSetImp(JNIEnv *env, jobject jobj, jlong con,
@@ -584,7 +600,7 @@ JNIEXPORT jlong JNICALL Java_com_taosdata_jdbc_TSDBJNIConnector_consumeImp(JNIEn
     return 0l;
   }
 
-  return (long)res;
+  return (jlong)res;
 }
 
 JNIEXPORT void JNICALL Java_com_taosdata_jdbc_TSDBJNIConnector_unsubscribeImp(JNIEnv *env, jobject jobj, jlong sub,

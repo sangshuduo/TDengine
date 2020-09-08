@@ -40,7 +40,8 @@ char*   mnodeGetDnodeStatusStr(int32_t dnodeStatus);
 void    mgmtMonitorDnodeModule();
 
 int32_t mnodeGetDnodesNum();
-int32_t mnodeGetOnlinDnodesNum();
+int32_t mnodeGetOnlinDnodesCpuCoreNum();
+int32_t mnodeGetOnlineDnodesNum();
 void *  mnodeGetNextDnode(void *pIter, SDnodeObj **pDnode);
 void    mnodeIncDnodeRef(SDnodeObj *pDnode);
 void    mnodeDecDnodeRef(SDnodeObj *pDnode);

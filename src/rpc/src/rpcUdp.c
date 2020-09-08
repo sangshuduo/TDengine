@@ -31,7 +31,7 @@
 
 typedef struct {
   int             index;
-  int             fd;
+  SOCKET          fd;
   uint16_t        port;       // peer port
   uint16_t        localPort;  // local port
   char            label[TSDB_LABEL_LEN];  // copy from udpConnSet;
@@ -144,8 +144,10 @@ void taosStopUdpConnection(void *handle) {
 
   for (int i = 0; i < pSet->threads; ++i) {
     pConn = pSet->udpConn + i;
-    if (pConn->thread) pthread_join(pConn->thread, NULL);
-    tfree(pConn->buffer);
+    if (taosCheckPthreadValid(pConn->thread)) {
+      pthread_join(pConn->thread, NULL);
+    }
+    taosTFree(pConn->buffer);
     // tTrace("%s UDP thread is closed, index:%d", pConn->label, i);
   }
 
@@ -164,7 +166,7 @@ void taosCleanUpUdpConnection(void *handle) {
   }
 
   tDebug("%s UDP is cleaned up", pSet->label);
-  tfree(pSet);
+  taosTFree(pSet);
 }
 
 void *taosOpenUdpConnection(void *shandle, void *thandle, uint32_t ip, uint16_t port) {
@@ -242,7 +244,7 @@ int taosSendUdpData(uint32_t ip, uint16_t port, void *data, int dataLen, void *c
   destAdd.sin_addr.s_addr = ip;
   destAdd.sin_port = htons(port);
 
-  int ret = (int)sendto(pConn->fd, data, (size_t)dataLen, 0, (struct sockaddr *)&destAdd, sizeof(destAdd));
+  int ret = (int)taosSendto(pConn->fd, data, (size_t)dataLen, 0, (struct sockaddr *)&destAdd, sizeof(destAdd));
 
   return ret;
 }

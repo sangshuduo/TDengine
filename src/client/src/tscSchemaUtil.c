@@ -140,7 +140,15 @@ struct SSchema tscGetTbnameColumnSchema() {
   strcpy(s.name, TSQL_TBNAME_L);
   return s;
 }
-
+static void tscInitCorVgroupInfo(SCMCorVgroupInfo *corVgroupInfo, SCMVgroupInfo *vgroupInfo) {
+  corVgroupInfo->version = 0;
+  corVgroupInfo->inUse = 0;
+  corVgroupInfo->numOfEps = vgroupInfo->numOfEps;
+  for (int32_t i = 0; i < corVgroupInfo->numOfEps; i++) {
+    strncpy(corVgroupInfo->epAddr[i].fqdn, vgroupInfo->epAddr[i].fqdn, TSDB_FQDN_LEN);
+    corVgroupInfo->epAddr[i].port = vgroupInfo->epAddr[i].port;
+  }
+}
 STableMeta* tscCreateTableMetaFromMsg(STableMetaMsg* pTableMetaMsg, size_t* size) {
   assert(pTableMetaMsg != NULL);
   
@@ -154,9 +162,12 @@ STableMeta* tscCreateTableMetaFromMsg(STableMetaMsg* pTableMetaMsg, size_t* size
     .numOfColumns = pTableMetaMsg->numOfColumns,
   };
   
-  pTableMeta->sid = pTableMetaMsg->sid;
-  pTableMeta->uid = pTableMetaMsg->uid;
+  pTableMeta->id.tid = pTableMetaMsg->sid;
+  pTableMeta->id.uid = pTableMetaMsg->uid;
   pTableMeta->vgroupInfo = pTableMetaMsg->vgroup;
+
+  tscInitCorVgroupInfo(&pTableMeta->corVgroupInfo, &pTableMeta->vgroupInfo);
+
   pTableMeta->sversion = pTableMetaMsg->sversion;
   pTableMeta->tversion = pTableMetaMsg->tversion;
   
@@ -197,7 +208,7 @@ char* tsGetTagsValue(STableMeta* pTableMeta) {
 }
 
 // todo refactor
-__attribute__ ((unused))static FORCE_INLINE char* skipSegments(char* input, char delim, int32_t num) {
+UNUSED_FUNC static FORCE_INLINE char* skipSegments(char* input, char delim, int32_t num) {
   for (int32_t i = 0; i < num; ++i) {
     while (*input != 0 && *input++ != delim) {
     };
@@ -205,7 +216,7 @@ __attribute__ ((unused))static FORCE_INLINE char* skipSegments(char* input, char
   return input;
 }
 
-__attribute__ ((unused)) static FORCE_INLINE size_t copy(char* dst, const char* src, char delimiter) {
+UNUSED_FUNC static FORCE_INLINE size_t copy(char* dst, const char* src, char delimiter) {
   size_t len = 0;
   while (*src != delimiter && *src != 0) {
     *dst++ = *src++;

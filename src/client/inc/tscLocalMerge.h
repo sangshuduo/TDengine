@@ -20,8 +20,8 @@
 extern "C" {
 #endif
 
-#include "qextbuffer.h"
-#include "qfill.h"
+#include "qExtbuffer.h"
+#include "qFill.h"
 #include "taosmsg.h"
 #include "tlosertree.h"
 #include "tsclient.h"
@@ -87,7 +87,6 @@ typedef struct SRetrieveSupport {
   SSqlObj *         pParentSql;
   tFilePage *       localBuffer;       // temp buffer, there is a buffer for each vnode to
   uint32_t          numOfRetry;        // record the number of retry times
-  pthread_mutex_t   queryMutex;
 } SRetrieveSupport;
 
 int32_t tscLocalReducerEnvCreate(SSqlObj *pSql, tExtMemBuffer ***pMemBuffer, tOrderDescriptor **pDesc,

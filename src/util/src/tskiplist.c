@@ -19,7 +19,7 @@
 #include "tutil.h"
 #include "tcompare.h"
 
-__attribute__ ((unused)) static FORCE_INLINE void recordNodeEachLevel(SSkipList *pSkipList, int32_t level) {  // record link count in each level
+UNUSED_FUNC static FORCE_INLINE void recordNodeEachLevel(SSkipList *pSkipList, int32_t level) {  // record link count in each level
 #if SKIP_LIST_RECORD_PERFORMANCE
   for (int32_t i = 0; i < level; ++i) {
     pSkipList->state.nLevelNodeCnt[i]++;
@@ -27,7 +27,7 @@ __attribute__ ((unused)) static FORCE_INLINE void recordNodeEachLevel(SSkipList 
 #endif
 }
 
-__attribute__ ((unused)) static FORCE_INLINE void removeNodeEachLevel(SSkipList *pSkipList, int32_t level) {
+UNUSED_FUNC static FORCE_INLINE void removeNodeEachLevel(SSkipList *pSkipList, int32_t level) {
 #if SKIP_LIST_RECORD_PERFORMANCE
   for (int32_t i = 0; i < level; ++i) {
     pSkipList->state.nLevelNodeCnt[i]--;
@@ -132,7 +132,7 @@ static bool initForwardBackwardPtr(SSkipList* pSkipList) {
   pSkipList->pTail = (SSkipListNode*) ((char*) pSkipList->pHead + SL_NODE_HEADER_SIZE(maxLevel));
   pSkipList->pTail->level = pSkipList->maxLevel;
   
-  for(int32_t i = 0; i < maxLevel; ++i) {
+  for (uint32_t i = 0; i < maxLevel; ++i) {
     SL_GET_FORWARD_POINTER(pSkipList->pHead, i) = pSkipList->pTail;
     SL_GET_BACKWARD_POINTER(pSkipList->pTail, i) = pSkipList->pHead;
   }
@@ -162,7 +162,7 @@ SSkipList *tSkipListCreate(uint8_t maxLevel, uint8_t keyType, uint8_t keyLen, ui
   pSkipList->level    = 1;
   
   if (!initForwardBackwardPtr(pSkipList)) {
-    tfree(pSkipList);
+    taosTFree(pSkipList);
     return NULL;
   }
   
@@ -170,14 +170,14 @@ SSkipList *tSkipListCreate(uint8_t maxLevel, uint8_t keyType, uint8_t keyLen, ui
     pSkipList->lock = calloc(1, sizeof(pthread_rwlock_t));
 
     if (pthread_rwlock_init(pSkipList->lock, NULL) != 0) {
-      tfree(pSkipList->pHead);
-      tfree(pSkipList);
+      taosTFree(pSkipList->pHead);
+      taosTFree(pSkipList);
       
       return NULL;
     }
   }
 
-  srand(time(NULL));
+  srand((uint32_t)time(NULL));
 
 #if SKIP_LIST_RECORD_PERFORMANCE
   pSkipList->state.nTotalMemSize += sizeof(SSkipList);
@@ -201,7 +201,7 @@ void *tSkipListDestroy(SSkipList *pSkipList) {
     while (pNode != pSkipList->pTail) {
       SSkipListNode *pTemp = pNode;
       pNode = SL_GET_FORWARD_POINTER(pNode, 0);
-      tfree(pTemp);
+      taosTFree(pTemp);
     }
   }
 
@@ -209,11 +209,11 @@ void *tSkipListDestroy(SSkipList *pSkipList) {
     pthread_rwlock_unlock(pSkipList->lock);
     pthread_rwlock_destroy(pSkipList->lock);
 
-    tfree(pSkipList->lock);
+    taosTFree(pSkipList->lock);
   }
 
-  tfree(pSkipList->pHead);
-  tfree(pSkipList);
+  taosTFree(pSkipList->pHead);
+  taosTFree(pSkipList);
   return NULL;
 }
 
@@ -470,7 +470,7 @@ uint32_t tSkipListRemove(SSkipList *pSkipList, SSkipListKey key) {
     }
 
     if (pSkipList->keyInfo.freeNode) {
-      tfree(p);
+      taosTFree(p);
     }
 
     ++count;
@@ -509,7 +509,7 @@ void tSkipListRemoveNode(SSkipList *pSkipList, SSkipListNode *pNode) {
   }
   
   if (pSkipList->keyInfo.freeNode) {
-    tfree(pNode);
+    taosTFree(pNode);
   }
   
   atomic_sub_fetch_32(&pSkipList->size, 1);
@@ -592,7 +592,7 @@ void* tSkipListDestroyIter(SSkipListIterator* iter) {
     return NULL;
   }
   
-  tfree(iter);
+  taosTFree(iter);
   return NULL;
 }
 

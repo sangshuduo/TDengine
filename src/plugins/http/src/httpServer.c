@@ -18,7 +18,6 @@
 #include "taosmsg.h"
 #include "tsocket.h"
 #include "tutil.h"
-#include "ttime.h"
 #include "ttimer.h"
 #include "tglobal.h"
 #include "httpInt.h"
@@ -39,6 +38,7 @@ static void httpStopThread(HttpThread* pThread) {
   eventfd_t fd = eventfd(1, 0);
   if (fd == -1) {
     httpError("%s, failed to create eventfd, will call pthread_cancel instead, which may result in data corruption: %s", pThread->label, strerror(errno));
+    pThread->stop = true;
     pthread_cancel(pThread->thread);
   } else if (epoll_ctl(pThread->pollFd, EPOLL_CTL_ADD, fd, &event) < 0) {
     httpError("%s, failed to call epoll_ctl, will call pthread_cancel instead, which may result in data corruption: %s", pThread->label, strerror(errno));
@@ -69,7 +69,7 @@ void httpCleanUpConnect() {
   httpDebug("http server:%s is cleaned up", pServer->label);
 }
 
-bool httpReadDataImp(HttpContext *pContext) {
+int httpReadDataImp(HttpContext *pContext) {
   HttpParser *pParser = &pContext->parser;
 
   while (pParser->bufsize <= (HTTP_BUFFER_SIZE - HTTP_STEP_SIZE)) {
@@ -85,8 +85,7 @@ bool httpReadDataImp(HttpContext *pContext) {
       } else {
         httpError("context:%p, fd:%d, ip:%s, read from socket error:%d, close connect",
                   pContext, pContext->fd, pContext->ipstr, errno);
-        httpReleaseContext(pContext);      
-        return false;
+        return HTTP_READ_DATA_FAILED;
       }
     } else {
       pParser->bufsize += nread;
@@ -95,15 +94,13 @@ bool httpReadDataImp(HttpContext *pContext) {
     if (pParser->bufsize >= (HTTP_BUFFER_SIZE - HTTP_STEP_SIZE)) {
       httpError("context:%p, fd:%d, ip:%s, thread:%s, request big than:%d",
                 pContext, pContext->fd, pContext->ipstr, pContext->pThread->label, HTTP_BUFFER_SIZE);
-      httpSendErrorResp(pContext, HTTP_REQUSET_TOO_BIG);
-      httpNotifyContextClose(pContext);
-      return false;
+      return HTTP_REQUSET_TOO_BIG;
     }
   }
 
   pParser->buffer[pParser->bufsize] = 0;
 
-  return true;
+  return HTTP_READ_DATA_SUCCESS;
 }
 
 static bool httpDecompressData(HttpContext *pContext) {
@@ -141,8 +138,14 @@ static bool httpReadData(HttpContext *pContext) {
     httpInitContext(pContext);
   }
 
-  if (!httpReadDataImp(pContext)) {
-    httpNotifyContextClose(pContext);
+  int32_t code = httpReadDataImp(pContext);
+  if (code != HTTP_READ_DATA_SUCCESS) {
+    if (code == HTTP_READ_DATA_FAILED) {
+      httpReleaseContext(pContext);
+    } else {
+      httpSendErrorResp(pContext, code);
+      httpNotifyContextClose(pContext);
+    }
     return false;
   }
 
@@ -200,7 +203,7 @@ static void httpProcessHttpData(void *param) {
       if (pContext == NULL) {
         httpError("context:%p, is already released, close connect", events[i].data.ptr);
         //epoll_ctl(pThread->pollFd, EPOLL_CTL_DEL, events[i].data.fd, NULL);
-        //tclose(events[i].data.fd);
+        //taosClose(events[i].data.fd);
         continue;
       }
 
@@ -293,15 +296,17 @@ static void *httpAcceptHttpConnection(void *arg) {
 
     totalFds = 1;
     for (int i = 0; i < pServer->numOfThreads; ++i) {
-      totalFds += pServer->pThreads[i].numOfFds;
+      totalFds += pServer->pThreads[i].numOfContexts;
     }
 
+#if 0
     if (totalFds > tsHttpCacheSessions * 100) {
       httpError("fd:%d, ip:%s:%u, totalFds:%d larger than httpCacheSessions:%d*100, refuse connection", connFd,
-                inet_ntoa(clientAddr.sin_addr), htons(clientAddr.sin_port), totalFds, tsHttpCacheSessions);
+                taosInetNtoa(clientAddr.sin_addr), htons(clientAddr.sin_port), totalFds, tsHttpCacheSessions);
       taosCloseSocket(connFd);
       continue;
     }
+#endif    
 
     taosKeepTcpAlive(connFd);
     taosSetNonblocking(connFd, 1);
@@ -311,14 +316,14 @@ static void *httpAcceptHttpConnection(void *arg) {
 
     pContext = httpCreateContext(connFd);
     if (pContext == NULL) {
-      httpError("fd:%d, ip:%s:%u, no enough resource to allocate http context", connFd, inet_ntoa(clientAddr.sin_addr),
+      httpError("fd:%d, ip:%s:%u, no enough resource to allocate http context", connFd, taosInetNtoa(clientAddr.sin_addr),
                 htons(clientAddr.sin_port));
       taosCloseSocket(connFd);
       continue;
     }
 
     pContext->pThread = pThread;
-    sprintf(pContext->ipstr, "%s:%u", inet_ntoa(clientAddr.sin_addr), htons(clientAddr.sin_port));
+    sprintf(pContext->ipstr, "%s:%u", taosInetNtoa(clientAddr.sin_addr), htons(clientAddr.sin_port));
     
     struct epoll_event event;
     event.events = EPOLLIN | EPOLLPRI | EPOLLWAKEUP | EPOLLERR | EPOLLHUP | EPOLLRDHUP;
@@ -326,15 +331,15 @@ static void *httpAcceptHttpConnection(void *arg) {
     if (epoll_ctl(pThread->pollFd, EPOLL_CTL_ADD, connFd, &event) < 0) {
       httpError("context:%p, fd:%d, ip:%s, thread:%s, failed to add http fd for epoll, error:%s", pContext, connFd,
                 pContext->ipstr, pThread->label, strerror(errno));
-      tclose(pContext->fd);
+      taosClose(pContext->fd);
       httpReleaseContext(pContext);
       continue;
     }
 
     // notify the data process, add into the FdObj list
-    atomic_add_fetch_32(&pThread->numOfFds, 1);
-    httpDebug("context:%p, fd:%d, ip:%s, thread:%s numOfFds:%d totalFds:%d, accept a new connection", pContext, connFd,
-              pContext->ipstr, pThread->label, pThread->numOfFds, totalFds);
+    atomic_add_fetch_32(&pThread->numOfContexts, 1);
+    httpDebug("context:%p, fd:%d, ip:%s, thread:%s numOfContexts:%d totalContext:%d, accept a new connection", pContext,
+              connFd, pContext->ipstr, pThread->label, pThread->numOfContexts, totalFds);
 
     // pick up next thread for next connection
     threadId++;

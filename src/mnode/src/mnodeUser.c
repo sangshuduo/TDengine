@@ -16,11 +16,11 @@
 #define _DEFAULT_SOURCE
 #include "os.h"
 #include "trpc.h"
-#include "ttime.h"
 #include "tutil.h"
 #include "tglobal.h"
 #include "tgrant.h"
 #include "tdataformat.h"
+#include "tkey.h"
 #include "mnode.h"
 #include "dnode.h"
 #include "mnodeDef.h"
@@ -43,7 +43,7 @@ static int32_t mnodeProcessDropUserMsg(SMnodeMsg *pMsg);
 static int32_t mnodeProcessAuthMsg(SMnodeMsg *pMsg);
 
 static int32_t mnodeUserActionDestroy(SSdbOper *pOper) {
-  tfree(pOper->pObj);
+  taosTFree(pOper->pObj);
   return TSDB_CODE_SUCCESS;
 }
 
@@ -101,6 +101,32 @@ static int32_t mnodeUserActionDecode(SSdbOper *pOper) {
   return TSDB_CODE_SUCCESS;
 }
 
+static void mnodePrintUserAuth() {
+  FILE *fp = fopen("auth.txt", "w");
+  if (!fp) {
+    mDebug("failed to auth.txt for write");
+    return;
+  }
+  
+  void *    pIter = NULL;
+  SUserObj *pUser = NULL;
+
+  while (1) {
+    pIter = mnodeGetNextUser(pIter, &pUser);
+    if (pUser == NULL) break;
+
+    char *base64 = base64_encode((const unsigned char *)pUser->pass, TSDB_KEY_LEN * 2);
+    fprintf(fp, "user:%24s auth:%s\n", pUser->user, base64);
+    free(base64);
+
+    mnodeDecUserRef(pUser);
+  }
+
+  fflush(fp);
+  sdbFreeIter(pIter);
+  fclose(fp);
+}
+
 static int32_t mnodeUserActionRestored() {
   int32_t numOfRows = sdbGetNumOfRows(tsUserSdb);
   if (numOfRows <= 0 && dnodeIsFirstDeploy()) {
@@ -110,6 +136,11 @@ static int32_t mnodeUserActionRestored() {
     mnodeCreateUser(pAcct, "monitor", tsInternalPass, NULL);
     mnodeCreateUser(pAcct, "_"TSDB_DEFAULT_USER, tsInternalPass, NULL);
     mnodeDecAcctRef(pAcct);
+  }
+
+  if (tsPrintAuth != 0) {
+    mInfo("print user auth, for -A parameter is set");
+    mnodePrintUserAuth();
   }
 
   return TSDB_CODE_SUCCESS;
@@ -182,9 +213,10 @@ static int32_t mnodeUpdateUser(SUserObj *pUser, void *pMsg) {
   };
 
   int32_t code = sdbUpdateRow(&oper);
-  if (code == TSDB_CODE_SUCCESS) {
+  if (code != TSDB_CODE_SUCCESS && code != TSDB_CODE_MND_ACTION_IN_PROGRESS) {
+    mError("user:%s, failed to alter by %s, reason:%s", pUser->user, mnodeGetUserFromMsg(pMsg), tstrerror(code));
+  } else {
     mLInfo("user:%s, is altered by %s", pUser->user, mnodeGetUserFromMsg(pMsg));
-    if (pMsg != NULL) code = TSDB_CODE_MND_ACTION_IN_PROGRESS;
   }
 
   return code;
@@ -236,11 +268,11 @@ int32_t mnodeCreateUser(SAcctObj *pAcct, char *name, char *pass, void *pMsg) {
   };
 
   code = sdbInsertRow(&oper);
-  if (code != TSDB_CODE_SUCCESS) {
-    tfree(pUser);
+  if (code != TSDB_CODE_SUCCESS && code != TSDB_CODE_MND_ACTION_IN_PROGRESS) {
+    mError("user:%s, failed to create by %s, reason:%s", pUser->user, mnodeGetUserFromMsg(pMsg), tstrerror(code));
+    taosTFree(pUser);
   } else {
     mLInfo("user:%s, is created by %s", pUser->user, mnodeGetUserFromMsg(pMsg));
-    if (pMsg != NULL) code = TSDB_CODE_MND_ACTION_IN_PROGRESS;
   }
 
   return code;
@@ -255,9 +287,10 @@ static int32_t mnodeDropUser(SUserObj *pUser, void *pMsg) {
   };
 
   int32_t code = sdbDeleteRow(&oper);
-  if (code == TSDB_CODE_SUCCESS) {
+  if (code != TSDB_CODE_SUCCESS && code != TSDB_CODE_MND_ACTION_IN_PROGRESS) {
+    mError("user:%s, failed to drop by %s, reason:%s", pUser->user, mnodeGetUserFromMsg(pMsg), tstrerror(code));
+  } else {
     mLInfo("user:%s, is dropped by %s", pUser->user, mnodeGetUserFromMsg(pMsg));
-    if (pMsg != NULL) code = TSDB_CODE_MND_ACTION_IN_PROGRESS;
   }
 
   return code;
@@ -358,7 +391,7 @@ static int32_t mnodeRetrieveUsers(SShowObj *pShow, char *data, int32_t rows, voi
 }
 
 SUserObj *mnodeGetUserFromConn(void *pConn) {
-  SRpcConnInfo connInfo;
+  SRpcConnInfo connInfo = {0};
   if (rpcGetConnInfo(pConn, &connInfo) == 0) {
     return mnodeGetUser(connInfo.user);
   } else {
@@ -548,8 +581,8 @@ void mnodeDropAllUsers(SAcctObj *pAcct)  {
 int32_t mnodeRetriveAuth(char *user, char *spi, char *encrypt, char *secret, char *ckey) {
   if (!sdbIsMaster()) {
     *secret = 0;
-    mDebug("user:%s, failed to auth user, reason:%s", user, tstrerror(TSDB_CODE_RPC_NOT_READY));
-    return TSDB_CODE_RPC_NOT_READY;
+    mDebug("user:%s, failed to auth user, mnode is not master", user);
+    return TSDB_CODE_APP_NOT_READY;
   }
 
   SUserObj *pUser = mnodeGetUser(user);

@@ -26,6 +26,7 @@ extern "C" {
 typedef enum _TAOS_SYNC_ROLE {
   TAOS_SYNC_ROLE_OFFLINE,
   TAOS_SYNC_ROLE_UNSYNCED,
+  TAOS_SYNC_ROLE_SYNCING,
   TAOS_SYNC_ROLE_SLAVE,
   TAOS_SYNC_ROLE_MASTER,
 } ESyncRole;
@@ -63,7 +64,7 @@ typedef struct {
   if name is provided(name[0] is not zero), get the named file at the specified index. If not there, return
   zero. If it is there, set the size to file size, and return file magic number. Index shall not be updated.
 */
-typedef uint32_t (*FGetFileInfo)(void *ahandle, char *name, uint32_t *index, uint32_t eindex, int32_t *size, uint64_t *fversion); 
+typedef uint32_t (*FGetFileInfo)(void *ahandle, char *name, uint32_t *index, uint32_t eindex, int64_t *size, uint64_t *fversion); 
 
 // get the wal file from index or after
 // return value, -1: error, 1:more wal files, 0:last WAL. if name[0]==0, no WAL file
@@ -78,8 +79,11 @@ typedef void     (*FConfirmForward)(void *ahandle, void *mhandle, int32_t code);
 // when role is changed, call this to notify app
 typedef void     (*FNotifyRole)(void *ahandle, int8_t role);
 
+// if a number of retrieving data failed, call this to start flow control 
+typedef void     (*FNotifyFlowCtrl)(void *ahandle, int32_t mseconds);
+
 // when data file is synced successfully, notity app
-typedef void     (*FNotifyFileSynced)(void *ahandle, uint64_t fversion);
+typedef int      (*FNotifyFileSynced)(void *ahandle, uint64_t fversion);
 
 typedef struct {
   int32_t    vgId;      // vgroup ID
@@ -93,6 +97,7 @@ typedef struct {
   FWriteToCache   writeToCache;
   FConfirmForward confirmForward;
   FNotifyRole     notifyRole;
+  FNotifyFlowCtrl notifyFlowCtrl;
   FNotifyFileSynced notifyFileSynced;
 } SSyncInfo;
 

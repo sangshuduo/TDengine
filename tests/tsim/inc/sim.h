@@ -30,8 +30,8 @@
 #define MAX_FILE_NAME_LEN 256
 #define MAX_ERROR_LEN 1024
 #define MAX_QUERY_VALUE_LEN 40
-#define MAX_QUERY_COL_NUM 10
-#define MAX_QUERY_ROW_NUM 10
+#define MAX_QUERY_COL_NUM 20
+#define MAX_QUERY_ROW_NUM 20
 #define MAX_SYSTEM_RESULT_LEN 2048
 #define MAX_VAR_LEN 100
 #define MAX_VAR_NAME_LEN 32
@@ -53,10 +53,10 @@
 
 #define simFatal(...) { if (simDebugFlag & DEBUG_FATAL) { taosPrintLog("SIM FATAL ", 255, __VA_ARGS__); }}
 #define simError(...) { if (simDebugFlag & DEBUG_ERROR) { taosPrintLog("SIM ERROR ", 255, __VA_ARGS__); }}
-#define simWarn(...)  { if (simDebugFlag & DEBUG_WARN)  { taosPrintLog("SIM WARN  ", 255, __VA_ARGS__); }}
-#define simInfo(...)  { if (simDebugFlag & DEBUG_INFO)  { taosPrintLog("SIM INFO  ", 255, __VA_ARGS__); }}
-#define simDebug(...) { if (simDebugFlag & DEBUG_DEBUG) { taosPrintLog("SIM DEBUG ", simDebugFlag, __VA_ARGS__); }}
-#define simTrace(...) { if (simDebugFlag & DEBUG_TRACE) { taosPrintLog("SIM TRACE ", simDebugFlag, __VA_ARGS__); }}
+#define simWarn(...)  { if (simDebugFlag & DEBUG_WARN)  { taosPrintLog("SIM WARN ", 255, __VA_ARGS__); }}
+#define simInfo(...)  { if (simDebugFlag & DEBUG_INFO)  { taosPrintLog("SIM ", 255, __VA_ARGS__); }}
+#define simDebug(...) { if (simDebugFlag & DEBUG_DEBUG) { taosPrintLog("SIM ", simDebugFlag, __VA_ARGS__); }}
+#define simTrace(...) { if (simDebugFlag & DEBUG_TRACE) { taosPrintLog("SIM ", simDebugFlag, __VA_ARGS__); }}
 
 enum { SIM_SCRIPT_TYPE_MAIN, SIM_SCRIPT_TYPE_BACKGROUND };
 
@@ -96,20 +96,20 @@ enum {
 
 struct _script_t;
 typedef struct _cmd_t {
-  short cmdno;
-  short nlen;
-  char name[MAX_SIM_CMD_NAME_LEN];
-  bool (*parseCmd)(char *, struct _cmd_t *, int);
-  bool (*executeCmd)(struct _script_t *script, char *option);
+  int16_t cmdno;
+  int16_t nlen;
+  char    name[MAX_SIM_CMD_NAME_LEN];
+  bool  (*parseCmd)(char *, struct _cmd_t *, int);
+  bool  (*executeCmd)(struct _script_t *script, char *option);
   struct _cmd_t *next;
 } SCommand;
 
 typedef struct {
-  short cmdno;
-  short jump;        // jump position
-  short errorJump;   // sql jump flag, while '-x' exist in sql cmd, this flag
-                     // will be SQL_JUMP_TRUE, otherwise is SQL_JUMP_FALSE */
-  short lineNum;     // correspodning line number in original file
+  int16_t cmdno;
+  int16_t jump;        // jump position
+  int16_t errorJump;   // sql jump flag, while '-x' exist in sql cmd, this flag
+                       // will be SQL_JUMP_TRUE, otherwise is SQL_JUMP_FALSE */
+  int16_t lineNum;     // correspodning line number in original file
   int optionOffset;  // relative option offset
 } SCmdLine;
 
@@ -120,7 +120,7 @@ typedef struct _var_t {
 } SVariable;
 
 typedef struct _script_t {
-  int type;
+  int  type;
   bool killed;
 
   void *taos;
@@ -130,10 +130,10 @@ typedef struct _script_t {
   char system_exit_code[12];
   char system_ret_content[MAX_SYSTEM_RESULT_LEN];
 
-  int varLen;
-  int linePos;     // current cmd position
-  int numOfLines;  // number of lines in the script
-  int bgScriptLen;
+  int  varLen;
+  int  linePos;     // current cmd position
+  int  numOfLines;  // number of lines in the script
+  int  bgScriptLen;
   char fileName[MAX_FILE_NAME_LEN];  // script file name
   char error[MAX_ERROR_LEN];
   char *optionBuffer;

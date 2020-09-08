@@ -19,11 +19,6 @@ system sh/cfg.sh -n dnode2 -c mnodeEqualVnodeNum -v 4
 system sh/cfg.sh -n dnode3 -c mnodeEqualVnodeNum -v 4
 system sh/cfg.sh -n dnode4 -c mnodeEqualVnodeNum -v 4
 
-system sh/cfg.sh -n dnode1 -c numOfTotalVnodes -v 4
-system sh/cfg.sh -n dnode2 -c numOfTotalVnodes -v 4
-system sh/cfg.sh -n dnode3 -c numOfTotalVnodes -v 4
-system sh/cfg.sh -n dnode4 -c numOfTotalVnodes -v 4
-
 print ========= start dnodes
 system sh/exec.sh -n dnode1 -s start
 
@@ -40,7 +35,7 @@ sleep 1000
 
 print ======== step1 
 $x = 1 	
-while $x < 20
+while $x < 15
 
     print drop table times $x
 	sql drop table db.tb -x step1
