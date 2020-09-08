@@ -32,6 +32,7 @@
 #include <time.h>
 #include <unistd.h>
 #include <wordexp.h>
+#include <regex.h>
 
 #include "taos.h"
 #include "tutil.h"
@@ -54,6 +55,7 @@ static struct argp_option options[] = {
   {0, 'P', "password",                 0, "The password to use when connecting to the server. Default is 'taosdata'.",                                        3},
   {0, 'd', "database",                 0, "Destination database. Default is 'test'.",                                                                         3},
   {0, 'm', "table_prefix",             0, "Table prefix name. Default is 't'.",                                                                               3},
+  {0, 's', "sql file",                 0, "The select sql file.",                                                                                             3},
   {0, 'M', 0,                          0, "Use metric flag.",                                                                                                 13},
   {0, 'o', "outputfile",               0, "Direct output to the named file. Default is './output.txt'.",                                                      14},
   {0, 'q', "query_mode",               0, "Query mode--0: SYNC, 1: ASYNC. Default is SYNC.",                                                                  6},
@@ -79,6 +81,7 @@ typedef struct DemoArguments {
   char  *password;
   char  *database;
   char  *tb_prefix;
+  char  *sqlFile;
   bool   use_metric;
   bool   insert_only;
   char  *output_file;
@@ -119,6 +122,9 @@ static error_t parse_opt(int key, char *arg, struct argp_state *state) {
       break;
     case 'o':
       arguments->output_file = arg;
+      break;
+    case 's':
+      arguments->sqlFile = arg;
       break;
     case 'q':
       arguments->mode = atoi(arg);
@@ -179,10 +185,10 @@ static error_t parse_opt(int key, char *arg, struct argp_state *state) {
       arguments->tb_prefix = arg;
       break;
     case 'M':
-      arguments->use_metric = true;
+      arguments->use_metric = false;
       break;
     case 'x':
-      arguments->insert_only = true;
+      arguments->insert_only = false;
       break;
     case 'c':
       if (wordexp(arg, &full_path, 0) != 0) {
@@ -253,6 +259,9 @@ typedef struct {
   int data_of_rate;
   int64_t start_time;
   bool do_aggreFunc;
+  
+  char* cols;  
+  bool  use_metric;
 
   sem_t mutex_sem;
   int notFinished;
@@ -305,6 +314,8 @@ void rand_string(char *str, int size);
 double getCurrentTime();
 
 void callBack(void *param, TAOS_RES *res, int code);
+void multiThreadCreateTable(char* cols, bool use_metric, int threads, int ntables, char* db_name, char* tb_prefix, char *ip_addr, uint16_t port, char *user, char *pass);
+void querySqlFile(TAOS* taos, char* sqlFile);
 
 int main(int argc, char *argv[]) {
   SDemoArguments arguments = {  NULL,            // host
@@ -313,6 +324,7 @@ int main(int argc, char *argv[]) {
                                 "taosdata",      // password
                                 "test",          // database
                                 "t",             // tb_prefix
+                                NULL,
                                 false,           // use_metric
                                 false,           // insert_only
                                 "./output.txt",  // output_file
@@ -361,7 +373,7 @@ int main(int argc, char *argv[]) {
       abort();
     #endif
   }
-  
+
   enum MODE query_mode = arguments.mode;
   char *ip_addr = arguments.host;
   uint16_t port = arguments.port;
@@ -384,6 +396,13 @@ int main(int argc, char *argv[]) {
   int count_data_type = 0;
   char dataString[STRING_LEN];
   bool do_aggreFunc = true;
+
+  if (NULL != arguments.sqlFile) {
+    TAOS* qtaos = taos_connect(ip_addr, user, pass, db_name, port);
+    querySqlFile(qtaos, arguments.sqlFile);  
+    taos_close(qtaos);
+    return 0;
+  }
 
   memset(dataString, 0, STRING_LEN);
   int len = 0;
@@ -470,11 +489,12 @@ int main(int argc, char *argv[]) {
   char command[BUFFER_SIZE] = "\0";
 
   sprintf(command, "drop database %s;", db_name);
-  taos_query(taos, command);
-  
+  TAOS_RES* res = taos_query(taos, command);
+  taos_free_result(res);
 
   sprintf(command, "create database %s;", db_name);
-  taos_query(taos, command);
+  res = taos_query(taos, command);
+  taos_free_result(res);
 
   char cols[STRING_LEN] = "\0";
   int colIndex = 0;
@@ -494,47 +514,18 @@ int main(int argc, char *argv[]) {
     len += snprintf(cols + len, STRING_LEN - len, ",f%d %s(%d))", colIndex + 1, data_type[colIndex % count_data_type], len_of_binary);
   }
 
-  if (!use_metric) {
-    /* Create all the tables; */
-    printf("Creating %d table(s)......\n", ntables);
-    for (int i = 0; i < ntables; i++) {
-      snprintf(command, BUFFER_SIZE, "create table %s.%s%d (ts timestamp%s;", db_name, tb_prefix, i, cols);
-      queryDB(taos, command);
-    }
-
-    printf("Table(s) created!\n");
-    taos_close(taos);
-
-  } else {
+  if (use_metric) {
     /* Create metric table */
     printf("Creating meters super table...\n");
-    snprintf(command, BUFFER_SIZE, "create table %s.meters (ts timestamp%s tags (areaid int, loc binary(10))", db_name, cols);
+    snprintf(command, BUFFER_SIZE, "create table if not exists %s.meters (ts timestamp%s tags (areaid int, loc binary(10))", db_name, cols);
     queryDB(taos, command);
     printf("meters created!\n");
-
-    /* Create all the tables; */
-    printf("Creating %d table(s)......\n", ntables);
-    for (int i = 0; i < ntables; i++) {
-      int j;
-      if (i % 10 == 0) {
-        j = 10;
-      } else {
-        j = i % 10;
-      }
-    if (j % 2 == 0) {
-      snprintf(command, BUFFER_SIZE, "create table %s.%s%d using %s.meters tags (%d,\"%s\");", db_name, tb_prefix, i, db_name, j, "shanghai");
-    } else {
-      snprintf(command, BUFFER_SIZE, "create table %s.%s%d using %s.meters tags (%d,\"%s\");", db_name, tb_prefix, i, db_name, j, "beijing");
-    }
-      queryDB(taos, command);
-    }
-
-    printf("Table(s) created!\n");
-    taos_close(taos);
   }
-  /* Wait for table to create  */
+  taos_close(taos);
   
-
+  /* Wait for table to create  */
+  multiThreadCreateTable(cols, use_metric, threads, ntables, db_name, tb_prefix, ip_addr, port, user, pass);
+  
   /* Insert data */
   double ts = getCurrentTime();
   printf("Inserting data......\n");
@@ -546,7 +537,10 @@ int main(int argc, char *argv[]) {
     threads = ntables;
     a = 1;
   }
-  int b = ntables % threads;
+
+  int b = 0;
+  if (threads != 0)
+    b = ntables % threads;
   int last = 0;
   for (int i = 0; i < threads; i++) {
     info *t_info = infos + i;
@@ -681,6 +675,193 @@ int main(int argc, char *argv[]) {
   return 0;
 }
 
+#define MAX_SQL_SIZE       65536
+void selectSql(TAOS* taos, char* sqlcmd)
+{    
+  TAOS_RES *pSql = taos_query(taos, sqlcmd);
+  int32_t code = taos_errno(pSql);
+  
+  if (code != 0) {
+    printf("Failed to sqlcmd:%s, reason:%s\n", sqlcmd, taos_errstr(pSql));
+    taos_free_result(pSql);
+    exit(1);
+  }
+  
+  int count = 0;
+  while (taos_fetch_row(pSql) != NULL) {
+    count++;
+  }
+  
+  taos_free_result(pSql);
+  return;
+}
+
+
+/* Function to do regular expression check */
+static int regexMatch(const char *s, const char *reg, int cflags) {
+  regex_t regex;
+  char    msgbuf[100] = {0};
+
+  /* Compile regular expression */
+  if (regcomp(&regex, reg, cflags) != 0) {
+    printf("Fail to compile regex\n");
+    exit(-1);
+  }
+
+  /* Execute regular expression */
+  int reti = regexec(&regex, s, 0, NULL, 0);
+  if (!reti) {
+    regfree(&regex);
+    return 1;
+  } else if (reti == REG_NOMATCH) {
+    regfree(&regex);
+    return 0;
+  } else {
+    regerror(reti, &regex, msgbuf, sizeof(msgbuf));
+    printf("Regex match failed: %s\n", msgbuf);
+    regfree(&regex);
+    exit(-1);
+  }
+
+  return 0;
+}
+
+static int isCommentLine(char *line) {
+  if (line == NULL) return 1;
+
+  return regexMatch(line, "^\\s*#.*", REG_EXTENDED);
+}
+
+void querySqlFile(TAOS* taos, char* sqlFile)
+{
+  FILE *fp = fopen(sqlFile, "r");
+  if (fp == NULL) {
+    printf("failed to open file %s, reason:%s\n", sqlFile, strerror(errno));
+    exit(-1);
+  }
+  
+  int       read_len = 0;
+  char *    cmd = calloc(1, MAX_SQL_SIZE);
+  size_t    cmd_len = 0;
+  char *    line = NULL;
+  size_t    line_len = 0;
+
+  double t = getCurrentTime();
+  
+  while ((read_len = getline(&line, &line_len, fp)) != -1) {
+    if (read_len >= MAX_SQL_SIZE) continue;
+    line[--read_len] = '\0';
+
+    if (read_len == 0 || isCommentLine(line)) {  // line starts with #
+      continue;
+    }
+
+    if (line[read_len - 1] == '\\') {
+      line[read_len - 1] = ' ';
+      memcpy(cmd + cmd_len, line, read_len);
+      cmd_len += read_len;
+      continue;
+    }
+
+    memcpy(cmd + cmd_len, line, read_len);
+    selectSql(taos, cmd);    
+    memset(cmd, 0, MAX_SQL_SIZE);
+    cmd_len = 0;
+  }
+
+  t = getCurrentTime() - t;
+  printf("run %s took %.6f second(s)\n\n", sqlFile, t);
+
+  free(cmd);
+  if (line) free(line);
+  fclose(fp);
+  return;
+}
+
+void * createTable(void *sarg) 
+{
+  char command[BUFFER_SIZE] = "\0";
+  
+  info *winfo = (info *)sarg;  
+
+  if (!winfo->use_metric) {
+    /* Create all the tables; */
+    printf("Creating table from %d to %d\n", winfo->start_table_id, winfo->end_table_id);
+    for (int i = winfo->start_table_id; i <= winfo->end_table_id; i++) {
+      snprintf(command, BUFFER_SIZE, "create table if not exists %s.%s%d (ts timestamp%s;", winfo->db_name, winfo->tb_prefix, i, winfo->cols);
+      queryDB(winfo->taos, command);
+    }
+  } else {
+    /* Create all the tables; */
+    printf("Creating table from %d to %d\n", winfo->start_table_id, winfo->end_table_id);
+    for (int i = winfo->start_table_id; i <= winfo->end_table_id; i++) {
+      int j;
+      if (i % 10 == 0) {
+        j = 10;
+      } else {
+        j = i % 10;
+      }
+    if (j % 2 == 0) {
+      snprintf(command, BUFFER_SIZE, "create table if not exists %s.%s%d using %s.meters tags (%d,\"%s\");", winfo->db_name, winfo->tb_prefix, i, winfo->db_name, j, "shanghai");
+    } else {
+      snprintf(command, BUFFER_SIZE, "create table if not exists %s.%s%d using %s.meters tags (%d,\"%s\");", winfo->db_name, winfo->tb_prefix, i, winfo->db_name, j, "beijing");
+    }
+      queryDB(winfo->taos, command);
+    }
+  }
+
+  return NULL;
+}
+
+void multiThreadCreateTable(char* cols, bool use_metric, int threads, int ntables, char* db_name, char* tb_prefix, char *ip_addr, uint16_t port, char *user, char *pass) {
+  double ts = getCurrentTime();
+  printf("create table......\n");
+  pthread_t *pids = malloc(threads * sizeof(pthread_t));
+  info *infos = malloc(threads * sizeof(info));
+
+  int a = ntables / threads;
+  if (a < 1) {
+    threads = ntables;
+    a = 1;
+  }
+
+  int b = 0;
+  if (threads != 0)
+    b = ntables % threads;
+  int last = 0;
+  for (int i = 0; i < threads; i++) {
+    info *t_info = infos + i;
+    t_info->threadID = i;
+    tstrncpy(t_info->db_name, db_name, MAX_DB_NAME_SIZE);
+    tstrncpy(t_info->tb_prefix, tb_prefix, MAX_TB_NAME_SIZE);
+    t_info->taos = taos_connect(ip_addr, user, pass, db_name, port);
+    t_info->start_table_id = last;
+    t_info->end_table_id = i < b ? last + a : last + a - 1;
+    last = t_info->end_table_id + 1;
+    t_info->use_metric = use_metric;
+    t_info->cols = cols;
+    pthread_create(pids + i, NULL, createTable, t_info);
+  }
+  
+  for (int i = 0; i < threads; i++) {
+    pthread_join(pids[i], NULL);
+  }
+
+  double t = getCurrentTime() - ts;
+  printf("Spent %.4f seconds to create %d tables with %d connections\n", t, ntables, threads);
+
+  for (int i = 0; i < threads; i++) {
+    info *t_info = infos + i;
+    sem_destroy(&(t_info->mutex_sem));
+    sem_destroy(&(t_info->lock_sem));
+  }
+
+  free(pids);
+  free(infos);  
+
+  return ;
+}
+
 void *readTable(void *sarg) {
   info *rinfo = (info *)sarg;
   TAOS *taos = rinfo->taos;
@@ -688,6 +869,11 @@ void *readTable(void *sarg) {
   int64_t sTime = rinfo->start_time;
   char *tb_prefix = rinfo->tb_prefix;
   FILE *fp = fopen(rinfo->fp, "a");
+  if (NULL == fp) {
+    printf("fopen %s fail, reason:%s.\n", rinfo->fp, strerror(errno));
+    return NULL;
+  }
+  
   int num_of_DPT = rinfo->nrecords_per_table;
   int num_of_tables = rinfo->end_table_id - rinfo->start_table_id + 1;
   int totalData = num_of_DPT * num_of_tables;
@@ -743,6 +929,11 @@ void *readMetric(void *sarg) {
   TAOS *taos = rinfo->taos;
   char command[BUFFER_SIZE] = "\0";
   FILE *fp = fopen(rinfo->fp, "a");
+  if (NULL == fp) {
+    printf("fopen %s fail, reason:%s.\n", rinfo->fp, strerror(errno));
+    return NULL;
+  }
+  
   int num_of_DPT = rinfo->nrecords_per_table;
   int num_of_tables = rinfo->end_table_id - rinfo->start_table_id + 1;
   int totalData = num_of_DPT * num_of_tables;
@@ -804,27 +995,31 @@ void *readMetric(void *sarg) {
 }
 
 void queryDB(TAOS *taos, char *command) {
-  int i = 5;
+  int i;
   TAOS_RES *pSql = NULL;
-  int32_t code = -1;
-  while (i > 0 && code != 0) {
+  int32_t   code = -1;
+
+  for (i = 0; i < 5; i++) {
+    if (NULL != pSql) {
+      taos_free_result(pSql);
+      pSql = NULL;
+    }
+    
     pSql = taos_query(taos, command);
     code = taos_errno(pSql);
-    taos_free_result(pSql);
-    pSql = NULL;
-    if (code == 0) {
+    if (0 == code) {
       break;
-    }
-    i--; 
+    }    
   }
 
   if (code != 0) {
     fprintf(stderr, "Failed to run %s, reason: %s\n", command, taos_errstr(pSql));
     taos_free_result(pSql);
-
     taos_close(taos);
     exit(EXIT_FAILURE);
   }
+
+  taos_free_result(pSql);
 }
 
 // sync insertion
@@ -846,10 +1041,10 @@ void *syncWrite(void *sarg) {
       pstr += sprintf(pstr, "insert into %s.%s%d values", winfo->db_name, winfo->tb_prefix, tID);
       int k;
       for (k = 0; k < winfo->nrecords_per_request;) {
-        int rand_num = trand() % 100;
+        int rand_num = rand() % 100;
         int len = -1;
         if (winfo->data_of_order ==1 && rand_num < winfo->data_of_rate) {
-          long d = tmp_time - trand() % 1000000 + rand_num;
+          long d = tmp_time - rand() % 1000000 + rand_num;
           len = generateData(data, data_type, ncols_per_record, d, len_of_binary);
         } else {
           len = generateData(data, data_type, ncols_per_record, tmp_time += 1000, len_of_binary);
@@ -941,10 +1136,10 @@ void callBack(void *param, TAOS_RES *res, int code) {
   pstr += sprintf(pstr, "insert into %s values", tb_info->tb_name);
 
   for (int i = 0; i < tb_info->nrecords_per_request; i++) {
-    int rand_num = trand() % 100;
+    int rand_num = rand() % 100;
     if (tb_info->data_of_order ==1 && rand_num < tb_info->data_of_rate)
     {
-      long d = tmp_time - trand() % 1000000 + rand_num;
+      long d = tmp_time - rand() % 1000000 + rand_num;
       generateData(data, datatype, ncols_per_record, d, len_of_binary);
     } else 
     {
@@ -993,20 +1188,20 @@ int32_t generateData(char *res, char **data_type, int num_of_cols, int64_t times
 
   for (int i = 0; i < num_of_cols; i++) {
     if (strcasecmp(data_type[i % c], "tinyint") == 0) {
-      pstr += sprintf(pstr, ", %d", (int)(trand() % 128));
+      pstr += sprintf(pstr, ", %d", (int)(rand() % 128));
     } else if (strcasecmp(data_type[i % c], "smallint") == 0) {
-      pstr += sprintf(pstr, ", %d", (int)(trand() % 32767));
+      pstr += sprintf(pstr, ", %d", (int)(rand() % 32767));
     } else if (strcasecmp(data_type[i % c], "int") == 0) {
-      pstr += sprintf(pstr, ", %d", (int)(trand() % 10)); 
+      pstr += sprintf(pstr, ", %d", (int)(rand() % 10)); 
     } else if (strcasecmp(data_type[i % c], "bigint") == 0) {
-      pstr += sprintf(pstr, ", %" PRId64, trand() % 2147483648);
+      pstr += sprintf(pstr, ", %" PRId64, rand() % 2147483648);
     } else if (strcasecmp(data_type[i % c], "float") == 0) {
-      pstr += sprintf(pstr, ", %10.4f", (float)(trand() / 1000.0));
+      pstr += sprintf(pstr, ", %10.4f", (float)(rand() / 1000.0));
     } else if (strcasecmp(data_type[i % c], "double") == 0) {
-      double t = (double)(trand() / 1000000.0);
+      double t = (double)(rand() / 1000000.0);
       pstr += sprintf(pstr, ", %20.8f", t);
     } else if (strcasecmp(data_type[i % c], "bool") == 0) {
-      bool b = trand() & 1;
+      bool b = rand() & 1;
       pstr += sprintf(pstr, ", %s", b ? "true" : "false");
     } else if (strcasecmp(data_type[i % c], "binary") == 0) {
       char s[len_of_binary];
@@ -1032,7 +1227,7 @@ void rand_string(char *str, int size) {
     --size;
     int n;
     for (n = 0; n < size; n++) {
-      int key = trand() % (int)(sizeof charset - 1);
+      int key = rand() % (int)(sizeof charset - 1);
       str[n] = charset[key];
     }
     str[n] = 0;

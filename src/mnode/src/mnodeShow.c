@@ -65,13 +65,13 @@ int32_t mnodeInitShow() {
   mnodeAddReadMsgHandle(TSDB_MSG_TYPE_CM_CONNECT, mnodeProcessConnectMsg);
   mnodeAddReadMsgHandle(TSDB_MSG_TYPE_CM_USE_DB, mnodeProcessUseMsg);
   
-  tsMnodeShowCache = taosCacheInitWithCb(5, mnodeFreeShowObj);
+  tsMnodeShowCache = taosCacheInit(TSDB_DATA_TYPE_INT, 5, false, mnodeFreeShowObj, "show");
   return 0;
 }
 
 void mnodeCleanUpShow() {
   if (tsMnodeShowCache != NULL) {
-    mPrint("show cache is cleanup");
+    mInfo("show cache is cleanup");
     taosCacheCleanup(tsMnodeShowCache);
     tsMnodeShowCache = NULL;
   }
@@ -139,7 +139,7 @@ static int32_t mnodeProcessShowMsg(SMnodeMsg *pMsg) {
   pShowRsp->qhandle = htobe64((uint64_t) pShow);
 
   int32_t code = (*tsMnodeShowMetaFp[pShowMsg->type])(&pShowRsp->tableMeta, pShow, pMsg->rpcMsg.handle);
-  mTrace("%p, show type:%s index:%d, get meta finished, numOfRows:%d cols:%d result:%s", pShow,
+  mDebug("%p, show type:%s index:%d, get meta finished, numOfRows:%d cols:%d result:%s", pShow,
          mnodeGetShowType(pShowMsg->type), pShow->index, pShow->numOfRows, pShow->numOfColumns, tstrerror(code));
 
   if (code == TSDB_CODE_SUCCESS) {
@@ -172,11 +172,11 @@ static int32_t mnodeProcessRetrieveMsg(SMnodeMsg *pMsg) {
     return TSDB_CODE_MND_INVALID_SHOWOBJ;
   }
 
-  mTrace("%p, show type:%s index:%d, start retrieve data, numOfReads:%d numOfRows:%d", pShow,
+  mDebug("%p, show type:%s index:%d, start retrieve data, numOfReads:%d numOfRows:%d", pShow,
          mnodeGetShowType(pShow->type), pShow->index, pShow->numOfReads, pShow->numOfRows);
 
   if (mnodeCheckShowFinished(pShow)) {
-    mTrace("%p, show is already read finished, numOfReads:%d numOfRows:%d", pShow, pShow->numOfReads, pShow->numOfRows);
+    mDebug("%p, show is already read finished, numOfReads:%d numOfRows:%d", pShow, pShow->numOfReads, pShow->numOfRows);
     pShow->numOfReads = pShow->numOfRows;
   }
   
@@ -201,7 +201,7 @@ static int32_t mnodeProcessRetrieveMsg(SMnodeMsg *pMsg) {
   if ((pRetrieve->free & TSDB_QUERY_TYPE_FREE_RESOURCE) != TSDB_QUERY_TYPE_FREE_RESOURCE)
     rowsRead = (*tsMnodeShowRetrieveFp[pShow->type])(pShow, pRsp->data, rowsToRead, pMsg->rpcMsg.handle);
 
-  mTrace("%p, show type:%s index:%d, stop retrieve data, rowsRead:%d rowsToRead:%d", pShow,
+  mDebug("%p, show type:%s index:%d, stop retrieve data, rowsRead:%d rowsToRead:%d", pShow,
          mnodeGetShowType(pShow->type), pShow->index, rowsRead, rowsToRead);
 
   if (rowsRead < 0) {
@@ -219,10 +219,10 @@ static int32_t mnodeProcessRetrieveMsg(SMnodeMsg *pMsg) {
 
   if (rowsToRead == 0 || (rowsRead == rowsToRead && pShow->numOfRows == pShow->numOfReads)) {
     pRsp->completed = 1;
-    mTrace("%p, retrieve completed", pShow);
+    mDebug("%p, retrieve completed", pShow);
     mnodeReleaseShowObj(pShow, true);
   } else {
-    mTrace("%p, retrieve not completed yet", pShow);
+    mDebug("%p, retrieve not completed yet", pShow);
     mnodeReleaseShowObj(pShow, false);
   }
 
@@ -281,6 +281,7 @@ static int32_t mnodeProcessHeartBeatMsg(SMnodeMsg *pMsg) {
 
 static int32_t mnodeProcessConnectMsg(SMnodeMsg *pMsg) {
   SCMConnectMsg *pConnectMsg = pMsg->rpcMsg.pCont;
+  SCMConnectRsp *pConnectRsp = NULL;
   int32_t code = TSDB_CODE_SUCCESS;
 
   SRpcConnInfo connInfo;
@@ -306,10 +307,16 @@ static int32_t mnodeProcessConnectMsg(SMnodeMsg *pMsg) {
       code = TSDB_CODE_MND_INVALID_DB;
       goto connect_over;
     }
+    
+    if (pDb->status != TSDB_DB_STATUS_READY) {
+      mError("db:%s, status:%d, in dropping", pDb->name, pDb->status);
+      code = TSDB_CODE_MND_DB_IN_DROPPING;
+      goto connect_over;
+    }
     mnodeDecDbRef(pDb);
   }
 
-  SCMConnectRsp *pConnectRsp = rpcMallocCont(sizeof(SCMConnectRsp));
+  pConnectRsp = rpcMallocCont(sizeof(SCMConnectRsp));
   if (pConnectRsp == NULL) {
     code = TSDB_CODE_MND_OUT_OF_MEMORY;
     goto connect_over;
@@ -332,10 +339,10 @@ static int32_t mnodeProcessConnectMsg(SMnodeMsg *pMsg) {
 
 connect_over:
   if (code != TSDB_CODE_SUCCESS) {
-    rpcFreeCont(pConnectRsp);
+    if (pConnectRsp) rpcFreeCont(pConnectRsp);
     mLError("user:%s login from %s, result:%s", connInfo.user, taosIpStr(connInfo.clientIp), tstrerror(code));
   } else {
-    mLPrint("user:%s login from %s, result:%s", connInfo.user, taosIpStr(connInfo.clientIp), tstrerror(code));
+    mLInfo("user:%s login from %s, result:%s", connInfo.user, taosIpStr(connInfo.clientIp), tstrerror(code));
     pMsg->rpcRsp.rsp = pConnectRsp;
     pMsg->rpcRsp.len = sizeof(SCMConnectRsp);
   }
@@ -349,7 +356,12 @@ static int32_t mnodeProcessUseMsg(SMnodeMsg *pMsg) {
   int32_t code = TSDB_CODE_SUCCESS;
   if (pMsg->pDb == NULL) pMsg->pDb = mnodeGetDb(pUseDbMsg->db);
   if (pMsg->pDb == NULL) {
-    code = TSDB_CODE_MND_INVALID_DB;
+    return TSDB_CODE_MND_INVALID_DB;
+  }
+  
+  if (pMsg->pDb->status != TSDB_DB_STATUS_READY) {
+    mError("db:%s, status:%d, in dropping", pMsg->pDb->name, pMsg->pDb->status);
+    return TSDB_CODE_MND_DB_IN_DROPPING;
   }
 
   return code;
@@ -363,12 +375,9 @@ static bool mnodeCheckShowFinished(SShowObj *pShow) {
 }
 
 static bool mnodeAccquireShowObj(SShowObj *pShow) {
-  char key[10];
-  sprintf(key, "%d", pShow->index);
-
-  SShowObj *pSaved = taosCacheAcquireByName(tsMnodeShowCache, key);
+  SShowObj *pSaved = taosCacheAcquireByKey(tsMnodeShowCache, &pShow->index, sizeof(int32_t));
   if (pSaved == pShow) {
-    mTrace("%p, show is accquired from cache", pShow);
+    mDebug("%p, show is accquired from cache", pShow);
     return true;
   } else {
     return false;
@@ -377,14 +386,11 @@ static bool mnodeAccquireShowObj(SShowObj *pShow) {
 
 static void *mnodePutShowObj(SShowObj *pShow, int32_t size) {
   if (tsMnodeShowCache != NULL) {
-    char key[10];
     pShow->index = atomic_add_fetch_32(&tsShowObjIndex, 1);
-    sprintf(key, "%d", pShow->index);
-
-    SShowObj *newQhandle = taosCachePut(tsMnodeShowCache, key, pShow, size, 6);
+    SShowObj *newQhandle = taosCachePut(tsMnodeShowCache, &pShow->index, sizeof(int32_t), pShow, size, 6);
+    mDebug("%p, show is put into cache, index:%d", newQhandle, pShow->index);
     free(pShow);
 
-    mTrace("%p, show is put into cache, index:%s", newQhandle, key);
     return newQhandle;
   }
 
@@ -394,11 +400,11 @@ static void *mnodePutShowObj(SShowObj *pShow, int32_t size) {
 static void mnodeFreeShowObj(void *data) {
   SShowObj *pShow = data;
   sdbFreeIter(pShow->pIter);
-  mTrace("%p, show is destroyed", pShow);
+  mDebug("%p, show is destroyed", pShow);
 }
 
 static void mnodeReleaseShowObj(void *pShow, bool forceRemove) {
-  mTrace("%p, show is released, force:%s", pShow, forceRemove ? "true" : "false");
+  mDebug("%p, show is released, force:%s", pShow, forceRemove ? "true" : "false");
   taosCacheRelease(tsMnodeShowCache, &pShow, forceRemove);
 }
 

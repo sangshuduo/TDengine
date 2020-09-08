@@ -241,3 +241,78 @@ void taosBlockSIGPIPE() {
     uError("failed to block SIGPIPE");
   }
 }
+
+int tSystem(const char * cmd) 
+{ 
+  FILE * fp; 
+  int res; 
+  char buf[1024]; 
+  if (cmd == NULL) { 
+    uError("tSystem cmd is NULL!\n");
+    return -1;
+  } 
+  
+  if ((fp = popen(cmd, "r") ) == NULL) { 
+    uError("popen cmd:%s error: %s/n", cmd, strerror(errno)); 
+    return -1; 
+  } else {
+    while(fgets(buf, sizeof(buf), fp))  { 
+      uDebug("popen result:%s", buf); 
+    } 
+
+    if ((res = pclose(fp)) == -1) { 
+      uError("close popen file pointer fp error!\n");
+    } else { 
+      uDebug("popen res is :%d\n", res);
+    } 
+
+    return res;
+  }
+}
+
+#ifdef TAOS_RANDOM_NETWORK_FAIL
+
+#define RANDOM_NETWORK_FAIL_FACTOR  20
+
+ssize_t taos_send_random_fail(int sockfd, const void *buf, size_t len, int flags)
+{
+  if (rand() % RANDOM_NETWORK_FAIL_FACTOR == 0) {
+    errno = ECONNRESET;
+    return -1;
+  }
+
+  return send(sockfd, buf, len, flags);
+}
+
+ssize_t taos_sendto_random_fail(int sockfd, const void *buf, size_t len, int flags,
+                      const struct sockaddr *dest_addr, socklen_t addrlen)
+{
+  if (rand() % RANDOM_NETWORK_FAIL_FACTOR == 0) {
+    errno = ECONNRESET;
+    return -1;
+  }
+
+  return sendto(sockfd, buf, len, flags, dest_addr, addrlen);
+}
+
+ssize_t taos_read_random_fail(int fd, void *buf, size_t count)
+{
+  if (rand() % RANDOM_NETWORK_FAIL_FACTOR == 0) {
+    errno = ECONNRESET;
+    return -1;
+  }
+
+  return read(fd, buf, count);
+}
+
+ssize_t taos_write_random_fail(int fd, const void *buf, size_t count)
+{
+  if (rand() % RANDOM_NETWORK_FAIL_FACTOR == 0) {
+    errno = EINTR;
+    return -1;
+  }
+
+  return write(fd, buf, count);
+}
+
+#endif /* TAOS_RANDOM_NETWORK_FAIL */

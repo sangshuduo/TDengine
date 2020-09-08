@@ -43,7 +43,7 @@ int tdEncodeSchema(void **buf, STSchema *pSchema) {
     STColumn *pCol = schemaColAt(pSchema, i);
     tlen += taosEncodeFixedI8(buf, colType(pCol));
     tlen += taosEncodeFixedI16(buf, colColId(pCol));
-    tlen += taosEncodeFixedI32(buf, colBytes(pCol));
+    tlen += taosEncodeFixedI16(buf, colBytes(pCol));
   }
 
   return tlen;
@@ -65,10 +65,10 @@ void *tdDecodeSchema(void *buf, STSchema **pRSchema) {
   for (int i = 0; i < numOfCols; i++) {
     int8_t  type = 0;
     int16_t colId = 0;
-    int32_t bytes = 0;
+    int16_t bytes = 0;
     buf = taosDecodeFixedI8(buf, &type);
     buf = taosDecodeFixedI16(buf, &colId);
-    buf = taosDecodeFixedI32(buf, &bytes);
+    buf = taosDecodeFixedI16(buf, &bytes);
     if (tdAddColToSchema(&schemaBuilder, type, colId, bytes) < 0) {
       tdDestroyTSchemaBuilder(&schemaBuilder);
       return NULL;
@@ -105,7 +105,7 @@ void tdResetTSchemaBuilder(STSchemaBuilder *pBuilder, int32_t version) {
   pBuilder->version = version;
 }
 
-int tdAddColToSchema(STSchemaBuilder *pBuilder, int8_t type, int16_t colId, int32_t bytes) {
+int tdAddColToSchema(STSchemaBuilder *pBuilder, int8_t type, int16_t colId, int16_t bytes) {
   if (!isValidDataType(type)) return -1;
 
   if (pBuilder->nCols >= pBuilder->tCols) {
@@ -259,7 +259,7 @@ bool isNEleNull(SDataCol *pCol, int nEle) {
     case TSDB_DATA_TYPE_BINARY:
     case TSDB_DATA_TYPE_NCHAR:
       for (int i = 0; i < nEle; i++) {
-        if (!isNull(varDataVal(tdGetColDataOfRow(pCol, i)), pCol->type)) return false;
+        if (!isNull(tdGetColDataOfRow(pCol, i), pCol->type)) return false;
       }
       return true;
     default:
@@ -371,9 +371,11 @@ SDataCols *tdDupDataCols(SDataCols *pDataCols, bool keepData) {
 
     if (keepData) {
       pRet->cols[i].len = pDataCols->cols[i].len;
-      memcpy(pRet->cols[i].pData, pDataCols->cols[i].pData, pDataCols->cols[i].len);
-      if (pRet->cols[i].type == TSDB_DATA_TYPE_BINARY || pRet->cols[i].type == TSDB_DATA_TYPE_NCHAR) {
-        memcpy(pRet->cols[i].dataOff, pDataCols->cols[i].dataOff, sizeof(VarDataOffsetT) * pDataCols->maxPoints);
+      if (pDataCols->cols[i].len > 0) {
+        memcpy(pRet->cols[i].pData, pDataCols->cols[i].pData, pDataCols->cols[i].len);
+        if (pRet->cols[i].type == TSDB_DATA_TYPE_BINARY || pRet->cols[i].type == TSDB_DATA_TYPE_NCHAR) {
+          memcpy(pRet->cols[i].dataOff, pDataCols->cols[i].dataOff, sizeof(VarDataOffsetT) * pDataCols->maxPoints);
+        }
       }
     }
   }
@@ -443,8 +445,10 @@ int tdMergeDataCols(SDataCols *target, SDataCols *source, int rowsToMerge) {
   if (dataColsKeyLast(target) < dataColsKeyFirst(source)) {  // No overlap
     for (int i = 0; i < rowsToMerge; i++) {
       for (int j = 0; j < source->numOfCols; j++) {
-        dataColAppendVal(target->cols + j, tdGetColDataOfRow(source->cols + j, i), target->numOfRows,
-                         target->maxPoints);
+        if (source->cols[j].len > 0) {
+          dataColAppendVal(target->cols + j, tdGetColDataOfRow(source->cols + j, i), target->numOfRows,
+                           target->maxPoints);
+        }
       }
       target->numOfRows++;
     }
@@ -479,8 +483,10 @@ void tdMergeTwoDataCols(SDataCols *target, SDataCols *src1, int *iter1, int limi
     if (key1 <= key2) {
       for (int i = 0; i < src1->numOfCols; i++) {
         ASSERT(target->cols[i].type == src1->cols[i].type);
-        dataColAppendVal(&(target->cols[i]), tdGetColDataOfRow(src1->cols + i, *iter1), target->numOfRows,
-                         target->maxPoints);
+        if (src1->cols[i].len > 0) {
+          dataColAppendVal(&(target->cols[i]), tdGetColDataOfRow(src1->cols + i, *iter1), target->numOfRows,
+                           target->maxPoints);
+        }
       }
 
       target->numOfRows++;
@@ -489,8 +495,10 @@ void tdMergeTwoDataCols(SDataCols *target, SDataCols *src1, int *iter1, int limi
     } else {
       for (int i = 0; i < src2->numOfCols; i++) {
         ASSERT(target->cols[i].type == src2->cols[i].type);
-        dataColAppendVal(&(target->cols[i]), tdGetColDataOfRow(src2->cols + i, *iter2), target->numOfRows,
-                         target->maxPoints);
+        if (src2->cols[i].len > 0) {
+          dataColAppendVal(&(target->cols[i]), tdGetColDataOfRow(src2->cols + i, *iter2), target->numOfRows,
+                           target->maxPoints);
+        }
       }
 
       target->numOfRows++;
@@ -505,6 +513,22 @@ SKVRow tdKVRowDup(SKVRow row) {
 
   kvRowCpy(trow, row);
   return trow;
+}
+
+static int compareColIdx(const void* a, const void* b) {
+  const SColIdx* x = (const SColIdx*)a;
+  const SColIdx* y = (const SColIdx*)b;
+  if (x->colId > y->colId) {
+    return 1;
+  }
+  if (x->colId < y->colId) {
+    return -1;
+  }
+  return 0;
+}
+
+void tdSortKVRowByColIdx(SKVRow row) {
+  qsort(kvRowColIdx(row), kvRowNCols(row), sizeof(SColIdx), compareColIdx);
 }
 
 int tdSetKVRowDataOfCol(SKVRow *orow, int16_t colId, int8_t type, void *value) {

@@ -33,6 +33,7 @@ extern int32_t  tsStatusInterval;
 extern int16_t  tsNumOfVnodesPerCore;
 extern int16_t  tsNumOfTotalVnodes;
 extern int32_t  tsNumOfMnodes;
+extern int32_t  tsEnableVnodeBak;
 
 // common
 extern int      tsRpcTimer;
@@ -117,6 +118,7 @@ extern char    tsDataDir[];
 extern char    tsLogDir[];
 extern char    tsScriptDir[];
 extern int64_t tsMsPerDay[3];
+extern char    tsVnodeBakDir[];
 
 // system info
 extern char    tsOsName[];
@@ -128,10 +130,10 @@ extern float   tsTotalLogDirGB;
 extern float   tsTotalTmpDirGB;
 extern float   tsTotalDataDirGB;
 extern float   tsAvailLogDirGB;
-extern float   tsAvailTmpDirGB;
+extern float   tsAvailTmpDirectorySpace;
 extern float   tsAvailDataDirGB;
 extern float   tsMinimalLogDirGB;
-extern float   tsMinimalTmpDirGB;
+extern float   tsReservedTmpDirectorySpace;
 extern float   tsMinimalDataDirGB;
 extern int32_t tsTotalMemoryMB;
 extern int32_t tsVersion;
@@ -158,9 +160,10 @@ extern int32_t mqttDebugFlag;
 extern int32_t monitorDebugFlag;
 extern int32_t uDebugFlag;
 extern int32_t rpcDebugFlag;
-extern int32_t debugFlag;
 extern int32_t odbcDebugFlag;
 extern int32_t qDebugFlag;
+extern int32_t wDebugFlag;
+extern int32_t debugFlag;
 
 #define NEEDTO_COMPRESSS_MSG(size) (tsCompressMsgSize != -1 && (size) > tsCompressMsgSize)
 

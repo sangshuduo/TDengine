@@ -41,9 +41,11 @@ int32_t  tsStatusInterval = 1;  // second
 int16_t  tsNumOfVnodesPerCore = 8;
 int16_t  tsNumOfTotalVnodes = TSDB_INVALID_VNODE_NUM;
 int32_t  tsNumOfMnodes = 3;
+int32_t  tsEnableVnodeBak = 1;
+
 
 // common
-int32_t tsRpcTimer = 300;
+int32_t tsRpcTimer = 1000;
 int32_t tsRpcMaxTime = 600;  // seconds;
 int32_t tsMaxShellConns = 5000;
 int32_t tsMaxConnections = 5000;
@@ -153,6 +155,7 @@ char    tsDnodeDir[TSDB_FILENAME_LEN] = {0};
 char    tsMnodeDir[TSDB_FILENAME_LEN] = {0};
 char    tsDataDir[TSDB_FILENAME_LEN] = "/var/lib/taos";
 char    tsScriptDir[TSDB_FILENAME_LEN] = "/etc/taos";
+char    tsVnodeBakDir[TSDB_FILENAME_LEN] = {0};
 
 /*
  * minimum scale for whole system, millisecond by default
@@ -170,9 +173,9 @@ int64_t tsStreamMax;
 int32_t tsNumOfCores = 1;
 float   tsTotalTmpDirGB = 0;
 float   tsTotalDataDirGB = 0;
-float   tsAvailTmpDirGB = 0;
+float   tsAvailTmpDirectorySpace = 0;
 float   tsAvailDataDirGB = 0;
-float   tsMinimalTmpDirGB = 0.1;
+float   tsReservedTmpDirectorySpace = 0.1;
 float   tsMinimalDataDirGB = 0.5;
 int32_t tsTotalMemoryMB = 0;
 int32_t tsVersion = 0;
@@ -182,19 +185,20 @@ int32_t tsNumOfLogLines = 10000000;
 int32_t mDebugFlag = 135;
 int32_t sdbDebugFlag = 135;
 int32_t dDebugFlag = 135;
-int32_t vDebugFlag = 135;
-int32_t cDebugFlag = 135;
+int32_t vDebugFlag = 131;
+int32_t cDebugFlag = 131;
 int32_t jniDebugFlag = 131;
 int32_t odbcDebugFlag = 131;
 int32_t httpDebugFlag = 131;
 int32_t mqttDebugFlag = 131;
 int32_t monitorDebugFlag = 131;
 int32_t qDebugFlag = 131;
-int32_t rpcDebugFlag = 135;
+int32_t rpcDebugFlag = 131;
 int32_t uDebugFlag = 131;
 int32_t debugFlag = 131;
 int32_t sDebugFlag = 135;
-int32_t tsdbDebugFlag = 135;
+int32_t wDebugFlag = 135;
+int32_t tsdbDebugFlag = 131;
 
 static pthread_once_t tsInitGlobalCfgOnce = PTHREAD_ONCE_INIT;
 
@@ -213,10 +217,11 @@ void taosSetAllDebugFlag() {
     rpcDebugFlag = debugFlag;
     uDebugFlag = debugFlag;
     sDebugFlag = debugFlag;
+    wDebugFlag = debugFlag;
     tsdbDebugFlag = debugFlag;
     qDebugFlag = debugFlag;    
   }
-  uPrint("all debug flag are set to %d", debugFlag);
+  uInfo("all debug flag are set to %d", debugFlag);
 }
 
 bool taosCfgDynamicOptions(char *msg) {
@@ -234,7 +239,7 @@ bool taosCfgDynamicOptions(char *msg) {
     vint = atoi(value);
   }
 
-  uPrint("change dynamic option: %s, value: %d", option, vint);
+  uInfo("change dynamic option: %s, value: %d", option, vint);
 
   for (int32_t i = 0; i < tsGlobalConfigNum; ++i) {
     SGlobalCfg *cfg = tsGlobalConfig + i;
@@ -416,6 +421,16 @@ static void doInitGlobalConfig() {
   cfg.minValue = 1;
   cfg.maxValue = 3;
   cfg.ptrLength = 0;
+  cfg.unitType = TAOS_CFG_UTYPE_NONE;
+  taosInitConfigOption(cfg);
+
+  cfg.option = "vnodeBak";
+  cfg.ptr = &tsEnableVnodeBak;
+  cfg.valType = TAOS_CFG_VTYPE_INT32;
+  cfg.cfgType = TSDB_CFG_CTYPE_B_CONFIG | TSDB_CFG_CTYPE_B_SHOW;
+  cfg.minValue = 0;
+  cfg.maxValue = 1;
+  cfg.ptrLength = 1;
   cfg.unitType = TAOS_CFG_UTYPE_NONE;
   taosInitConfigOption(cfg);
 
@@ -805,7 +820,7 @@ static void doInitGlobalConfig() {
   taosInitConfigOption(cfg);
 
   cfg.option = "minimalTmpDirGB";
-  cfg.ptr = &tsMinimalTmpDirGB;
+  cfg.ptr = &tsReservedTmpDirectorySpace;
   cfg.valType = TAOS_CFG_VTYPE_FLOAT;
   cfg.cfgType = TSDB_CFG_CTYPE_B_CONFIG | TSDB_CFG_CTYPE_B_SHOW;
   cfg.minValue = 0.001;
@@ -977,6 +992,17 @@ static void doInitGlobalConfig() {
   cfg.unitType = TAOS_CFG_UTYPE_NONE;
   taosInitConfigOption(cfg);
 
+  cfg.option = "wDebugFlag";
+  cfg.ptr = &wDebugFlag;
+  cfg.valType = TAOS_CFG_VTYPE_INT32;
+  cfg.cfgType = TSDB_CFG_CTYPE_B_CONFIG | TSDB_CFG_CTYPE_B_LOG;
+  cfg.minValue = 0;
+  cfg.maxValue = 255;
+  cfg.ptrLength = 0;
+  cfg.unitType = TAOS_CFG_UTYPE_NONE;
+  taosInitConfigOption(cfg);
+
+
   cfg.option = "sdbDebugFlag";
   cfg.ptr = &sdbDebugFlag;
   cfg.valType = TAOS_CFG_VTYPE_INT32;
@@ -1067,7 +1093,6 @@ static void doInitGlobalConfig() {
   cfg.unitType = TAOS_CFG_UTYPE_NONE;
   taosInitConfigOption(cfg);
 
-
   cfg.option = "monitorDebugFlag";
   cfg.ptr = &monitorDebugFlag;
   cfg.valType = TAOS_CFG_VTYPE_INT32;
@@ -1082,6 +1107,16 @@ static void doInitGlobalConfig() {
   cfg.ptr = &qDebugFlag;
   cfg.valType = TAOS_CFG_VTYPE_INT32;
   cfg.cfgType = TSDB_CFG_CTYPE_B_CONFIG | TSDB_CFG_CTYPE_B_LOG | TSDB_CFG_CTYPE_B_CLIENT;
+  cfg.minValue = 0;
+  cfg.maxValue = 255;
+  cfg.ptrLength = 0;
+  cfg.unitType = TAOS_CFG_UTYPE_NONE;
+  taosInitConfigOption(cfg);
+
+  cfg.option = "vDebugFlag";
+  cfg.ptr = &vDebugFlag;
+  cfg.valType = TAOS_CFG_VTYPE_INT32;
+  cfg.cfgType = TSDB_CFG_CTYPE_B_CONFIG | TSDB_CFG_CTYPE_B_LOG;
   cfg.minValue = 0;
   cfg.maxValue = 255;
   cfg.ptrLength = 0;
@@ -1175,7 +1210,7 @@ void taosInitGlobalCfg() {
 }
 
 bool taosCheckGlobalCfg() {
-  if (debugFlag == 135 || debugFlag == 199) {
+  if (debugFlag & DEBUG_TRACE || debugFlag & DEBUG_DEBUG || debugFlag & DEBUG_DUMP) {
     taosSetAllDebugFlag();
   }
   
@@ -1184,7 +1219,7 @@ bool taosCheckGlobalCfg() {
   }
 
   snprintf(tsLocalEp, sizeof(tsLocalEp), "%s:%d", tsLocalFqdn, tsServerPort);
-  uPrint("localEp is: %s", tsLocalEp);
+  uInfo("localEp is: %s", tsLocalEp);
 
   if (tsFirst[0] == 0) {
     strcpy(tsFirst, tsLocalEp);

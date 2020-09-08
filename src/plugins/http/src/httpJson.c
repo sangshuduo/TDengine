@@ -52,13 +52,13 @@ int httpWriteBufByFd(struct HttpContext* pContext, const char* buf, int sz) {
     }
 
     if (len < 0) {
-      httpTrace("context:%p, fd:%d, ip:%s, socket write errno:%d, times:%d",
+      httpDebug("context:%p, fd:%d, ip:%s, socket write errno:%d, times:%d",
                 pContext, pContext->fd, pContext->ipstr, errno, countWait);
       if (++countWait > HTTP_WRITE_RETRY_TIMES) break;
       taosMsleep(HTTP_WRITE_WAIT_TIME_MS);
       continue;
     } else if (len == 0) {
-      httpTrace("context:%p, fd:%d, ip:%s, socket write errno:%d, connect already closed",
+      httpDebug("context:%p, fd:%d, ip:%s, socket write errno:%d, connect already closed",
                 pContext, pContext->fd, pContext->ipstr, errno);
       break;
     } else {
@@ -76,8 +76,8 @@ int httpWriteBuf(struct HttpContext *pContext, const char *buf, int sz) {
     httpError("context:%p, fd:%d, ip:%s, dataSize:%d, writeSize:%d, failed to send response:\n%s",
               pContext, pContext->fd, pContext->ipstr, sz, writeSz, buf);
   } else {
-    httpTrace("context:%p, fd:%d, ip:%s, dataSize:%d, writeSize:%d, response:\n%s",
-              pContext, pContext->fd, pContext->ipstr, sz, writeSz, buf);
+    httpTrace("context:%p, fd:%d, ip:%s, dataSize:%d, writeSize:%d, response:\n%s", pContext, pContext->fd,
+              pContext->ipstr, sz, writeSz, buf);
   }
 
   return writeSz;
@@ -192,7 +192,7 @@ void httpInitJsonBuf(JsonBuf* buf, struct HttpContext* pContext) {
     httpGzipCompressInit(buf->pContext);
   }
 
-  httpTrace("context:%p, fd:%d, ip:%s, json buffer initialized", buf->pContext, buf->pContext->fd, buf->pContext->ipstr);
+  httpDebug("context:%p, fd:%d, ip:%s, json buffer initialized", buf->pContext, buf->pContext->fd, buf->pContext->ipstr);
 }
 
 void httpJsonItemToken(JsonBuf* buf) {
@@ -441,7 +441,7 @@ void httpJsonPairStatus(JsonBuf* buf, int code) {
   } else {
     httpJsonPair(buf, "status", 6, "error", 5);
     httpJsonItemToken(buf);
-    httpJsonPairIntVal(buf, "code", 4, code);
+    httpJsonPairIntVal(buf, "code", 4, code & 0XFFFF);
     httpJsonItemToken(buf);
     if (code == TSDB_CODE_MND_DB_NOT_SELECTED) {
       httpJsonPair(buf, "desc", 4, "failed to create database", 23);

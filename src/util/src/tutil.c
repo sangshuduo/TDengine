@@ -784,14 +784,14 @@ void taosRemoveDir(char *rootDir) {
       taosRemoveDir(filename);
     } else {
       (void)remove(filename);
-      uPrint("file:%s is removed", filename);
+      uInfo("file:%s is removed", filename);
     }
   }
 
   closedir(dir);
   rmdir(rootDir);
 
-  uPrint("dir:%s is removed", rootDir);
+  uInfo("dir:%s is removed", rootDir);
 }
 
 int tmkdir(const char *path, mode_t mode) {
@@ -799,3 +799,18 @@ int tmkdir(const char *path, mode_t mode) {
   if (code < 0 && errno == EEXIST) code = 0;
   return code;
 }
+
+void taosMvDir(char* destDir, char *srcDir) {
+  if (0 == tsEnableVnodeBak) {
+    uInfo("vnode backup not enabled");
+    return;
+  }
+
+  char shellCmd[1024+1] = {0}; 
+  
+  //(void)snprintf(shellCmd, 1024, "cp -rf %s %s", srcDir, destDir);
+  (void)snprintf(shellCmd, 1024, "mv %s %s", srcDir, destDir);
+  tSystem(shellCmd);
+  uInfo("shell cmd:%s is executed", shellCmd);
+}
+

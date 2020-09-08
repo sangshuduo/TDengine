@@ -25,7 +25,6 @@
 #include "tdataformat.h"
 #include "vnode.h"
 #include "vnodeInt.h"
-#include "vnodeLog.h"
 #include "tcq.h"
 
 static int32_t (*vnodeProcessWriteMsgFp[TSDB_MSG_TYPE_MAX])(SVnodeObj *, void *, SRspRet *);
@@ -50,19 +49,26 @@ int32_t vnodeProcessWrite(void *param1, int qtype, void *param2, void *item) {
   SVnodeObj *pVnode = (SVnodeObj *)param1;
   SWalHead  *pHead = param2;
 
-  if (vnodeProcessWriteMsgFp[pHead->msgType] == NULL) 
+  if (vnodeProcessWriteMsgFp[pHead->msgType] == NULL) {
+    vDebug("vgId:%d, msgType:%s not processed, no handle", pVnode->vgId, taosMsg[pHead->msgType]);
     return TSDB_CODE_VND_MSG_NOT_PROCESSED; 
+  }
 
   if (!(pVnode->accessState & TSDB_VN_WRITE_ACCCESS)) {
+    vDebug("vgId:%d, msgType:%s not processed, no write auth", pVnode->vgId, taosMsg[pHead->msgType]);
     return TSDB_CODE_VND_NO_WRITE_AUTH;
   }
 
   if (pHead->version == 0) { // from client or CQ 
-    if (pVnode->status != TAOS_VN_STATUS_READY) 
-      return TSDB_CODE_VND_INVALID_VGROUP_ID;  // it may be in deleting or closing state
+    if (pVnode->status != TAOS_VN_STATUS_READY) {
+      vDebug("vgId:%d, msgType:%s not processed, vnode status is %d", pVnode->vgId, taosMsg[pHead->msgType], pVnode->status);
+      return TSDB_CODE_VND_INVALID_STATUS;  // it may be in deleting or closing state
+    }
 
-    if (pVnode->syncCfg.replica > 1 && pVnode->role != TAOS_SYNC_ROLE_MASTER)
+    if (pVnode->syncCfg.replica > 1 && pVnode->role != TAOS_SYNC_ROLE_MASTER) {
+      vDebug("vgId:%d, msgType:%s not processed, replica:%d role:%d", pVnode->vgId, taosMsg[pHead->msgType], pVnode->syncCfg.replica, pVnode->role);
       return TSDB_CODE_RPC_NOT_READY;
+    }
 
     // assign version
     pVnode->version++;
@@ -90,21 +96,25 @@ int32_t vnodeProcessWrite(void *param1, int qtype, void *param2, void *item) {
   return syncCode;
 }
 
+void vnodeConfirmForward(void *param, uint64_t version, int32_t code) {
+  SVnodeObj *pVnode = (SVnodeObj *)param;
+  syncConfirmForward(pVnode->sync, version, code);
+}
+
 static int32_t vnodeProcessSubmitMsg(SVnodeObj *pVnode, void *pCont, SRspRet *pRet) {
   int32_t code = TSDB_CODE_SUCCESS;
 
-  // save insert result into item
-
   vTrace("vgId:%d, submit msg is processed", pVnode->vgId);
-  
-  pRet->len = sizeof(SShellSubmitRspMsg);
-  pRet->rsp = rpcMallocCont(pRet->len);
-  SShellSubmitRspMsg *pRsp = pRet->rsp;
+
+  // save insert result into item
+  SShellSubmitRspMsg *pRsp = NULL;
+  if (pRet) {  
+    pRet->len = sizeof(SShellSubmitRspMsg);
+    pRet->rsp = rpcMallocCont(pRet->len);
+    pRsp = pRet->rsp;
+  }
+
   if (tsdbInsertData(pVnode->tsdb, pCont, pRsp) < 0) code = terrno;
-  pRsp->numOfFailedBlocks = 0; //TODO
-  //pRet->len += pRsp->numOfFailedBlocks * sizeof(SShellSubmitRspBlock); //TODO
-  pRsp->code              = 0;
-  pRsp->numOfRows         = htonl(1);
   
   return code;
 }
@@ -124,7 +134,7 @@ static int32_t vnodeProcessDropTableMsg(SVnodeObj *pVnode, void *pCont, SRspRet 
   SMDDropTableMsg *pTable = pCont;
   int32_t          code = TSDB_CODE_SUCCESS;
 
-  vTrace("vgId:%d, table:%s, start to drop", pVnode->vgId, pTable->tableId);
+  vDebug("vgId:%d, table:%s, start to drop", pVnode->vgId, pTable->tableId);
   STableId tableId = {.uid = htobe64(pTable->uid), .tid = htonl(pTable->sid)};
 
   if (tsdbDropTable(pVnode->tsdb, tableId) < 0) code = terrno;
@@ -139,7 +149,7 @@ static int32_t vnodeProcessAlterTableMsg(SVnodeObj *pVnode, void *pCont, SRspRet
   // if (tsdbCreateTable(pVnode->tsdb, pCfg) < 0) code = terrno;
 
   // tsdbClearTableCfg(pCfg);
-  vTrace("vgId:%d, alter table msg is received", pVnode->vgId);
+  vDebug("vgId:%d, alter table msg is received", pVnode->vgId);
   return TSDB_CODE_SUCCESS;
 }
 
@@ -147,19 +157,19 @@ static int32_t vnodeProcessDropStableMsg(SVnodeObj *pVnode, void *pCont, SRspRet
   SMDDropSTableMsg *pTable = pCont;
   int32_t           code = TSDB_CODE_SUCCESS;
 
-  vTrace("vgId:%d, stable:%s, start to drop", pVnode->vgId, pTable->tableId);
+  vDebug("vgId:%d, stable:%s, start to drop", pVnode->vgId, pTable->tableId);
 
   STableId stableId = {.uid = htobe64(pTable->uid), .tid = -1};
 
   if (tsdbDropTable(pVnode->tsdb, stableId) < 0) code = terrno;
 
-  vTrace("vgId:%d, stable:%s, drop stable result:%s", pVnode->vgId, pTable->tableId, tstrerror(code));
+  vDebug("vgId:%d, stable:%s, drop stable result:%s", pVnode->vgId, pTable->tableId, tstrerror(code));
 
   return code;
 }
 
 static int32_t vnodeProcessUpdateTagValMsg(SVnodeObj *pVnode, void *pCont, SRspRet *pRet) {
-  if (tsdbUpdateTagValue(pVnode->tsdb, (SUpdateTableTagValMsg *)pCont) < 0) {
+  if (tsdbUpdateTableTagValue(pVnode->tsdb, (SUpdateTableTagValMsg *)pCont) < 0) {
     return terrno;
   }
   return TSDB_CODE_SUCCESS;

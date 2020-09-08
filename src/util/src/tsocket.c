@@ -224,7 +224,7 @@ int taosOpenUdpSocket(uint32_t ip, uint16_t port) {
   int                sockFd;
   int                bufSize = 1024000;
 
-  uTrace("open udp socket:0x%x:%hu", ip, port);
+  uDebug("open udp socket:0x%x:%hu", ip, port);
 
   memset((char *)&localAddr, 0, sizeof(localAddr));
   localAddr.sin_family = AF_INET;
@@ -356,7 +356,7 @@ int taosOpenTcpServerSocket(uint32_t ip, uint16_t port) {
   int                sockFd;
   int                reuse;
 
-  uTrace("open tcp server socket:0x%x:%hu", ip, port);
+  uDebug("open tcp server socket:0x%x:%hu", ip, port);
 
   bzero((char *)&serverAdd, sizeof(serverAdd));
   serverAdd.sin_family = AF_INET;
@@ -383,10 +383,15 @@ int taosOpenTcpServerSocket(uint32_t ip, uint16_t port) {
     return -1;
   }
 
-  if (taosKeepTcpAlive(sockFd) < 0) return -1;
+  if (taosKeepTcpAlive(sockFd) < 0) {
+    uError("failed to set tcp server keep-alive option, 0x%x:%hu(%s)", ip, port, strerror(errno));
+    close(sockFd);
+    return -1;
+  }
 
   if (listen(sockFd, 10) < 0) {
     uError("listen tcp server socket failed, 0x%x:%hu(%s)", ip, port, strerror(errno));
+    close(sockFd);
     return -1;
   }
 

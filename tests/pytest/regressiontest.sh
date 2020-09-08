@@ -1,7 +1,6 @@
 #!/bin/bash
 ulimit -c unlimited
 
-python3 ./test.py -f client/client.py
 python3 ./test.py -f insert/basic.py
 python3 ./test.py -f insert/int.py
 python3 ./test.py -f insert/float.py
@@ -43,7 +42,7 @@ python3 ./test.py -f tag_lite/commit.py
 python3 ./test.py -f tag_lite/create.py
 python3 ./test.py -f tag_lite/datatype.py
 python3 ./test.py -f tag_lite/datatype-without-alter.py
-# python3 ./test.py -f tag_lite/delete.py
+python3 ./test.py -f tag_lite/delete.py
 python3 ./test.py -f tag_lite/double.py
 python3 ./test.py -f tag_lite/float.py
 python3 ./test.py -f tag_lite/int_binary.py
@@ -134,8 +133,13 @@ python3 ./test.py -f table/del_stable.py
 python3 ./test.py -f query/filter.py
 python3 ./test.py -f query/filterAllIntTypes.py
 python3 ./test.py -f query/filterFloatAndDouble.py
+python3 ./test.py -f query/filterOtherTypes.py
+python3 ./test.py -f query/queryError.py
 python3 ./test.py -f query/querySort.py
-
+python3 ./test.py -f query/queryJoin.py
+python3 ./test.py -f query/filterCombo.py
+python3 ./test.py -f query/queryNormal.py
+python3 ./test.py -f query/select_last_crash.py
 
 #stream
 python3 ./test.py -f stream/stream1.py
@@ -144,4 +148,5 @@ python3 ./test.py -f stream/stream2.py
 #alter table
 python3 ./test.py -f alter/alter_table_crash.py
 
-
+# client
+python3 ./test.py -f client/client.py

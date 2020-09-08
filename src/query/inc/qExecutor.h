@@ -27,6 +27,7 @@
 #include "tref.h"
 #include "tsdb.h"
 #include "tsqlfunction.h"
+#include "query.h"
 
 struct SColumnFilterElem;
 typedef bool (*__filter_func_t)(struct SColumnFilterElem* pFilter, char* val1, char* val2);
@@ -94,16 +95,13 @@ typedef struct SSingleColumnFilterInfo {
 } SSingleColumnFilterInfo;
 
 typedef struct STableQueryInfo {  // todo merge with the STableQueryInfo struct
-  int32_t     tableIndex;
-  int32_t     groupIndex;  // group id in table list
   TSKEY       lastKey;
-  int32_t     numOfRes;
+  int32_t     groupIndex;     // group id in table list
   int16_t     queryRangeSet;  // denote if the query range is set, only available for interval query
   int64_t     tag;
   STimeWindow win;
   STSCursor   cur;
-  void*       pTable;  // for retrieve the page id list
-
+  void*       pTable;         // for retrieve the page id list
   SWindowResInfo windowResInfo;
 } STableQueryInfo;
 
@@ -125,11 +123,6 @@ typedef struct SQueryCostInfo {
   uint64_t elapsedTime;
   uint64_t computTime;
 } SQueryCostInfo;
-
-//typedef struct SGroupItem {
-//  void            *pTable;
-//  STableQueryInfo *info;
-//} SGroupItem;
 
 typedef struct SQuery {
   int16_t          numOfCols;
@@ -161,32 +154,37 @@ typedef struct SQuery {
 } SQuery;
 
 typedef struct SQueryRuntimeEnv {
-  SResultInfo*         resultInfo;  // todo refactor to merge with SWindowResInfo
+  jmp_buf              env;
+  SResultInfo*         resultInfo;       // todo refactor to merge with SWindowResInfo
   SQuery*              pQuery;
   SQLFunctionCtx*      pCtx;
   int16_t              numOfRowsPerPage;
   int16_t              offset[TSDB_MAX_COLUMNS];
-  uint16_t             scanFlag;  // denotes reversed scan of data or not
+  uint16_t             scanFlag;         // denotes reversed scan of data or not
   SFillInfo*           pFillInfo;
   SWindowResInfo       windowResInfo;
   STSBuf*              pTSBuf;
   STSCursor            cur;
   SQueryCostInfo       summary;
-  bool                 stableQuery;      // super table query or not
   void*                pQueryHandle;
   void*                pSecQueryHandle;  // another thread for
+  bool                 stableQuery;      // super table query or not
+  bool                 topBotQuery;      // false
+  bool                 groupbyNormalCol; // denote if this is a groupby normal column query
+  bool                 hasTagResults;    // if there are tag values in final result or not
+  int32_t              interBufSize;     // intermediate buffer sizse
+  int32_t              prevGroupId;      // previous executed group id
   SDiskbasedResultBuf* pResultBuf;       // query result buffer based on blocked-wised disk file
-  bool                 topBotQuery;      // false;
 } SQueryRuntimeEnv;
 
 typedef struct SQInfo {
-  void*   signature;
-  int32_t pointsInterpo;
-  int32_t code;  // error code to returned to client
-  sem_t   dataReady;
-  void*   tsdb;
-  int32_t vgId;
-
+  void*            signature;
+  int32_t          pointsInterpo;
+  int32_t          code;  // error code to returned to client
+  sem_t            dataReady;
+  void*            tsdb;
+  void*            param;
+  int32_t          vgId;
   STableGroupInfo  tableGroupInfo;       // table id list < only includes the STable list>
   STableGroupInfo  tableqinfoGroupInfo;  // this is a group array list, including SArray<STableQueryInfo*> structure
   SQueryRuntimeEnv runtimeEnv;
@@ -201,8 +199,12 @@ typedef struct SQInfo {
    * We later may refactor to remove this attribution by using another flag to denote
    * whether a multimeter query is completed or not.
    */
-  int32_t tableIndex;
-  int32_t numOfGroupResultPages;
+  int32_t          tableIndex;
+  int32_t          numOfGroupResultPages;
+  _qinfo_free_fn_t freeFn;  //todo remove it
+
+  void*     pBuf; // allocated buffer for STableQueryInfo, sizeof(STableQueryInfo)*numOfTables;
+
 } SQInfo;
 
 #endif  // TDENGINE_QUERYEXECUTOR_H

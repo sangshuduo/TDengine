@@ -32,8 +32,8 @@ extern "C" {
 
 #include "qExecutor.h"
 #include "qsqlparser.h"
-#include "qsqltype.h"
 #include "qtsbuf.h"
+#include "tcmdtype.h"
 
 // forward declaration
 struct SSqlInfo;
@@ -171,11 +171,7 @@ typedef struct STableDataBlocks {
    * to avoid it to be removed from cache
    */
   STableMeta *pTableMeta;
-
-  union {
-    char *filename;
-    char *pData;
-  };
+  char       *pData;
 
   // for parameter ('?') binding
   uint32_t    numOfAllocedParams;
@@ -217,8 +213,7 @@ typedef struct SQueryInfo {
 typedef struct {
   int     command;
   uint8_t msgType;
-  bool    autoCreated;        // if the table is missing, on-the-fly create it. during getmeterMeta
-  int8_t  dataSourceType;     // load data from file or not
+  bool    autoCreated;        // create table if it is not existed during retrieve table meta in mnode
 
   union {
     int32_t count;
@@ -226,18 +221,23 @@ typedef struct {
   };
 
   int32_t      insertType;
-  int32_t      clauseIndex;  // index of multiple subclause query
+  int32_t      clauseIndex;   // index of multiple subclause query
+
+  char *       curSql;       // current sql, resume position of sql after parsing paused
   int8_t       parseFinished;
+
   short        numOfCols;
   uint32_t     allocSize;
   char *       payload;
   int32_t      payloadLen;
   SQueryInfo **pQueryInfo;
   int32_t      numOfClause;
-  char *       curSql;       // current sql, resume position of sql after parsing paused
-  void *       pTableList;   // referred table involved in sql
   int32_t      batchSize;    // for parameter ('?') binding and batch processing
   int32_t      numOfParams;
+
+  int8_t       dataSourceType;     // load data from file or not
+  int8_t       submitSchema;  // submit block is built with table schema
+  SHashObj    *pTableList;   // referred table involved in sql
   SArray      *pDataBlocks;  // SArray<STableDataBlocks*> submit data blocks after parsing sql
 } SSqlCmd;
 
@@ -320,6 +320,8 @@ typedef struct SSqlStream {
   SSqlObj *pSql;
   uint32_t streamId;
   char     listed;
+  bool     isProject;
+  int16_t  precision;
   int64_t  num;  // number of computing count
 
   /*
@@ -334,7 +336,6 @@ typedef struct SSqlStream {
   int64_t etime;     // stream end query time, when time is larger then etime, the stream will be closed
   int64_t interval;
   int64_t slidingTime;
-  int16_t precision;
   void *  pTimer;
 
   void (*fp)();
@@ -395,21 +396,21 @@ TAOS *taos_connect_a(char *ip, char *user, char *pass, char *db, uint16_t port, 
                      void *param, void **taos);
 void waitForQueryRsp(void *param, TAOS_RES *tres, int code) ;
 
-int doAsyncParseSql(SSqlObj* pSql);
 void doAsyncQuery(STscObj *pObj, SSqlObj *pSql, void (*fp)(), void *param, const char *sqlstr, size_t sqlLen);
 
-void tscProcessMultiVnodesInsertFromFile(SSqlObj *pSql);
+void tscProcessMultiVnodesImportFromFile(SSqlObj *pSql);
 void tscKillSTableQuery(SSqlObj *pSql);
 void tscInitResObjForLocalQuery(SSqlObj *pObj, int32_t numOfRes, int32_t rowLen);
 bool tscIsUpdateQuery(SSqlObj* pSql);
 bool tscHasReachLimitation(SQueryInfo *pQueryInfo, SSqlRes *pRes);
+
+// todo remove this function.
 bool tscResultsetFetchCompleted(TAOS_RES *result);
 
 char *tscGetErrorMsgPayload(SSqlCmd *pCmd);
 
 int32_t tscInvalidSQLErrMsg(char *msg, const char *additionalInfo, const char *sql);
 
-void    tscQueueAsyncFreeResult(SSqlObj *pSql);
 int32_t tscToSQLCmd(SSqlObj *pSql, struct SSqlInfo *pInfo);
 void    tscGetResultColumnChr(SSqlRes *pRes, SFieldInfo* pFieldInfo, int32_t column);
 

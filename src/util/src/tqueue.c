@@ -68,10 +68,15 @@ void taosCloseQueue(taos_queue param) {
   if (param == NULL) return;
   STaosQueue *queue = (STaosQueue *)param;
   STaosQnode *pTemp;
+  STaosQset  *qset;
+
+  pthread_mutex_lock(&queue->mutex);
   STaosQnode *pNode = queue->head;  
   queue->head = NULL;
+  qset = queue->qset;
+  pthread_mutex_unlock(&queue->mutex);
 
-  if (queue->qset) taosRemoveFromQset(queue->qset, queue); 
+  if (queue->qset) taosRemoveFromQset(qset, queue); 
 
   pthread_mutex_lock(&queue->mutex);
 
@@ -88,16 +93,18 @@ void taosCloseQueue(taos_queue param) {
 
 void *taosAllocateQitem(int size) {
   STaosQnode *pNode = (STaosQnode *)calloc(sizeof(STaosQnode) + size, 1);
+  
   if (pNode == NULL) return NULL;
+  uTrace("item:%p, node:%p is allocated", pNode->item, pNode);
   return (void *)pNode->item;
 }
 
 void taosFreeQitem(void *param) {
   if (param == NULL) return;
 
-  uTrace("item:%p is freed", param);
   char *temp = (char *)param;
   temp -= sizeof(STaosQnode);
+  uTrace("item:%p, node:%p is freed", param, temp);
   free(temp);
 }
 
@@ -145,7 +152,7 @@ int taosReadQitem(taos_queue param, int *type, void **pitem) {
       queue->numOfItems--;
       if (queue->qset) atomic_sub_fetch_32(&queue->qset->numOfItems, 1);
       code = 1;
-      uTrace("item:%p is read out from queue:%p, type:%d items:%d", *pitem, queue, *type, queue->numOfItems);
+      uDebug("item:%p is read out from queue:%p, type:%d items:%d", *pitem, queue, *type, queue->numOfItems);
   } 
 
   pthread_mutex_unlock(&queue->mutex);
