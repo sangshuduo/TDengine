@@ -767,7 +767,7 @@ static int tsdbWriteBlockToFile(SRWHelper *pHelper, SFile *pFile, SDataCols *pDa
   int32_t lsize = tsize;
   int32_t keyLen = 0;
   for (int ncol = 0; ncol < pDataCols->numOfCols; ncol++) {
-    if (tcol >= nColsNotAllNull) break;
+    if (ncol != 0 && tcol >= nColsNotAllNull) break;
 
     SDataCol *pDataCol = pDataCols->cols + ncol;
     SCompCol *pCompCol = pCompData->cols + tcol;
@@ -1348,7 +1348,7 @@ static int tsdbLoadBlockDataImpl(SRWHelper *pHelper, SCompBlock *pCompBlock, SDa
   int dcol = 0;  // loop iter for SDataCols object
   while (dcol < pDataCols->numOfCols) {
     SDataCol *pDataCol = &(pDataCols->cols[dcol]);
-    if (ccol >= pCompData->numOfCols) {
+    if (dcol != 0 && ccol >= pCompData->numOfCols) {
       // Set current column as NULL and forward
       dataColSetNEleNull(pDataCol, pCompBlock->numOfRows, pDataCols->maxPoints);
       dcol++;

@@ -2013,7 +2013,8 @@ int tscProcessUseDbRsp(SSqlObj *pSql) {
   return 0;
 }
 
-int tscProcessDropDbRsp(SSqlObj *UNUSED_PARAM(pSql)) {
+int tscProcessDropDbRsp(SSqlObj *pSql) {
+  pSql->pTscObj->db[0] = 0;
   taosCacheEmpty(tscCacheHandle);
   return 0;
 }
@@ -2089,6 +2090,10 @@ int tscProcessRetrieveRspFromNode(SSqlObj *pSql) {
   SSqlCmd *pCmd = &pSql->cmd;
 
   SRetrieveTableRsp *pRetrieve = (SRetrieveTableRsp *)pRes->pRsp;
+  if (pRetrieve == NULL) {
+    pRes->code = TSDB_CODE_TSC_OUT_OF_MEMORY;
+    return pRes->code;
+  }
 
   pRes->numOfRows = htonl(pRetrieve->numOfRows);
   pRes->precision = htons(pRetrieve->precision);

@@ -13,19 +13,19 @@
  * along with this program. If not, see <http://www.gnu.org/licenses/>.
  */
 
-#define _DEFAULT_SOURCE
-#include "os.h"
-#include "tulog.h"
+#ifndef TDENGINE_TG_JSON_H
+#define TDENGINE_TG_JSON_H
 
-void taosRemoveDir(char *rootDir) {
-  uError("%s not implemented yet", __FUNCTION__);
-}
+#include "httpHandle.h"
+#include "httpJson.h"
+#include "taos.h"
 
-int taosMkDir(const char *path, mode_t mode) {
-  uError("%s not implemented yet", __FUNCTION__);
-  return 0;
-}
+void tgInitQueryJson(HttpContext *pContext);
+void tgCleanQueryJson(HttpContext *pContext);
+void tgStartQueryJson(HttpContext *pContext, HttpSqlCmd *cmd, TAOS_RES *result);
+void tgStopQueryJson(HttpContext *pContext, HttpSqlCmd *cmd);
+void tgBuildSqlAffectRowsJson(HttpContext *pContext, HttpSqlCmd *cmd, int32_t affect_rows);
+bool tgCheckFinished(struct HttpContext *pContext, HttpSqlCmd *cmd, int32_t code);
+void tgSetNextCmd(struct HttpContext *pContext, HttpSqlCmd *cmd, int32_t code);
 
-void taosMvDir(char* destDir, char *srcDir) {
-  uError("%s not implemented yet", __FUNCTION__);
-}
+#endif
