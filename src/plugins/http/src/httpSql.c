@@ -51,10 +51,6 @@ void httpProcessMultiSqlRetrieveCallBackImp(void *param, TAOS_RES *result, int n
     }
   }
 
-  // if (tscResultsetFetchCompleted(result)) {
-  //   isContinue = false;
-  // }
-
   if (isContinue) {
     // retrieve next batch of rows
     httpDebug("context:%p, fd:%d, user:%s, process pos:%d, continue retrieve, numOfRows:%d, sql:%s", pContext,
@@ -224,14 +220,6 @@ void httpProcessSingleSqlRetrieveCallBackImp(void *param, TAOS_RES *result, int 
     }
   }
 
-#if 0
-  // todo refactor
-  if (tscResultsetFetchCompleted(result)) {
-    httpDebug("context:%p, fd:%d, user:%s, resultset fetch completed", pContext, pContext->fd, pContext->user);
-    isContinue = false;
-  }
-#endif
-
   if (isContinue) {
     // retrieve next batch of rows
     httpDebug("context:%p, fd:%d, user:%s, continue retrieve, numOfRows:%d", pContext, pContext->fd, pContext->user,
@@ -269,20 +257,20 @@ void httpProcessSingleSqlCallBackImp(void *param, TAOS_RES *result, int unUsedCo
   HttpEncodeMethod *encode = pContext->encodeMethod;
 
   if (code == TSDB_CODE_TSC_ACTION_IN_PROGRESS) {
-    httpError("context:%p, fd:%d, user:%s, query error, taos:%p, code:%s:inprogress, sqlObj:%p", pContext, pContext->fd,
-              pContext->user, pContext->session->taos, tstrerror(code), (SSqlObj *)result);
+    httpError("context:%p, fd:%d, user:%s, query error, code:%s:inprogress, sqlObj:%p", pContext, pContext->fd,
+              pContext->user, tstrerror(code), (SSqlObj *)result);
     return;
   }
 
   if (code < 0) {
     SSqlObj *pObj = (SSqlObj *)result;
     if (code == TSDB_CODE_TSC_INVALID_SQL) {
-      httpError("context:%p, fd:%d, user:%s, query error, taos:%p, code:%s, sqlObj:%p, error:%s", pContext,
-                pContext->fd, pContext->user, pContext->session->taos, tstrerror(code), pObj, pObj->cmd.payload);
+      httpError("context:%p, fd:%d, user:%s, query error, code:%s, sqlObj:%p, error:%s", pContext,
+                pContext->fd, pContext->user, tstrerror(code), pObj, pObj->cmd.payload);
       httpSendTaosdInvalidSqlErrorResp(pContext, pObj->cmd.payload);
     } else {
-      httpError("context:%p, fd:%d, user:%s, query error, taos:%p, code:%s, sqlObj:%p", pContext, pContext->fd,
-                pContext->user, pContext->session->taos, tstrerror(code), pObj);
+      httpError("context:%p, fd:%d, user:%s, query error, code:%s, sqlObj:%p", pContext, pContext->fd,
+                pContext->user, tstrerror(code), pObj);
       httpSendErrorResp(pContext, code);
     }
     taos_free_result(result);
