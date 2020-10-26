@@ -98,7 +98,7 @@ static void taosReadInt16Config(SGlobalCfg *cfg, char *input_value) {
 }
 
 static void taosReadDirectoryConfig(SGlobalCfg *cfg, char *input_value) {
-  int   length = strlen(input_value);
+  int   length = (int)strlen(input_value);
   char *option = (char *)cfg->ptr;
   if (length <= 0 || length > cfg->ptrLength) {
     uError("config option:%s, input value:%s, length out of range[0, %d], use default value:%s",
@@ -118,7 +118,7 @@ static void taosReadDirectoryConfig(SGlobalCfg *cfg, char *input_value) {
       
       wordfree(&full_path);
 
-      int code = tmkdir(option, 0755);
+      int code = taosMkDir(option, 0755);
       if (code != 0) {
         terrno = TAOS_SYSTEM_ERROR(errno);
         uError("config option:%s, input value:%s, directory not exist, create fail:%s",
@@ -133,7 +133,7 @@ static void taosReadDirectoryConfig(SGlobalCfg *cfg, char *input_value) {
 }
 
 static void taosReadIpStrConfig(SGlobalCfg *cfg, char *input_value) {
-  uint32_t value = inet_addr(input_value);
+  uint32_t value = taosInetAddr(input_value);
   char *   option = (char *)cfg->ptr;
   if (value == INADDR_NONE) {
     uError("config option:%s, input value:%s, is not a valid ip address, use default value:%s",
@@ -150,7 +150,7 @@ static void taosReadIpStrConfig(SGlobalCfg *cfg, char *input_value) {
 }
 
 static void taosReadStringConfig(SGlobalCfg *cfg, char *input_value) {
-  int   length = strlen(input_value);
+  int   length = (int) strlen(input_value);
   char *option = (char *)cfg->ptr;
   if (length <= 0 || length > cfg->ptrLength) {
     uError("config option:%s, input value:%s, length out of range[0, %d], use default value:%s",
@@ -260,12 +260,17 @@ void taosReadGlobalLogCfg() {
     }
     strcpy(configDir, full_path.we_wordv[0]);
   } else {
+    #ifdef _TD_POWER_
+    printf("configDir:%s not there, use default value: /etc/power", configDir);
+    strcpy(configDir, "/etc/power");
+    #else
     printf("configDir:%s not there, use default value: /etc/taos", configDir);
     strcpy(configDir, "/etc/taos");
+    #endif
   }
   wordfree(&full_path);
 
-  taosReadLogOption("tsLogDir", tsLogDir);
+  taosReadLogOption("logDir", tsLogDir);
   
   sprintf(fileName, "%s/taos.cfg", configDir);
   fp = fopen(fileName, "r");
@@ -283,9 +288,9 @@ void taosReadGlobalLogCfg() {
     option = value = NULL;
     olen = vlen = 0;
 
-    getline(&line, &len, fp);
+    taosGetline(&line, &len, fp);
     line[len - 1] = 0;
-    
+
     paGetToken(line, &option, &olen);
     if (olen == 0) continue;
     option[olen] = 0;
@@ -297,7 +302,7 @@ void taosReadGlobalLogCfg() {
     taosReadLogOption(option, value);
   }
 
-  tfree(line);
+  taosTFree(line);
   fclose(fp);
 }
 
@@ -308,39 +313,48 @@ bool taosReadGlobalCfg() {
 
   sprintf(fileName, "%s/taos.cfg", configDir);
   FILE* fp = fopen(fileName, "r");
+  if (fp == NULL) {
+    struct stat s;
+    if (stat(configDir, &s) != 0 || (!S_ISREG(s.st_mode) && !S_ISLNK(s.st_mode))) {
+      //return true to follow behavior before file support
+      return true;
+    }
+    fp = fopen(configDir, "r");
+    if (fp == NULL) {
+      return false;
+    }
+  }
   
   size_t len = 1024;
   line = calloc(1, len);
   
-  if (fp != NULL) {
-    while (!feof(fp)) {
-      memset(line, 0, len);
+  while (!feof(fp)) {
+    memset(line, 0, len);
 
-      option = value = NULL;
-      olen = vlen = 0;
+    option = value = NULL;
+    olen = vlen = 0;
 
-      getline(&line, &len, fp);
-      line[len - 1] = 0;
-      
-      paGetToken(line, &option, &olen);
-      if (olen == 0) continue;
-      option[olen] = 0;
+    taosGetline(&line, &len, fp);
+    line[len - 1] = 0;
+    
+    paGetToken(line, &option, &olen);
+    if (olen == 0) continue;
+    option[olen] = 0;
 
-      paGetToken(option + olen + 1, &value, &vlen);
-      if (vlen == 0) continue;
-      value[vlen] = 0;
+    paGetToken(option + olen + 1, &value, &vlen);
+    if (vlen == 0) continue;
+    value[vlen] = 0;
 
-      // For dataDir, the format is:
-      // dataDir    /mnt/disk1    0
-      paGetToken(value + vlen + 1, &value1, &vlen1);
-      
-      taosReadConfigOption(option, value);
-    }
-
-    fclose(fp);
+    // For dataDir, the format is:
+    // dataDir    /mnt/disk1    0
+    paGetToken(value + vlen + 1, &value1, &vlen1);
+    
+    taosReadConfigOption(option, value);
   }
 
-  tfree(line);
+  fclose(fp);
+
+  taosTFree(line);
   
   return true;
 }

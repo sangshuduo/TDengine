@@ -36,11 +36,19 @@ struct define notes:
 3. The fields behind the updataEnd field can be changed;
 */
 
+typedef struct SClusterObj {
+  char    uid[TSDB_CLUSTER_ID_LEN];
+  int64_t createdTime;
+  int8_t  reserved[12];
+  int8_t  updateEnd[4];
+  int32_t refCount;
+} SClusterObj;
+
 typedef struct SDnodeObj {
   int32_t    dnodeId;
   int32_t    openVnodes;
   int64_t    createdTime;
-  int32_t    totalVnodes;      // from dnode status msg, config information
+  int32_t    resever0;         // from dnode status msg, config information
   int32_t    customScore;      // config by user
   uint32_t   lastAccess;
   uint16_t   numOfCores;       // from dnode status msg
@@ -50,8 +58,8 @@ typedef struct SDnodeObj {
   int8_t     alternativeRole;  // from dnode status msg, 0-any, 1-mgmt, 2-dnode
   int8_t     status;           // set in balance function
   int8_t     isMgmt;
-  int8_t     reserved0[14];  
-  int8_t     updateEnd[1];
+  int8_t     reserve1[11];  
+  int8_t     updateEnd[4];
   int32_t    refCount;
   uint32_t   moduleStatus;
   uint32_t   lastReboot;       // time stamp for last reboot
@@ -61,15 +69,16 @@ typedef struct SDnodeObj {
   int16_t    cpuAvgUsage;      // calc from sys.cpu
   int16_t    memoryAvgUsage;   // calc from sys.mem
   int16_t    bandwidthUsage;   // calc from sys.band
-  int8_t     reserved1[2];
+  int8_t     offlineReason;
+  int8_t     reserved2[1];
 } SDnodeObj;
 
 typedef struct SMnodeObj {
   int32_t    mnodeId;
   int8_t     reserved0[4];
   int64_t    createdTime;
-  int8_t     reserved1[7];
-  int8_t     updateEnd[1];
+  int8_t     reserved1[4];
+  int8_t     updateEnd[4];
   int32_t    refCount;
   int8_t     role;
   int8_t     reserved2[3];
@@ -82,7 +91,7 @@ typedef struct STableObj {
 
 typedef struct SSuperTableObj {
   STableObj  info; 
-  int8_t     reserved0[1]; // for fill struct STableObj to 4byte align
+  int8_t     reserved0[9]; // for fill struct STableObj to 4byte align
   int16_t    nextColId;
   int32_t    sversion;
   uint64_t   uid;
@@ -90,29 +99,26 @@ typedef struct SSuperTableObj {
   int32_t    tversion;
   int32_t    numOfColumns;
   int32_t    numOfTags;
-  int8_t     reserved1[3];
-  int8_t     updateEnd[1];
+  int8_t     updateEnd[4];
   int32_t    refCount;
   int32_t    numOfTables;
   SSchema *  schema;
   void *     vgHash;
-  int8_t     reserved2[6];
 } SSuperTableObj;
 
 typedef struct {
   STableObj  info;  
-  int8_t     reserved0[1]; // for fill struct STableObj to 4byte align
+  int8_t     reserved0[9]; // for fill struct STableObj to 4byte align
   int16_t    nextColId;    //used by normal table
   int32_t    sversion;     //used by normal table  
   uint64_t   uid;
   uint64_t   suid;
   int64_t    createdTime;
   int32_t    numOfColumns; //used by normal table
-  int32_t    sid;
+  int32_t    tid;
   int32_t    vgId;
   int32_t    sqlLen;
-  int8_t     updateEnd[1];
-  int8_t     reserved1[1]; 
+  int8_t     updateEnd[4];
   int32_t    refCount;
   char*      sql;          //used by normal table
   SSchema*   schema;       //used by normal table
@@ -138,17 +144,15 @@ typedef struct SVgObj {
   int8_t         status;
   int8_t         reserved0[4];
   SVnodeGid      vnodeGid[TSDB_MAX_REPLICA];
-  int8_t         reserved1[7];
-  int8_t         updateEnd[1];
+  int8_t         reserved1[12];
+  int8_t         updateEnd[4];
   int32_t        refCount;
   int32_t        numOfTables;
   int64_t        totalStorage;
   int64_t        compStorage;
   int64_t        pointsWritten;
-  struct SVgObj *prev, *next;
   struct SDbObj *pDb;
   void *         idPool;
-  SChildTableObj **tableList;
 } SVgObj;
 
 typedef struct {
@@ -162,10 +166,12 @@ typedef struct {
   int32_t minRowsPerFileBlock;
   int32_t maxRowsPerFileBlock;
   int32_t commitTime;
+  int32_t fsyncPeriod;
   int8_t  precision;
   int8_t  compression;
   int8_t  walLevel;
   int8_t  replications;
+  int8_t  quorum;
   int8_t  reserved[12];
 } SDbCfg;
 
@@ -177,15 +183,17 @@ typedef struct SDbObj {
   int32_t cfgVersion;
   SDbCfg  cfg;
   int8_t  status;
-  int8_t  reserved1[14];
-  int8_t  updateEnd[1];
+  int8_t  reserved1[11];
+  int8_t  updateEnd[4];
   int32_t refCount;
   int32_t numOfVgroups;
   int32_t numOfTables;
   int32_t numOfSuperTables;
-  SVgObj *pHead;
-  SVgObj *pTail;
+  int32_t vgListSize; 
+  int32_t vgListIndex;
+  SVgObj **vgList;
   struct SAcctObj *pAcct;
+  pthread_mutex_t  mutex;
 } SDbObj;
 
 typedef struct SUserObj {
@@ -195,8 +203,8 @@ typedef struct SUserObj {
   int64_t           createdTime;
   int8_t            superAuth;
   int8_t            writeAuth;
-  int8_t            reserved[13];
-  int8_t            updateEnd[1];
+  int8_t            reserved[10];
+  int8_t            updateEnd[4];
   int32_t           refCount;
   struct SAcctObj * pAcct;
 } SUserObj;
@@ -227,11 +235,11 @@ typedef struct SAcctObj {
   int64_t   createdTime;
   int32_t   acctId;
   int8_t    status;
-  int8_t    reserved0[10];
-  int8_t    updateEnd[1];
-  SAcctInfo acctInfo;
+  int8_t    reserved0[7];
+  int8_t    updateEnd[4];
   int32_t   refCount;
   int8_t    reserved1[4];
+  SAcctInfo acctInfo;
   pthread_mutex_t  mutex;
 } SAcctObj;
 
@@ -243,10 +251,12 @@ typedef struct {
   int32_t  rowSize;
   int32_t  numOfRows;
   void *   pIter;
+  void **  ppShow;
   int16_t  offset[TSDB_MAX_COLUMNS];
   int16_t  bytes[TSDB_MAX_COLUMNS];
   int32_t  numOfReads;
-  int8_t   reserved0[2];
+  int8_t   maxReplica;
+  int8_t   reserved0[0];
   uint16_t payloadLen;
   char     payload[];
 } SShowObj;

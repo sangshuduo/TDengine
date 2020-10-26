@@ -21,6 +21,7 @@
 #include "tgrant.h"
 #include "ttimer.h"
 #include "tglobal.h"
+#include "mnode.h"
 #include "dnode.h"
 #include "mnodeDef.h"
 #include "mnodeInt.h"
@@ -32,6 +33,7 @@
 #include "mnodeVgroup.h"
 #include "mnodeUser.h"
 #include "mnodeTable.h"
+#include "mnodeCluster.h"
 #include "mnodeShow.h"
 #include "mnodeProfile.h"
 
@@ -41,11 +43,12 @@ typedef struct {
   void              (*cleanup)();
 } SMnodeComponent;
 
-void *tsMnodeTmr;
+void *tsMnodeTmr = NULL;
 static bool tsMgmtIsRunning = false;
 
 static const SMnodeComponent tsMnodeComponents[] = {
   {"profile", mnodeInitProfile, mnodeCleanupProfile},
+  {"cluster", mnodeInitCluster, mnodeCleanupCluster},
   {"accts",   mnodeInitAccts,   mnodeCleanupAccts},
   {"users",   mnodeInitUsers,   mnodeCleanupUsers},
   {"dnodes",  mnodeInitDnodes,  mnodeCleanupDnodes},
@@ -105,26 +108,33 @@ int32_t mnodeStartSystem() {
   tsMgmtIsRunning = true;
 
   mInfo("mnode is initialized successfully");
+
+  sdbUpdateSync(NULL);
+
   return 0;
 }
 
 int32_t mnodeInitSystem() {
   mnodeInitTimer();
-  if (!mnodeNeedStart()) return 0;
-  return mnodeStartSystem();
+  if (mnodeNeedStart()) {
+    return mnodeStartSystem();
+  }
+  return 0;
 }
 
 void mnodeCleanupSystem() {
-  mInfo("starting to clean up mnode");
-  tsMgmtIsRunning = false;
+  if (tsMgmtIsRunning) {
+    mInfo("starting to clean up mnode");
+    tsMgmtIsRunning = false;
 
-  dnodeFreeMnodeWqueue();
-  dnodeFreeMnodeRqueue();
-  dnodeFreeMnodePqueue();
-  mnodeCleanupTimer();
-  mnodeCleanupComponents(sizeof(tsMnodeComponents) / sizeof(tsMnodeComponents[0]) - 1);
-  
-  mInfo("mnode is cleaned up");
+    dnodeFreeMnodeWqueue();
+    dnodeFreeMnodeRqueue();
+    dnodeFreeMnodePqueue();
+    mnodeCleanupTimer();
+    mnodeCleanupComponents(sizeof(tsMnodeComponents) / sizeof(tsMnodeComponents[0]) - 1);
+
+    mInfo("mnode is cleaned up");
+  }
 }
 
 void mnodeStopSystem() {
@@ -157,14 +167,19 @@ static void mnodeCleanupTimer() {
 
 static bool mnodeNeedStart() {
   struct stat dirstat;
-  bool fileExist = (stat(tsMnodeDir, &dirstat) == 0);
+  char mnodeFileName[TSDB_FILENAME_LEN * 2] = {0};
+  sprintf(mnodeFileName, "%s/wal/wal0", tsMnodeDir);
+
+  bool fileExist = (stat(mnodeFileName, &dirstat) == 0);
   bool asMaster = (strcmp(tsFirst, tsLocalEp) == 0);
 
   if (asMaster || fileExist) {
+    mDebug("mnode module start, asMaster:%d fileExist:%d", asMaster, fileExist);
     return true;
+  } else {
+    mDebug("mnode module won't start, asMaster:%d fileExist:%d", asMaster, fileExist);
+    return false;
   }
-
-  return false;
 }
 
 bool mnodeIsRunning() {

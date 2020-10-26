@@ -16,7 +16,6 @@
 #define _DEFAULT_SOURCE
 #include "os.h"
 #include "taoserror.h"
-#include "ttime.h"
 #include "dnode.h"
 #include "mnodeDef.h"
 #include "mnodeInt.h"
@@ -24,6 +23,7 @@
 #include "mnodeDb.h"
 #include "mnodeSdb.h"
 #include "mnodeUser.h"
+#include "mnodeVgroup.h"
 
 #include "tglobal.h"
 
@@ -34,7 +34,7 @@ static int32_t mnodeCreateRootAcct();
 static int32_t mnodeAcctActionDestroy(SSdbOper *pOper) {
   SAcctObj *pAcct = pOper->pObj;
   pthread_mutex_destroy(&pAcct->mutex);
-  tfree(pOper->pObj);
+  taosTFree(pOper->pObj);
   return TSDB_CODE_SUCCESS;
 }
 
@@ -64,7 +64,7 @@ static int32_t mnodeAcctActionUpdate(SSdbOper *pOper) {
   return TSDB_CODE_SUCCESS;
 }
 
-static int32_t mnodeActionActionEncode(SSdbOper *pOper) {
+static int32_t mnodeAcctActionEncode(SSdbOper *pOper) {
   SAcctObj *pAcct = pOper->pObj;
   memcpy(pOper->rowData, pAcct, tsAcctUpdateSize);
   pOper->rowSize = tsAcctUpdateSize;
@@ -85,7 +85,7 @@ static int32_t mnodeAcctActionRestored() {
   if (numOfRows <= 0 && dnodeIsFirstDeploy()) {
     mInfo("dnode first deploy, create root acct");
     int32_t code = mnodeCreateRootAcct();
-    if (code != TSDB_CODE_SUCCESS) {
+    if (code != TSDB_CODE_SUCCESS && code != TSDB_CODE_MND_ACTION_IN_PROGRESS) {
       mError("failed to create root account, reason:%s", tstrerror(code));
       return code;
     }
@@ -109,7 +109,7 @@ int32_t mnodeInitAccts() {
     .insertFp     = mnodeAcctActionInsert,
     .deleteFp     = mnodeAcctActionDelete,
     .updateFp     = mnodeAcctActionUpdate,
-    .encodeFp     = mnodeActionActionEncode,
+    .encodeFp     = mnodeAcctActionEncode,
     .decodeFp     = mnodeAcctActionDecode,
     .destroyFp    = mnodeAcctActionDestroy,
     .restoredFp   = mnodeAcctActionRestored
@@ -129,6 +129,37 @@ void mnodeCleanupAccts() {
   acctCleanUp();
   sdbCloseTable(tsAcctSdb);
   tsAcctSdb = NULL;
+}
+
+void mnodeGetStatOfAllAcct(SAcctInfo* pAcctInfo) {
+  memset(pAcctInfo, 0, sizeof(*pAcctInfo));
+
+  void   *pIter = NULL;
+  SAcctObj *pAcct = NULL;
+  while (1) {
+    pIter = mnodeGetNextAcct(pIter, &pAcct);
+    if (pAcct == NULL) {
+      break;
+    }
+    pAcctInfo->numOfDbs += pAcct->acctInfo.numOfDbs;
+    pAcctInfo->numOfTimeSeries += pAcct->acctInfo.numOfTimeSeries;
+    mnodeDecAcctRef(pAcct);
+  }
+  sdbFreeIter(pIter);
+
+  SVgObj *pVgroup = NULL;
+  pIter = NULL;
+  while (1) {
+    pIter = mnodeGetNextVgroup(pIter, &pVgroup);
+    if (pVgroup == NULL) {
+       break;
+    }
+    pAcctInfo->totalStorage += pVgroup->totalStorage;
+    pAcctInfo->compStorage += pVgroup->compStorage;
+    pAcctInfo->totalPoints += pVgroup->pointsWritten;
+    mnodeDecVgroupRef(pVgroup);
+  }
+  sdbFreeIter(pIter);
 }
 
 void *mnodeGetAcct(char *name) {
@@ -180,8 +211,8 @@ static int32_t mnodeCreateRootAcct() {
   strcpy(pAcct->user, TSDB_DEFAULT_USER);
   taosEncryptPass((uint8_t *)TSDB_DEFAULT_PASS, strlen(TSDB_DEFAULT_PASS), pAcct->pass);
   pAcct->cfg = (SAcctCfg){
-    .maxUsers           = 10,
-    .maxDbs             = 64,
+    .maxUsers           = 128,
+    .maxDbs             = 128,
     .maxTimeSeries      = INT32_MAX,
     .maxConnections     = 1024,
     .maxStreams         = 1000,

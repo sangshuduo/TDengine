@@ -22,10 +22,10 @@ extern "C" {
 
 typedef enum _VN_STATUS {
   TAOS_VN_STATUS_INIT,
-  TAOS_VN_STATUS_UPDATING,
   TAOS_VN_STATUS_READY,
   TAOS_VN_STATUS_CLOSING,
-  TAOS_VN_STATUS_DELETING,
+  TAOS_VN_STATUS_UPDATING,
+  TAOS_VN_STATUS_RESET,
 } EVnStatus;
 
 typedef struct {
@@ -41,23 +41,22 @@ typedef struct {
   SRpcMsg  rpcMsg;
 } SReadMsg;
 
+extern char *vnodeStatus[];
+
 int32_t vnodeCreate(SMDCreateVnodeMsg *pVnodeCfg);
 int32_t vnodeDrop(int32_t vgId);
 int32_t vnodeOpen(int32_t vgId, char *rootDir);
-int32_t vnodeStartStream(int32_t vgId);
 int32_t vnodeAlter(void *pVnode, SMDCreateVnodeMsg *pVnodeCfg);
 int32_t vnodeClose(int32_t vgId);
 
-void    vnodeRelease(void *pVnode);
-void*   vnodeAcquireVnode(int32_t vgId); // add refcount
-void*   vnodeGetVnode(int32_t vgId);      // keep refcount unchanged
-
-void*   vnodeAcquireRqueue(void *);
-void*   vnodeGetRqueue(void *);
-void*   vnodeGetWqueue(int32_t vgId);
+void*   vnodeAcquire(int32_t vgId);        // add refcount
+void*   vnodeAcquireRqueue(int32_t vgId);  // add refCount, get read queue 
+void*   vnodeAcquireWqueue(int32_t vgId);  // add recCount, get write queue
+void    vnodeRelease(void *pVnode);        // dec refCount
 void*   vnodeGetWal(void *pVnode);
 
 int32_t vnodeProcessWrite(void *pVnode, int qtype, void *pHead, void *item);
+int32_t vnodeCheckWrite(void *pVnode);
 int32_t vnodeGetVnodeList(int32_t vnodeList[], int32_t *numOfVnodes);
 void    vnodeBuildStatusMsg(void *param);
 void    vnodeConfirmForward(void *param, uint64_t version, int32_t code);
@@ -67,6 +66,7 @@ int32_t vnodeInitResources();
 void    vnodeCleanupResources();
 
 int32_t vnodeProcessRead(void *pVnode, SReadMsg *pReadMsg);
+int32_t vnodeCheckRead(void *pVnode);
 
 #ifdef __cplusplus
 }

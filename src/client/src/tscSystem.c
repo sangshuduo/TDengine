@@ -18,7 +18,6 @@
 #include "tcache.h"
 #include "trpc.h"
 #include "tsystem.h"
-#include "ttime.h"
 #include "ttimer.h"
 #include "tutil.h"
 #include "tsched.h"
@@ -31,7 +30,8 @@
 #include "tlocale.h"
 
 // global, not configurable
-void *  tscCacheHandle;
+SCacheObj*  tscMetaCache;
+SCacheObj*  tscObjCache;
 void *  tscTmr;
 void *  tscQhandle;
 void *  tscCheckDiskUsageTmr;
@@ -41,17 +41,15 @@ int tscNumOfThreads;
 
 static pthread_once_t tscinit = PTHREAD_ONCE_INIT;
 void taosInitNote(int numOfNoteLines, int maxNotes, char* lable);
-void tscUpdateIpSet(void *ahandle, SRpcIpSet *pIpSet);
+//void tscUpdateEpSet(void *ahandle, SRpcEpSet *pEpSet);
 
 void tscCheckDiskUsage(void *UNUSED_PARAM(para), void* UNUSED_PARAM(param)) {
   taosGetDisk();
   taosTmrReset(tscCheckDiskUsage, 1000, NULL, tscTmr, &tscCheckDiskUsageTmr);
 }
 
-int32_t tscInitRpc(const char *user, const char *secret, void** pDnodeConn) {
+int32_t tscInitRpc(const char *user, const char *secretEncrypt, void **pDnodeConn) {
   SRpcInit rpcInit;
-  char secretEncrypt[32] = {0};
-  taosEncryptPass((uint8_t *)secret, strlen(secret), secretEncrypt);
 
   if (*pDnodeConn == NULL) {
     memset(&rpcInit, 0, sizeof(rpcInit));
@@ -61,11 +59,11 @@ int32_t tscInitRpc(const char *user, const char *secret, void** pDnodeConn) {
     rpcInit.cfp = tscProcessMsgFromServer;
     rpcInit.sessions = tsMaxConnections;
     rpcInit.connType = TAOS_CONN_CLIENT;
-    rpcInit.user = (char*)user;
+    rpcInit.user = (char *)user;
     rpcInit.idleTime = 2000;
     rpcInit.ckey = "key";
     rpcInit.spi = 1;
-    rpcInit.secret = secretEncrypt;
+    rpcInit.secret = (char *)secretEncrypt;
 
     *pDnodeConn = rpcOpen(&rpcInit);
     if (*pDnodeConn == NULL) {
@@ -79,7 +77,8 @@ int32_t tscInitRpc(const char *user, const char *secret, void** pDnodeConn) {
   return 0;
 }
 
-void taos_init_imp() {
+
+void taos_init_imp(void) {
   char temp[128];
   
   errno = TSDB_CODE_SUCCESS;
@@ -116,21 +115,19 @@ void taos_init_imp() {
     taosInitNote(tsNumOfLogLines / 10, 1, (char*)"tsc_note");
   }
 
-  if (tscSetMgmtIpListFromCfg(tsFirst, tsSecond) < 0) {
-    tscError("failed to init mnode IP list");
+  if (tscSetMgmtEpSetFromCfg(tsFirst, tsSecond) < 0) {
+    tscError("failed to init mnode EP list");
     return;
   } 
 
   tscInitMsgsFp();
   int queueSize = tsMaxConnections*2;
 
-  if (tscEmbedded == 0) {
-    tscNumOfThreads = tsNumOfCores * tsNumOfThreadsPerCore / 2.0;
-  } else {
-    tscNumOfThreads = tsNumOfCores * tsNumOfThreadsPerCore / 4.0;
+  double factor = (tscEmbedded == 0)? 2.0:4.0;
+  tscNumOfThreads = (int)(tsNumOfCores * tsNumOfThreadsPerCore / factor);
+  if (tscNumOfThreads < 2) {
+    tscNumOfThreads = 2;
   }
-
-  if (tscNumOfThreads < 2) tscNumOfThreads = 2;
 
   tscQhandle = taosInitScheduler(queueSize, tscNumOfThreads, "tsc");
   if (NULL == tscQhandle) {
@@ -142,13 +139,11 @@ void taos_init_imp() {
   if(0 == tscEmbedded){
     taosTmrReset(tscCheckDiskUsage, 10, NULL, tscTmr, &tscCheckDiskUsageTmr);      
   }
-  
-  int64_t refreshTime = tsTableMetaKeepTimer;
-  refreshTime = refreshTime > 10 ? 10 : refreshTime;
-  refreshTime = refreshTime < 10 ? 10 : refreshTime;
 
-  if (tscCacheHandle == NULL) {
-    tscCacheHandle = taosCacheInit(TSDB_DATA_TYPE_BINARY, refreshTime, false, NULL, "client");
+  int64_t refreshTime = 10; // 10 seconds by default
+  if (tscMetaCache == NULL) {
+    tscMetaCache = taosCacheInit(TSDB_DATA_TYPE_BINARY, refreshTime, false, tscFreeTableMetaHelper, "tableMeta");
+    tscObjCache = taosCacheInit(TSDB_CACHE_PTR_KEY, refreshTime / 2, false, tscFreeRegisteredSqlObj, "sqlObj");
   }
 
   tscDebug("client is initialized successfully");
@@ -157,15 +152,20 @@ void taos_init_imp() {
 void taos_init() { pthread_once(&tscinit, taos_init_imp); }
 
 void taos_cleanup() {
-  if (tscCacheHandle != NULL) {
-    taosCacheCleanup(tscCacheHandle);
+  if (tscMetaCache != NULL) {
+    taosCacheCleanup(tscMetaCache);
+    tscMetaCache = NULL;
+
+    taosCacheCleanup(tscObjCache);
+    tscObjCache = NULL;
   }
   
   if (tscQhandle != NULL) {
     taosCleanUpScheduler(tscQhandle);
     tscQhandle = NULL;
   }
-  
+
+  taosCleanupKeywordsTable();
   taosCloseLog();
   
   taosTmrCleanUp(tscTmr);
@@ -220,7 +220,7 @@ static int taos_options_imp(TSDB_OPTION option, const char *pStr) {
 
         if (strlen(tsLocale) == 0) { // locale does not set yet
           char* defaultLocale = setlocale(LC_CTYPE, "");
-          tstrncpy(tsLocale, defaultLocale, sizeof(tsLocale));
+          tstrncpy(tsLocale, defaultLocale, TSDB_LOCALE_LEN);
         }
 
         // set the user specified locale
@@ -234,7 +234,7 @@ static int taos_options_imp(TSDB_OPTION option, const char *pStr) {
           tscInfo("failed to set locale:%s, current locale:%s", pStr, tsLocale);
         }
 
-        tstrncpy(tsLocale, locale, sizeof(tsLocale));
+        tstrncpy(tsLocale, locale, TSDB_LOCALE_LEN);
 
         char *charset = strrchr(tsLocale, sep);
         if (charset != NULL) {
@@ -249,7 +249,7 @@ static int taos_options_imp(TSDB_OPTION option, const char *pStr) {
               tscInfo("charset changed from %s to %s", tsCharset, charset);
             }
 
-            tstrncpy(tsCharset, charset, sizeof(tsCharset));
+            tstrncpy(tsCharset, charset, TSDB_LOCALE_LEN);
             cfg->cfgStatus = TAOS_CFG_CSTATUS_OPTION;
 
           } else {
@@ -286,7 +286,7 @@ static int taos_options_imp(TSDB_OPTION option, const char *pStr) {
             tscInfo("charset changed from %s to %s", tsCharset, pStr);
           }
 
-          tstrncpy(tsCharset, pStr, sizeof(tsCharset));
+          tstrncpy(tsCharset, pStr, TSDB_LOCALE_LEN);
           cfg->cfgStatus = TAOS_CFG_CSTATUS_OPTION;
         } else {
           tscInfo("charset:%s not valid", pStr);
@@ -304,7 +304,7 @@ static int taos_options_imp(TSDB_OPTION option, const char *pStr) {
       assert(cfg != NULL);
     
       if (cfg->cfgStatus <= TAOS_CFG_CSTATUS_OPTION) {
-        tstrncpy(tsTimezone, pStr, sizeof(tsTimezone));
+        tstrncpy(tsTimezone, pStr, TSDB_TIMEZONE_LEN);
         tsSetTimeZone();
         cfg->cfgStatus = TAOS_CFG_CSTATUS_OPTION;
         tscDebug("timezone set:%s, input:%s by taos_options", tsTimezone, pStr);

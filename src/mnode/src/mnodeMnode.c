@@ -16,13 +16,15 @@
 #define _DEFAULT_SOURCE
 #include "os.h"
 #include "taoserror.h"
+#include "tglobal.h"
 #include "trpc.h"
 #include "tsync.h"
 #include "tbalance.h"
 #include "tutil.h"
-#include "ttime.h"
 #include "tsocket.h"
 #include "tdataformat.h"
+#include "dnode.h"
+#include "mnode.h"
 #include "mnodeDef.h"
 #include "mnodeInt.h"
 #include "mnodeMnode.h"
@@ -30,13 +32,12 @@
 #include "mnodeSdb.h"
 #include "mnodeShow.h"
 #include "mnodeUser.h"
-
-#include "tglobal.h"
+#include "mnodeVgroup.h"
 
 static void *        tsMnodeSdb = NULL;
 static int32_t       tsMnodeUpdateSize = 0;
-static SRpcIpSet     tsMnodeIpSetForShell;
-static SRpcIpSet     tsMnodeIpSetForPeer;
+static SRpcEpSet     tsMnodeEpSetForShell;
+static SRpcEpSet     tsMnodeEpSetForPeer;
 static SDMMnodeInfos tsMnodeInfos;
 static int32_t mnodeGetMnodeMeta(STableMetaMsg *pMeta, SShowObj *pShow, void *pConn);
 static int32_t mnodeRetrieveMnodes(SShowObj *pShow, char *data, int32_t rows, void *pConn);
@@ -58,7 +59,7 @@ static int32_t mnodeRetrieveMnodes(SShowObj *pShow, char *data, int32_t rows, vo
 #endif
 
 static int32_t mnodeMnodeActionDestroy(SSdbOper *pOper) {
-  tfree(pOper->pObj);
+  taosTFree(pOper->pObj);
   return TSDB_CODE_SUCCESS;
 }
 
@@ -70,6 +71,7 @@ static int32_t mnodeMnodeActionInsert(SSdbOper *pOper) {
   pDnode->isMgmt = true;
   mnodeDecDnodeRef(pDnode);
   
+  mInfo("mnode:%d, fqdn:%s ep:%s port:%d, do insert action", pMnode->mnodeId, pDnode->dnodeFqdn, pDnode->dnodeEp, pDnode->dnodePort);
   return TSDB_CODE_SUCCESS;
 }
 
@@ -123,7 +125,7 @@ static int32_t mnodeMnodeActionRestored() {
     sdbFreeIter(pIter);
   }
 
-  mnodeUpdateMnodeIpSet();
+  mnodeUpdateMnodeEpSet();
 
   return TSDB_CODE_SUCCESS;
 }
@@ -190,27 +192,16 @@ void *mnodeGetNextMnode(void *pIter, SMnodeObj **pMnode) {
 }
 
 char *mnodeGetMnodeRoleStr(int32_t role) {
-  switch (role) {
-    case TAOS_SYNC_ROLE_OFFLINE:
-      return "offline";
-    case TAOS_SYNC_ROLE_UNSYNCED:
-      return "unsynced";
-    case TAOS_SYNC_ROLE_SLAVE:
-      return "slave";
-    case TAOS_SYNC_ROLE_MASTER:
-      return "master";
-    default:
-      return "undefined";
-  }
+  return syncRole[role];
 }
 
-void mnodeUpdateMnodeIpSet() {
-  mInfo("update mnodes ipset, numOfIps:%d ", mnodeGetMnodesNum());
+void mnodeUpdateMnodeEpSet() {
+  mInfo("update mnodes epSet, numOfEps:%d ", mnodeGetMnodesNum());
 
   mnodeMnodeWrLock();
 
-  memset(&tsMnodeIpSetForShell, 0, sizeof(SRpcIpSet));
-  memset(&tsMnodeIpSetForPeer, 0, sizeof(SRpcIpSet));
+  memset(&tsMnodeEpSetForShell, 0, sizeof(SRpcEpSet));
+  memset(&tsMnodeEpSetForPeer, 0, sizeof(SRpcEpSet));
   memset(&tsMnodeInfos, 0, sizeof(SDMMnodeInfos));
 
   int32_t index = 0;
@@ -222,20 +213,20 @@ void mnodeUpdateMnodeIpSet() {
 
     SDnodeObj *pDnode = mnodeGetDnode(pMnode->mnodeId);
     if (pDnode != NULL) {
-      strcpy(tsMnodeIpSetForShell.fqdn[index], pDnode->dnodeFqdn);
-      tsMnodeIpSetForShell.port[index] = htons(pDnode->dnodePort);
-      mDebug("mnode:%d, for shell fqdn:%s %d", pDnode->dnodeId, tsMnodeIpSetForShell.fqdn[index], htons(tsMnodeIpSetForShell.port[index]));      
+      strcpy(tsMnodeEpSetForShell.fqdn[index], pDnode->dnodeFqdn);
+      tsMnodeEpSetForShell.port[index] = htons(pDnode->dnodePort);
+      mDebug("mnode:%d, for shell fqdn:%s %d", pDnode->dnodeId, tsMnodeEpSetForShell.fqdn[index], htons(tsMnodeEpSetForShell.port[index]));      
 
-      strcpy(tsMnodeIpSetForPeer.fqdn[index], pDnode->dnodeFqdn);
-      tsMnodeIpSetForPeer.port[index] = htons(pDnode->dnodePort + TSDB_PORT_DNODEDNODE);
-      mDebug("mnode:%d, for peer fqdn:%s %d", pDnode->dnodeId, tsMnodeIpSetForPeer.fqdn[index], htons(tsMnodeIpSetForPeer.port[index]));
+      strcpy(tsMnodeEpSetForPeer.fqdn[index], pDnode->dnodeFqdn);
+      tsMnodeEpSetForPeer.port[index] = htons(pDnode->dnodePort + TSDB_PORT_DNODEDNODE);
+      mDebug("mnode:%d, for peer fqdn:%s %d", pDnode->dnodeId, tsMnodeEpSetForPeer.fqdn[index], htons(tsMnodeEpSetForPeer.port[index]));
 
       tsMnodeInfos.nodeInfos[index].nodeId = htonl(pMnode->mnodeId);
       strcpy(tsMnodeInfos.nodeInfos[index].nodeEp, pDnode->dnodeEp);
 
       if (pMnode->role == TAOS_SYNC_ROLE_MASTER) {
-        tsMnodeIpSetForShell.inUse = index;
-        tsMnodeIpSetForPeer.inUse = index;
+        tsMnodeEpSetForShell.inUse = index;
+        tsMnodeEpSetForPeer.inUse = index;
         tsMnodeInfos.inUse = index;
       }
 
@@ -248,23 +239,23 @@ void mnodeUpdateMnodeIpSet() {
   }
 
   tsMnodeInfos.nodeNum = index;
-  tsMnodeIpSetForShell.numOfIps = index;
-  tsMnodeIpSetForPeer.numOfIps = index;
+  tsMnodeEpSetForShell.numOfEps = index;
+  tsMnodeEpSetForPeer.numOfEps = index;
 
   sdbFreeIter(pIter);
 
   mnodeMnodeUnLock();
 }
 
-void mnodeGetMnodeIpSetForPeer(SRpcIpSet *ipSet) {
+void mnodeGetMnodeEpSetForPeer(SRpcEpSet *epSet) {
   mnodeMnodeRdLock();
-  *ipSet = tsMnodeIpSetForPeer;
+  *epSet = tsMnodeEpSetForPeer;
   mnodeMnodeUnLock();
 }
 
-void mnodeGetMnodeIpSetForShell(SRpcIpSet *ipSet) {
+void mnodeGetMnodeEpSetForShell(SRpcEpSet *epSet) {
   mnodeMnodeRdLock();
-  *ipSet = tsMnodeIpSetForShell;
+  *epSet = tsMnodeEpSetForShell;
   mnodeMnodeUnLock();
 }
 
@@ -278,26 +269,87 @@ void mnodeGetMnodeInfos(void *mnodeInfos) {
   mnodeMnodeUnLock();
 }
 
-int32_t mnodeAddMnode(int32_t dnodeId) {
+static int32_t mnodeSendCreateMnodeMsg(int32_t dnodeId, char *dnodeEp) {
+  mDebug("dnode:%d, send create mnode msg to dnode %s", dnodeId, dnodeEp);
+
+  SMDCreateMnodeMsg *pCreate = rpcMallocCont(sizeof(SMDCreateMnodeMsg));
+  if (pCreate == NULL) {
+    return TSDB_CODE_MND_OUT_OF_MEMORY;
+  } else {
+    pCreate->dnodeId = htonl(dnodeId);
+    tstrncpy(pCreate->dnodeEp, dnodeEp, sizeof(pCreate->dnodeEp));
+    pCreate->mnodes = tsMnodeInfos;
+    bool found = false;
+    for (int i = 0; i < pCreate->mnodes.nodeNum; ++i) {
+      if (pCreate->mnodes.nodeInfos[i].nodeId == htonl(dnodeId)) {
+        found = true;
+      }
+    }
+    if (!found) {
+      pCreate->mnodes.nodeInfos[pCreate->mnodes.nodeNum].nodeId = htonl(dnodeId);
+      tstrncpy(pCreate->mnodes.nodeInfos[pCreate->mnodes.nodeNum].nodeEp, dnodeEp, sizeof(pCreate->dnodeEp));
+      pCreate->mnodes.nodeNum++;
+    }
+  }
+
+  SRpcMsg rpcMsg = {0};
+  rpcMsg.pCont = pCreate;
+  rpcMsg.contLen = sizeof(SMDCreateMnodeMsg);
+  rpcMsg.msgType = TSDB_MSG_TYPE_MD_CREATE_MNODE;
+
+  SRpcMsg   rpcRsp = {0};
+  SRpcEpSet epSet = mnodeGetEpSetFromIp(pCreate->dnodeEp);
+  dnodeSendMsgToDnodeRecv(&rpcMsg, &rpcRsp, &epSet);
+
+  if (rpcRsp.code != TSDB_CODE_SUCCESS) {
+    mError("dnode:%d, failed to send create mnode msg, ep:%s reason:%s", dnodeId, dnodeEp, tstrerror(rpcRsp.code));
+  } else {
+    mDebug("dnode:%d, create mnode msg is disposed, mnode is created in dnode", dnodeId);
+  }
+
+  rpcFreeCont(rpcRsp.pCont);
+  return rpcRsp.code;
+}
+
+static int32_t mnodeCreateMnodeCb(SMnodeMsg *pMsg, int32_t code) {
+  if (code != TSDB_CODE_SUCCESS) {
+    mError("failed to create mnode, reason:%s", tstrerror(code));
+  } else {
+    mDebug("mnode is created successfully");
+    mnodeUpdateMnodeEpSet();
+    sdbUpdateAsync();
+  }
+
+  return code;
+}
+
+void mnodeCreateMnode(int32_t dnodeId, char *dnodeEp, bool needConfirm) {
   SMnodeObj *pMnode = calloc(1, sizeof(SMnodeObj));
   pMnode->mnodeId = dnodeId;
   pMnode->createdTime = taosGetTimestampMs();
 
   SSdbOper oper = {
-    .type = SDB_OPER_GLOBAL,
+    .type  = SDB_OPER_GLOBAL,
     .table = tsMnodeSdb,
-    .pObj = pMnode,
+    .pObj  = pMnode,
+    .writeCb = mnodeCreateMnodeCb
   };
 
-  int32_t code = sdbInsertRow(&oper);
-  if (code != TSDB_CODE_SUCCESS) {
-    tfree(pMnode);
-    code = TSDB_CODE_MND_SDB_ERROR;
+  int32_t code = TSDB_CODE_SUCCESS;
+  if (needConfirm) {
+    code = mnodeSendCreateMnodeMsg(dnodeId, dnodeEp);
   }
 
-  mnodeUpdateMnodeIpSet();
+  if (code != TSDB_CODE_SUCCESS) {
+    taosTFree(pMnode);
+    return;
+  }
 
-  return code;
+  code = sdbInsertRow(&oper);
+  if (code != TSDB_CODE_SUCCESS && code != TSDB_CODE_MND_ACTION_IN_PROGRESS) {
+    mError("dnode:%d, failed to create mnode, ep:%s reason:%s", dnodeId, dnodeEp, tstrerror(code));
+    taosTFree(pMnode);
+  }
 }
 
 void mnodeDropMnodeLocal(int32_t dnodeId) {
@@ -308,7 +360,8 @@ void mnodeDropMnodeLocal(int32_t dnodeId) {
     mnodeDecMnodeRef(pMnode);
   }
 
-  mnodeUpdateMnodeIpSet();
+  mnodeUpdateMnodeEpSet();
+  sdbUpdateAsync();
 }
 
 int32_t mnodeDropMnode(int32_t dnodeId) {
@@ -324,13 +377,11 @@ int32_t mnodeDropMnode(int32_t dnodeId) {
   };
 
   int32_t code = sdbDeleteRow(&oper);
-  if (code != TSDB_CODE_SUCCESS) {
-    code = TSDB_CODE_MND_SDB_ERROR;
-  }
 
   sdbDecRef(tsMnodeSdb, pMnode);
 
-  mnodeUpdateMnodeIpSet();
+  mnodeUpdateMnodeEpSet();
+  sdbUpdateAsync();
 
   return code;
 }
@@ -430,6 +481,7 @@ static int32_t mnodeRetrieveMnodes(SShowObj *pShow, char *data, int32_t rows, vo
     mnodeDecMnodeRef(pMnode);
   }
 
+  mnodeVacuumResult(data, pShow->numOfColumns, numOfRows, rows, pShow);
   pShow->numOfReads += numOfRows;
 
   return numOfRows;

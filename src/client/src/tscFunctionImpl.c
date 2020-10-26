@@ -14,20 +14,19 @@
  */
 
 #include "os.h"
-#include "qextbuffer.h"
-#include "qfill.h"
-#include "qhistogram.h"
-#include "qpercentile.h"
-#include "qsyntaxtreefunction.h"
-#include "qtsbuf.h"
+#include "qAst.h"
+#include "qExtbuffer.h"
+#include "qFill.h"
+#include "qHistogram.h"
+#include "qPercentile.h"
+#include "qSyntaxtreefunction.h"
+#include "qTsbuf.h"
 #include "taosdef.h"
 #include "taosmsg.h"
-#include "qast.h"
 #include "tscLog.h"
 #include "tscSubquery.h"
 #include "tscompression.h"
 #include "tsqlfunction.h"
-#include "ttime.h"
 #include "tutil.h"
 
 #define GET_INPUT_CHAR(x) (((char *)((x)->aInputElemBuf)) + ((x)->startOffset) * ((x)->inputBytes))
@@ -57,7 +56,8 @@
     for (int32_t i = 0; i < (ctx)->tagInfo.numOfTagCols; ++i) {                  \
       SQLFunctionCtx *__ctx = (ctx)->tagInfo.pTagCtxList[i];                     \
       if (__ctx->functionId == TSDB_FUNC_TS_DUMMY) {                             \
-        __ctx->tag = (tVariant){.i64Key = (ts), .nType = TSDB_DATA_TYPE_BIGINT}; \
+        __ctx->tag.i64Key = (ts); \
+        __ctx->tag.nType = TSDB_DATA_TYPE_BIGINT; \
       }                                                                          \
       aAggs[TSDB_FUNC_TAG].xFunction(__ctx);                                     \
     }                                                                            \
@@ -74,7 +74,7 @@ for (int32_t i = 0; i < (ctx)->tagInfo.numOfTagCols; ++i) {                  \
 void noop1(SQLFunctionCtx *UNUSED_PARAM(pCtx)) {}
 void noop2(SQLFunctionCtx *UNUSED_PARAM(pCtx), int32_t UNUSED_PARAM(index)) {}
 
-void doFinalizer(SQLFunctionCtx *pCtx) { resetResultInfo(GET_RES_INFO(pCtx)); }
+void doFinalizer(SQLFunctionCtx *pCtx) { RESET_RESULT_INFO(GET_RES_INFO(pCtx)); }
 
 typedef struct tValuePair {
   tVariant v;
@@ -117,6 +117,10 @@ typedef struct SFirstLastInfo {
 typedef struct SFirstLastInfo SLastrowInfo;
 typedef struct SPercentileInfo {
   tMemBucket *pMemBucket;
+  int32_t     stage;
+  double      minval;
+  double      maxval;
+  int64_t     numOfElems;
 } SPercentileInfo;
 
 typedef struct STopBotInfo {
@@ -170,7 +174,7 @@ int32_t getResultDataInfo(int32_t dataType, int32_t dataBytes, int32_t functionI
   // (uid, tid) + VGID + TAGSIZE + VARSTR_HEADER_SIZE
   if (functionId == TSDB_FUNC_TID_TAG) { // todo use struct
     *type = TSDB_DATA_TYPE_BINARY;
-    *bytes = dataBytes + sizeof(int64_t) + sizeof(int32_t) + sizeof(int32_t) + VARSTR_HEADER_SIZE;
+    *bytes = (int16_t)(dataBytes + sizeof(int16_t) + sizeof(int64_t) + sizeof(int32_t) + sizeof(int32_t) + VARSTR_HEADER_SIZE);
     *interBytes = *bytes;
     return TSDB_CODE_SUCCESS;
   }
@@ -199,7 +203,7 @@ int32_t getResultDataInfo(int32_t dataType, int32_t dataBytes, int32_t functionI
   if (isSuperTable) {
     if (functionId == TSDB_FUNC_MIN || functionId == TSDB_FUNC_MAX) {
       *type = TSDB_DATA_TYPE_BINARY;
-      *bytes = dataBytes + DATA_SET_FLAG_SIZE;
+      *bytes = (int16_t)(dataBytes + DATA_SET_FLAG_SIZE);
       *interBytes = *bytes;
       
       return TSDB_CODE_SUCCESS;
@@ -222,7 +226,7 @@ int32_t getResultDataInfo(int32_t dataType, int32_t dataBytes, int32_t functionI
       return TSDB_CODE_SUCCESS;
     } else if (functionId == TSDB_FUNC_TOP || functionId == TSDB_FUNC_BOTTOM) {
       *type = TSDB_DATA_TYPE_BINARY;
-      *bytes = sizeof(STopBotInfo) + (sizeof(tValuePair) + POINTER_BYTES + extLength) * param;
+      *bytes = (int16_t)(sizeof(STopBotInfo) + (sizeof(tValuePair) + POINTER_BYTES + extLength) * param);
       *interBytes = *bytes;
       
       return TSDB_CODE_SUCCESS;
@@ -240,7 +244,7 @@ int32_t getResultDataInfo(int32_t dataType, int32_t dataBytes, int32_t functionI
       return TSDB_CODE_SUCCESS;
     } else if (functionId == TSDB_FUNC_LAST_ROW) {
       *type = TSDB_DATA_TYPE_BINARY;
-      *bytes = sizeof(SLastrowInfo) + dataBytes;
+      *bytes = (int16_t)(sizeof(SLastrowInfo) + dataBytes);
       *interBytes = *bytes;
       
       return TSDB_CODE_SUCCESS;
@@ -302,14 +306,14 @@ int32_t getResultDataInfo(int32_t dataType, int32_t dataBytes, int32_t functionI
   } else if (functionId == TSDB_FUNC_PERCT) {
     *type = (int16_t)TSDB_DATA_TYPE_DOUBLE;
     *bytes = (int16_t)sizeof(double);
-    *interBytes = (int16_t)sizeof(double);
+    *interBytes = (int16_t)sizeof(SPercentileInfo);
   } else if (functionId == TSDB_FUNC_LEASTSQR) {
     *type = TSDB_DATA_TYPE_BINARY;
     *bytes = TSDB_AVG_FUNCTION_INTER_BUFFER_SIZE;  // string
     *interBytes = *bytes + sizeof(SResultInfo);
   } else if (functionId == TSDB_FUNC_FIRST_DST || functionId == TSDB_FUNC_LAST_DST) {
     *type = TSDB_DATA_TYPE_BINARY;
-    *bytes = dataBytes + sizeof(SFirstLastInfo);
+    *bytes = (int16_t)(dataBytes + sizeof(SFirstLastInfo));
     *interBytes = *bytes;
   } else if (functionId == TSDB_FUNC_TOP || functionId == TSDB_FUNC_BOTTOM) {
     *type = (int16_t)dataType;
@@ -318,27 +322,17 @@ int32_t getResultDataInfo(int32_t dataType, int32_t dataBytes, int32_t functionI
     size_t size = sizeof(STopBotInfo) + (sizeof(tValuePair) + POINTER_BYTES + extLength) * param;
     
     // the output column may be larger than sizeof(STopBotInfo)
-    *interBytes = size;
+    *interBytes = (int32_t)size;
   } else if (functionId == TSDB_FUNC_LAST_ROW) {
     *type = (int16_t)dataType;
     *bytes = (int16_t)dataBytes;
-    *interBytes = dataBytes + sizeof(SLastrowInfo);
+    *interBytes = dataBytes;
   } else {
     return TSDB_CODE_TSC_INVALID_SQL;
   }
   
   return TSDB_CODE_SUCCESS;
 }
-
-bool stableQueryFunctChanged(int32_t funcId) {
-  return (aAggs[funcId].stableFuncId != funcId);
-}
-
-/**
- * the numOfRes should be kept, since it may be used later
- * and allow the ResultInfo to be re initialized
- */
-void resetResultInfo(SResultInfo *pResInfo) { pResInfo->initialized = false; }
 
 void setResultInfoBuf(SResultInfo *pResInfo, int32_t size, bool superTable, char* buf) {
   assert(pResInfo->interResultBuf == NULL);
@@ -361,7 +355,6 @@ static bool function_setup(SQLFunctionCtx *pCtx) {
   }
   
   memset(pCtx->aOutputBuf, 0, (size_t)pCtx->outputBytes);
-  
   initResultInfo(pResInfo);
   return true;
 }
@@ -532,7 +525,7 @@ static void do_sum(SQLFunctionCtx *pCtx) {
       *retVal += pCtx->preAggVals.statis.sum;
     } else if (pCtx->inputType == TSDB_DATA_TYPE_DOUBLE || pCtx->inputType == TSDB_DATA_TYPE_FLOAT) {
       double *retVal = (double*) pCtx->aOutputBuf;
-      *retVal += GET_DOUBLE_VAL(&(pCtx->preAggVals.statis.sum));
+      *retVal += GET_DOUBLE_VAL((const char*)&(pCtx->preAggVals.statis.sum));
     }
   } else {  // computing based on the true data block
     void *pData = GET_INPUT_CHAR(pCtx);
@@ -675,16 +668,16 @@ static void sum_func_second_merge(SQLFunctionCtx *pCtx) {
   }
 }
 
-static int32_t precal_req_load_info(SQLFunctionCtx *pCtx, TSKEY start, TSKEY end, int32_t colId) {
+static int32_t statisRequired(SQLFunctionCtx *pCtx, TSKEY start, TSKEY end, int32_t colId) {
   return BLK_DATA_STATIS_NEEDED;
 }
 
-static int32_t data_req_load_info(SQLFunctionCtx *pCtx, TSKEY start, TSKEY end, int32_t colId) {
+static int32_t dataBlockRequired(SQLFunctionCtx *pCtx, TSKEY start, TSKEY end, int32_t colId) {
   return BLK_DATA_ALL_NEEDED;
 }
 
 // todo: if  column in current data block are null, opt for this case
-static int32_t first_data_req_info(SQLFunctionCtx *pCtx, TSKEY start, TSKEY end, int32_t colId) {
+static int32_t firstFuncRequired(SQLFunctionCtx *pCtx, TSKEY start, TSKEY end, int32_t colId) {
   if (pCtx->order == TSDB_ORDER_DESC) {
     return BLK_DATA_NO_NEEDED;
   }
@@ -697,7 +690,7 @@ static int32_t first_data_req_info(SQLFunctionCtx *pCtx, TSKEY start, TSKEY end,
   }
 }
 
-static int32_t last_data_req_info(SQLFunctionCtx *pCtx, TSKEY start, TSKEY end, int32_t colId) {
+static int32_t lastFuncRequired(SQLFunctionCtx *pCtx, TSKEY start, TSKEY end, int32_t colId) {
   if (pCtx->order != pCtx->param[0].i64Key) {
     return BLK_DATA_NO_NEEDED;
   }
@@ -709,14 +702,19 @@ static int32_t last_data_req_info(SQLFunctionCtx *pCtx, TSKEY start, TSKEY end, 
   }
 }
 
-static int32_t first_dist_data_req_info(SQLFunctionCtx *pCtx, TSKEY start, TSKEY end, int32_t colId) {
+static int32_t firstDistFuncRequired(SQLFunctionCtx *pCtx, TSKEY start, TSKEY end, int32_t colId) {
   if (pCtx->order == TSDB_ORDER_DESC) {
     return BLK_DATA_NO_NEEDED;
   }
-  
-  // result buffer has not been set yet.
+
+  // not initialized yet, it is the first block, load it.
+  if (pCtx->aOutputBuf == NULL) {
+    return BLK_DATA_ALL_NEEDED;
+  }
+
   return BLK_DATA_ALL_NEEDED;
-  //todo optimize the filter info
+  // TODO pCtx->aOutputBuf is the previous windowRes output buffer, not current unloaded block. so the following filter
+  // is invalid
 //  SFirstLastInfo *pInfo = (SFirstLastInfo*) (pCtx->aOutputBuf + pCtx->inputBytes);
 //  if (pInfo->hasResult != DATA_SET_FLAG) {
 //    return BLK_DATA_ALL_NEEDED;
@@ -725,12 +723,20 @@ static int32_t first_dist_data_req_info(SQLFunctionCtx *pCtx, TSKEY start, TSKEY
 //  }
 }
 
-static int32_t last_dist_data_req_info(SQLFunctionCtx *pCtx, TSKEY start, TSKEY end, int32_t colId) {
+static int32_t lastDistFuncRequired(SQLFunctionCtx *pCtx, TSKEY start, TSKEY end, int32_t colId) {
   if (pCtx->order != pCtx->param[0].i64Key) {
     return BLK_DATA_NO_NEEDED;
   }
-  
+
+  // not initialized yet, it is the first block, load it.
+  if (pCtx->aOutputBuf == NULL) {
+    return BLK_DATA_ALL_NEEDED;
+  }
+
   return BLK_DATA_ALL_NEEDED;
+  // TODO pCtx->aOutputBuf is the previous windowRes output buffer, not current unloaded block. so the following filter
+  // is invalid
+
 //  SFirstLastInfo *pInfo = (SFirstLastInfo*) (pCtx->aOutputBuf + pCtx->inputBytes);
 //  if (pInfo->hasResult != DATA_SET_FLAG) {
 //    return BLK_DATA_ALL_NEEDED;
@@ -762,7 +768,7 @@ static void avg_function(SQLFunctionCtx *pCtx) {
     if (pCtx->inputType >= TSDB_DATA_TYPE_TINYINT && pCtx->inputType <= TSDB_DATA_TYPE_BIGINT) {
       *pVal += pCtx->preAggVals.statis.sum;
     } else if (pCtx->inputType == TSDB_DATA_TYPE_DOUBLE || pCtx->inputType == TSDB_DATA_TYPE_FLOAT) {
-      *pVal += GET_DOUBLE_VAL(&(pCtx->preAggVals.statis.sum));
+      *pVal += GET_DOUBLE_VAL((const char *)&(pCtx->preAggVals.statis.sum));
     }
   } else {
     void *pData = GET_INPUT_CHAR(pCtx);
@@ -953,11 +959,11 @@ static void minMax_function(SQLFunctionCtx *pCtx, char *pOutput, int32_t isMin, 
       if (pCtx->inputType == TSDB_DATA_TYPE_TINYINT) {
         int8_t *data = (int8_t *)pOutput;
         
-        UPDATE_DATA(pCtx, *data, val, notNullElems, isMin, key);
+        UPDATE_DATA(pCtx, *data, (int8_t)val, notNullElems, isMin, key);
       } else if (pCtx->inputType == TSDB_DATA_TYPE_SMALLINT) {
         int16_t *data = (int16_t *)pOutput;
         
-        UPDATE_DATA(pCtx, *data, val, notNullElems, isMin, key);
+        UPDATE_DATA(pCtx, *data, (int16_t)val, notNullElems, isMin, key);
       } else if (pCtx->inputType == TSDB_DATA_TYPE_INT) {
         int32_t *data = (int32_t *)pOutput;
 #if defined(_DEBUG_VIEW)
@@ -965,11 +971,12 @@ static void minMax_function(SQLFunctionCtx *pCtx, char *pOutput, int32_t isMin, 
 #endif
         
         if ((*data < val) ^ isMin) {
-          *data = val;
+          *data = (int32_t)val;
           for (int32_t i = 0; i < (pCtx)->tagInfo.numOfTagCols; ++i) {
             SQLFunctionCtx *__ctx = pCtx->tagInfo.pTagCtxList[i];
             if (__ctx->functionId == TSDB_FUNC_TS_DUMMY) {
-              __ctx->tag = (tVariant){.i64Key = key, .nType = TSDB_DATA_TYPE_BIGINT};
+              __ctx->tag.i64Key = key;
+              __ctx->tag.nType = TSDB_DATA_TYPE_BIGINT;
             }
             
             aAggs[TSDB_FUNC_TAG].xFunction(__ctx);
@@ -988,7 +995,7 @@ static void minMax_function(SQLFunctionCtx *pCtx, char *pOutput, int32_t isMin, 
       float *data = (float *)pOutput;
       double val = GET_DOUBLE_VAL(tval);
       
-      UPDATE_DATA(pCtx, *data, val, notNullElems, isMin, key);
+      UPDATE_DATA(pCtx, *data, (float)val, notNullElems, isMin, key);
     }
     
     return;
@@ -1480,7 +1487,7 @@ static bool first_last_function_setup(SQLFunctionCtx *pCtx) {
 
 // todo opt for null block
 static void first_function(SQLFunctionCtx *pCtx) {
-  if (pCtx->order == TSDB_ORDER_DESC) {
+  if (pCtx->order == TSDB_ORDER_DESC || pCtx->preAggVals.dataBlockLoaded == false) {
     return;
   }
   
@@ -1549,21 +1556,17 @@ static void first_data_assign_impl(SQLFunctionCtx *pCtx, char *pData, int32_t in
  * to decide if the value is earlier than current intermediate result
  */
 static void first_dist_function(SQLFunctionCtx *pCtx) {
-  if (pCtx->size == 0) {
-    return;
-  }
-  
   /*
    * do not to check data in the following cases:
    * 1. data block that are not loaded
    * 2. scan data files in desc order
    */
-  if (pCtx->order == TSDB_ORDER_DESC) {
+  if (pCtx->order == TSDB_ORDER_DESC || pCtx->preAggVals.dataBlockLoaded == false) {
     return;
   }
   
   int32_t notNullElems = 0;
-  
+
   // find the first not null value
   for (int32_t i = 0; i < pCtx->size; ++i) {
     char *data = GET_INPUT_CHAR_INDEX(pCtx, i);
@@ -1584,10 +1587,6 @@ static void first_dist_function(SQLFunctionCtx *pCtx) {
 }
 
 static void first_dist_function_f(SQLFunctionCtx *pCtx, int32_t index) {
-  if (pCtx->size == 0) {
-    return;
-  }
-  
   char *pData = GET_INPUT_CHAR_INDEX(pCtx, index);
   if (pCtx->hasNull && isNull(pData, pCtx->inputType)) {
     return;
@@ -1651,7 +1650,7 @@ static void first_dist_func_second_merge(SQLFunctionCtx *pCtx) {
  *    least one data in this block that is not null.(TODO opt for this case)
  */
 static void last_function(SQLFunctionCtx *pCtx) {
-  if (pCtx->order != pCtx->param[0].i64Key) {
+  if (pCtx->order != pCtx->param[0].i64Key || pCtx->preAggVals.dataBlockLoaded == false) {
     return;
   }
   
@@ -1660,9 +1659,10 @@ static void last_function(SQLFunctionCtx *pCtx) {
   for (int32_t i = pCtx->size - 1; i >= 0; --i) {
     char *data = GET_INPUT_CHAR_INDEX(pCtx, i);
     if (pCtx->hasNull && isNull(data, pCtx->inputType)) {
-      continue;
+      if (!pCtx->requireNull) {
+        continue; 
+      }
     }
-    
     memcpy(pCtx->aOutputBuf, data, pCtx->inputBytes);
     
     TSKEY ts = pCtx->ptsList[i];
@@ -1715,10 +1715,6 @@ static void last_data_assign_impl(SQLFunctionCtx *pCtx, char *pData, int32_t ind
 }
 
 static void last_dist_function(SQLFunctionCtx *pCtx) {
-  if (pCtx->size == 0) {
-    return;
-  }
-  
   /*
    * 1. for scan data in asc order, no need to check data
    * 2. for data blocks that are not loaded, no need to check data
@@ -1726,13 +1722,20 @@ static void last_dist_function(SQLFunctionCtx *pCtx) {
   if (pCtx->order != pCtx->param[0].i64Key) {
     return;
   }
-  
+
+  // data block is discard, not loaded, do not need to check it
+  if (!pCtx->preAggVals.dataBlockLoaded) {
+    return;
+  }
+
   int32_t notNullElems = 0;
   
   for (int32_t i = pCtx->size - 1; i >= 0; --i) {
     char *data = GET_INPUT_CHAR_INDEX(pCtx, i);
     if (pCtx->hasNull && isNull(data, pCtx->inputType)) {
-      continue;
+      if (!pCtx->requireNull) {
+        continue; 
+      }
     }
     
     last_data_assign_impl(pCtx, data, i);
@@ -1824,28 +1827,26 @@ static void last_dist_func_second_merge(SQLFunctionCtx *pCtx) {
  * NOTE: last_row does not use the interResultBuf to keep the result
  */
 static void last_row_function(SQLFunctionCtx *pCtx) {
-  assert(pCtx->size == 1);
-  
+  assert(pCtx->size >= 1);
   char *pData = GET_INPUT_CHAR(pCtx);
-  assignVal(pCtx->aOutputBuf, pData, pCtx->inputBytes, pCtx->inputType);
+
+  // assign the last element in current data block
+  assignVal(pCtx->aOutputBuf, pData + (pCtx->size - 1) * pCtx->inputBytes, pCtx->inputBytes, pCtx->inputType);
   
   SResultInfo *pResInfo = GET_RES_INFO(pCtx);
   pResInfo->hasResult = DATA_SET_FLAG;
   
-  SLastrowInfo *pInfo = (SLastrowInfo *)pResInfo->interResultBuf;
-  pInfo->ts = pCtx->ptsList[0];
-  
-  pInfo->hasResult = DATA_SET_FLAG;
-  
-  // set the result to final result buffer
+  // set the result to final result buffer in case of super table query
   if (pResInfo->superTableQ) {
     SLastrowInfo *pInfo1 = (SLastrowInfo *)(pCtx->aOutputBuf + pCtx->inputBytes);
-    pInfo1->ts = pCtx->ptsList[0];
+    pInfo1->ts = pCtx->ptsList[pCtx->size - 1];
     pInfo1->hasResult = DATA_SET_FLAG;
     
     DO_UPDATE_TAG_COLUMNS(pCtx, pInfo1->ts);
+  } else {
+    DO_UPDATE_TAG_COLUMNS(pCtx, pCtx->ptsList[pCtx->size - 1]);
   }
-  
+
   SET_VAL(pCtx, pCtx->size, 1);
 }
 
@@ -1880,7 +1881,8 @@ static void valuePairAssign(tValuePair *dst, int16_t type, const char *val, int6
     for (int32_t i = 0; i < pTagInfo->numOfTagCols; ++i) {
       SQLFunctionCtx* ctx = pTagInfo->pTagCtxList[i];
       if (ctx->functionId == TSDB_FUNC_TS_DUMMY) {
-        ctx->tag = (tVariant) {.nType = TSDB_DATA_TYPE_BIGINT, .i64Key = tsKey};
+        ctx->tag.nType = TSDB_DATA_TYPE_BIGINT;
+        ctx->tag.i64Key = tsKey;
       }
       
       tVariantDump(&ctx->tag, dst->pTags + size, ctx->tag.nType, true);
@@ -1955,11 +1957,12 @@ static void do_top_function_add(STopBotInfo *pInfo, int32_t maxLen, void *pData,
 
 static void do_bottom_function_add(STopBotInfo *pInfo, int32_t maxLen, void *pData, int64_t ts, uint16_t type,
                                    SExtTagsInfo *pTagInfo, char *pTags, int16_t stage) {
-  tValuePair **pList = pInfo->res;
-  
   tVariant val = {0};
   tVariantCreateFromBinary(&val, pData, tDataTypeDesc[type].nSize, type);
-  
+
+  tValuePair **pList = pInfo->res;
+  assert(pList != NULL);
+
   if (pInfo->num < maxLen) {
     if (pInfo->num == 0) {
       valuePairAssign(pList[pInfo->num], type, (const char*) &val.i64Key, ts, pTags, pTagInfo, stage);
@@ -2047,13 +2050,13 @@ static void copyTopBotRes(SQLFunctionCtx *pCtx, int32_t type) {
   tValuePair **tvp = pRes->res;
   
   int32_t step = QUERY_ASC_FORWARD_STEP;
-  int32_t len = GET_RES_INFO(pCtx)->numOfRes;
+  int32_t len = (int32_t)(GET_RES_INFO(pCtx)->numOfRes);
   
   switch (type) {
     case TSDB_DATA_TYPE_INT: {
       int32_t *output = (int32_t *)pCtx->aOutputBuf;
       for (int32_t i = 0; i < len; ++i, output += step) {
-        *output = tvp[i]->v.i64Key;
+        *output = (int32_t)tvp[i]->v.i64Key;
       }
       break;
     }
@@ -2074,21 +2077,21 @@ static void copyTopBotRes(SQLFunctionCtx *pCtx, int32_t type) {
     case TSDB_DATA_TYPE_FLOAT: {
       float *output = (float *)pCtx->aOutputBuf;
       for (int32_t i = 0; i < len; ++i, output += step) {
-        *output = tvp[i]->v.dKey;
+        *output = (float)tvp[i]->v.dKey;
       }
       break;
     }
     case TSDB_DATA_TYPE_SMALLINT: {
       int16_t *output = (int16_t *)pCtx->aOutputBuf;
       for (int32_t i = 0; i < len; ++i, output += step) {
-        *output = tvp[i]->v.i64Key;
+        *output = (int16_t)tvp[i]->v.i64Key;
       }
       break;
     }
     case TSDB_DATA_TYPE_TINYINT: {
       int8_t *output = (int8_t *)pCtx->aOutputBuf;
       for (int32_t i = 0; i < len; ++i, output += step) {
-        *output = tvp[i]->v.i64Key;
+        *output = (int8_t)tvp[i]->v.i64Key;
       }
       break;
     }
@@ -2120,56 +2123,7 @@ static void copyTopBotRes(SQLFunctionCtx *pCtx, int32_t type) {
     }
   }
   
-  tfree(pData);
-}
-
-bool top_bot_datablock_filter(SQLFunctionCtx *pCtx, int32_t functionId, char *minval, char *maxval) {
-  STopBotInfo *pTopBotInfo = (STopBotInfo *)GET_RES_INFO(pCtx)->interResultBuf;
-  
-  int32_t numOfExistsRes = pTopBotInfo->num;
-  
-  // required number of results are not reached, continue load data block
-  if (numOfExistsRes < pCtx->param[0].i64Key) {
-    return true;
-  }
-  
-  tValuePair *pRes = (tValuePair*) pTopBotInfo->res;
-  
-  if (functionId == TSDB_FUNC_TOP) {
-    switch (pCtx->inputType) {
-      case TSDB_DATA_TYPE_TINYINT:
-        return GET_INT8_VAL(maxval) > pRes[0].v.i64Key;
-      case TSDB_DATA_TYPE_SMALLINT:
-        return GET_INT16_VAL(maxval) > pRes[0].v.i64Key;
-      case TSDB_DATA_TYPE_INT:
-        return GET_INT32_VAL(maxval) > pRes[0].v.i64Key;
-      case TSDB_DATA_TYPE_BIGINT:
-        return GET_INT64_VAL(maxval) > pRes[0].v.i64Key;
-      case TSDB_DATA_TYPE_FLOAT:
-        return GET_FLOAT_VAL(maxval) > pRes[0].v.dKey;
-      case TSDB_DATA_TYPE_DOUBLE:
-        return GET_DOUBLE_VAL(maxval) > pRes[0].v.dKey;
-      default:
-        return true;
-    }
-  } else {
-    switch (pCtx->inputType) {
-      case TSDB_DATA_TYPE_TINYINT:
-        return GET_INT8_VAL(minval) < pRes[0].v.i64Key;
-      case TSDB_DATA_TYPE_SMALLINT:
-        return GET_INT16_VAL(minval) < pRes[0].v.i64Key;
-      case TSDB_DATA_TYPE_INT:
-        return GET_INT32_VAL(minval) < pRes[0].v.i64Key;
-      case TSDB_DATA_TYPE_BIGINT:
-        return GET_INT64_VAL(minval) < pRes[0].v.i64Key;
-      case TSDB_DATA_TYPE_FLOAT:
-        return GET_FLOAT_VAL(minval) < pRes[0].v.dKey;
-      case TSDB_DATA_TYPE_DOUBLE:
-        return GET_DOUBLE_VAL(minval) < pRes[0].v.dKey;
-      default:
-        return true;
-    }
-  }
+  taosTFree(pData);
 }
 
 /*
@@ -2182,12 +2136,64 @@ bool top_bot_datablock_filter(SQLFunctionCtx *pCtx, int32_t functionId, char *mi
  */
 static STopBotInfo *getTopBotOutputInfo(SQLFunctionCtx *pCtx) {
   SResultInfo *pResInfo = GET_RES_INFO(pCtx);
-  
+
   // only the first_stage_merge is directly written data into final output buffer
   if (pResInfo->superTableQ && pCtx->currentStage != SECONDARY_STAGE_MERGE) {
     return (STopBotInfo*) pCtx->aOutputBuf;
-  } else {  // during normal table query and super table at the secondary_stage, result is written to intermediate buffer
+  } else { // during normal table query and super table at the secondary_stage, result is written to intermediate buffer
     return pResInfo->interResultBuf;
+  }
+}
+
+bool topbot_datablock_filter(SQLFunctionCtx *pCtx, int32_t functionId, const char *minval, const char *maxval) {
+  SResultInfo *pResInfo = GET_RES_INFO(pCtx);
+  if (pResInfo == NULL) {
+    return true;
+  }
+
+  STopBotInfo *pTopBotInfo = getTopBotOutputInfo(pCtx);
+  
+  // required number of results are not reached, continue load data block
+  if (pTopBotInfo->num < pCtx->param[0].i64Key) {
+    return true;
+  }
+  
+  tValuePair **pRes = (tValuePair**) pTopBotInfo->res;
+  
+  if (functionId == TSDB_FUNC_TOP) {
+    switch (pCtx->inputType) {
+      case TSDB_DATA_TYPE_TINYINT:
+        return GET_INT8_VAL(maxval) > pRes[0]->v.i64Key;
+      case TSDB_DATA_TYPE_SMALLINT:
+        return GET_INT16_VAL(maxval) > pRes[0]->v.i64Key;
+      case TSDB_DATA_TYPE_INT:
+        return GET_INT32_VAL(maxval) > pRes[0]->v.i64Key;
+      case TSDB_DATA_TYPE_BIGINT:
+        return GET_INT64_VAL(maxval) > pRes[0]->v.i64Key;
+      case TSDB_DATA_TYPE_FLOAT:
+        return GET_FLOAT_VAL(maxval) > pRes[0]->v.dKey;
+      case TSDB_DATA_TYPE_DOUBLE:
+        return GET_DOUBLE_VAL(maxval) > pRes[0]->v.dKey;
+      default:
+        return true;
+    }
+  } else {
+    switch (pCtx->inputType) {
+      case TSDB_DATA_TYPE_TINYINT:
+        return GET_INT8_VAL(minval) < pRes[0]->v.i64Key;
+      case TSDB_DATA_TYPE_SMALLINT:
+        return GET_INT16_VAL(minval) < pRes[0]->v.i64Key;
+      case TSDB_DATA_TYPE_INT:
+        return GET_INT32_VAL(minval) < pRes[0]->v.i64Key;
+      case TSDB_DATA_TYPE_BIGINT:
+        return GET_INT64_VAL(minval) < pRes[0]->v.i64Key;
+      case TSDB_DATA_TYPE_FLOAT:
+        return GET_FLOAT_VAL(minval) < pRes[0]->v.dKey;
+      case TSDB_DATA_TYPE_DOUBLE:
+        return GET_DOUBLE_VAL(minval) < pRes[0]->v.dKey;
+      default:
+        return true;
+    }
   }
 }
 
@@ -2235,7 +2241,7 @@ static void top_function(SQLFunctionCtx *pCtx) {
     }
     
     notNullElems++;
-    do_top_function_add(pRes, pCtx->param[0].i64Key, data, pCtx->ptsList[i], pCtx->inputType, &pCtx->tagInfo, NULL, 0);
+    do_top_function_add(pRes, (int32_t)pCtx->param[0].i64Key, data, pCtx->ptsList[i], pCtx->inputType, &pCtx->tagInfo, NULL, 0);
   }
   
   if (!pCtx->hasNull) {
@@ -2261,7 +2267,7 @@ static void top_function_f(SQLFunctionCtx *pCtx, int32_t index) {
   assert(pRes->num >= 0);
   
   SET_VAL(pCtx, 1, 1);
-  do_top_function_add(pRes, pCtx->param[0].i64Key, pData, pCtx->ptsList[index], pCtx->inputType, &pCtx->tagInfo, NULL,
+  do_top_function_add(pRes, (int32_t)pCtx->param[0].i64Key, pData, pCtx->ptsList[index], pCtx->inputType, &pCtx->tagInfo, NULL,
                       0);
   
   SResultInfo *pResInfo = GET_RES_INFO(pCtx);
@@ -2285,7 +2291,7 @@ static void top_func_merge(SQLFunctionCtx *pCtx) {
   STopBotInfo *pOutput = getTopBotOutputInfo(pCtx);
   
   for (int32_t i = 0; i < pInput->num; ++i) {
-    do_top_function_add(pOutput, pCtx->param[0].i64Key, &pInput->res[i]->v.i64Key, pInput->res[i]->timestamp,
+    do_top_function_add(pOutput, (int32_t)pCtx->param[0].i64Key, &pInput->res[i]->v.i64Key, pInput->res[i]->timestamp,
                         pCtx->inputType, &pCtx->tagInfo, pInput->res[i]->pTags, pCtx->currentStage);
   }
 }
@@ -2300,8 +2306,9 @@ static void top_func_second_merge(SQLFunctionCtx *pCtx) {
   
   // the intermediate result is binary, we only use the output data type
   for (int32_t i = 0; i < pInput->num; ++i) {
-    do_top_function_add(pOutput, pCtx->param[0].i64Key, &pInput->res[i]->v.i64Key, pInput->res[i]->timestamp,
-                        pCtx->outputType, &pCtx->tagInfo, pInput->res[i]->pTags, pCtx->currentStage);
+    int16_t type = (pCtx->outputType == TSDB_DATA_TYPE_FLOAT)? TSDB_DATA_TYPE_DOUBLE:pCtx->outputType;
+    do_top_function_add(pOutput, (int32_t)pCtx->param[0].i64Key, &pInput->res[i]->v.i64Key, pInput->res[i]->timestamp,
+                        type, &pCtx->tagInfo, pInput->res[i]->pTags, pCtx->currentStage);
   }
   
   SET_VAL(pCtx, pInput->num, pOutput->num);
@@ -2324,7 +2331,7 @@ static void bottom_function(SQLFunctionCtx *pCtx) {
     }
     
     notNullElems++;
-    do_bottom_function_add(pRes, pCtx->param[0].i64Key, data, pCtx->ptsList[i], pCtx->inputType, &pCtx->tagInfo, NULL,
+    do_bottom_function_add(pRes, (int32_t)pCtx->param[0].i64Key, data, pCtx->ptsList[i], pCtx->inputType, &pCtx->tagInfo, NULL,
                            0);
   }
   
@@ -2349,7 +2356,7 @@ static void bottom_function_f(SQLFunctionCtx *pCtx, int32_t index) {
   
   STopBotInfo *pRes = getTopBotOutputInfo(pCtx);
   SET_VAL(pCtx, 1, 1);
-  do_bottom_function_add(pRes, pCtx->param[0].i64Key, pData, pCtx->ptsList[index], pCtx->inputType, &pCtx->tagInfo,
+  do_bottom_function_add(pRes, (int32_t)pCtx->param[0].i64Key, pData, pCtx->ptsList[index], pCtx->inputType, &pCtx->tagInfo,
                          NULL, 0);
   
   SResultInfo *pResInfo = GET_RES_INFO(pCtx);
@@ -2373,7 +2380,7 @@ static void bottom_func_merge(SQLFunctionCtx *pCtx) {
   STopBotInfo *pOutput = getTopBotOutputInfo(pCtx);
   
   for (int32_t i = 0; i < pInput->num; ++i) {
-    do_bottom_function_add(pOutput, pCtx->param[0].i64Key, &pInput->res[i]->v.i64Key, pInput->res[i]->timestamp,
+    do_bottom_function_add(pOutput, (int32_t)pCtx->param[0].i64Key, &pInput->res[i]->v.i64Key, pInput->res[i]->timestamp,
                            pCtx->inputType, &pCtx->tagInfo, pInput->res[i]->pTags, pCtx->currentStage);
   }
 }
@@ -2388,10 +2395,11 @@ static void bottom_func_second_merge(SQLFunctionCtx *pCtx) {
   
   // the intermediate result is binary, we only use the output data type
   for (int32_t i = 0; i < pInput->num; ++i) {
-    do_bottom_function_add(pOutput, pCtx->param[0].i64Key, &pInput->res[i]->v.i64Key, pInput->res[i]->timestamp,
-                           pCtx->outputType, &pCtx->tagInfo, pInput->res[i]->pTags, pCtx->currentStage);
+    int16_t type = (pCtx->outputType == TSDB_DATA_TYPE_FLOAT) ? TSDB_DATA_TYPE_DOUBLE : pCtx->outputType;
+    do_bottom_function_add(pOutput, (int32_t)pCtx->param[0].i64Key, &pInput->res[i]->v.i64Key, pInput->res[i]->timestamp, type,
+                           &pCtx->tagInfo, pInput->res[i]->pTags, pCtx->currentStage);
   }
-  
+
   SET_VAL(pCtx, pInput->num, pOutput->num);
   
   if (pOutput->num > 0) {
@@ -2416,10 +2424,10 @@ static void top_bottom_func_finalizer(SQLFunctionCtx *pCtx) {
   // user specify the order of output by sort the result according to timestamp
   if (pCtx->param[1].i64Key == PRIMARYKEY_TIMESTAMP_COL_INDEX) {
     __compar_fn_t comparator = (pCtx->param[2].i64Key == TSDB_ORDER_ASC) ? resAscComparFn : resDescComparFn;
-    qsort(tvp, pResInfo->numOfRes, POINTER_BYTES, comparator);
+    qsort(tvp, (size_t)pResInfo->numOfRes, POINTER_BYTES, comparator);
   } else if (pCtx->param[1].i64Key > PRIMARYKEY_TIMESTAMP_COL_INDEX) {
     __compar_fn_t comparator = (pCtx->param[2].i64Key == TSDB_ORDER_ASC) ? resDataAscComparFn : resDataDescComparFn;
-    qsort(tvp, pResInfo->numOfRes, POINTER_BYTES, comparator);
+    qsort(tvp, (size_t)pResInfo->numOfRes, POINTER_BYTES, comparator);
   }
   
   GET_TRUE_DATA_TYPE();
@@ -2430,25 +2438,17 @@ static void top_bottom_func_finalizer(SQLFunctionCtx *pCtx) {
 
 ///////////////////////////////////////////////////////////////////////////////////////////////
 static bool percentile_function_setup(SQLFunctionCtx *pCtx) {
-  const int32_t MAX_AVAILABLE_BUFFER_SIZE = 1 << 20;  // 1MB
-  const int32_t NUMOFCOLS = 1;
-  
   if (!function_setup(pCtx)) {
     return false;
   }
-  
+
+  // in the first round, get the min-max value of all involved data
   SResultInfo *pResInfo = GET_RES_INFO(pCtx);
-  SSchema      field[1] = {{pCtx->inputType, "dummyCol", 0, pCtx->inputBytes}};
-  
-  SColumnModel *pModel = createColumnModel(field, 1, 1000);
-  int32_t    orderIdx = 0;
-  
-  // tOrderDesc object
-  tOrderDescriptor *pDesc = tOrderDesCreate(&orderIdx, NUMOFCOLS, pModel, TSDB_ORDER_DESC);
-  
-  ((SPercentileInfo *)(pResInfo->interResultBuf))->pMemBucket =
-      tMemBucketCreate(1024, MAX_AVAILABLE_BUFFER_SIZE, pCtx->inputBytes, pCtx->inputType, pDesc);
-  
+  SPercentileInfo *pInfo = pResInfo->interResultBuf;
+  SET_DOUBLE_VAL(&pInfo->minval, DBL_MAX);
+  SET_DOUBLE_VAL(&pInfo->maxval, -DBL_MAX);
+  pInfo->numOfElems = 0;
+
   return true;
 }
 
@@ -2457,7 +2457,65 @@ static void percentile_function(SQLFunctionCtx *pCtx) {
   
   SResultInfo *    pResInfo = GET_RES_INFO(pCtx);
   SPercentileInfo *pInfo = pResInfo->interResultBuf;
-  
+
+  // the first stage, only acquire the min/max value
+  if (pInfo->stage == 0) {
+    if (pCtx->preAggVals.isSet) {
+      if (GET_DOUBLE_VAL(&pInfo->minval) > pCtx->preAggVals.statis.min) {
+        SET_DOUBLE_VAL(&pInfo->minval, (double)pCtx->preAggVals.statis.min);
+      }
+
+      if (GET_DOUBLE_VAL(&pInfo->maxval) < pCtx->preAggVals.statis.max) {
+        SET_DOUBLE_VAL(&pInfo->maxval, (double)pCtx->preAggVals.statis.max);
+      }
+
+      pInfo->numOfElems += (pCtx->size - pCtx->preAggVals.statis.numOfNull);
+    } else {
+      for (int32_t i = 0; i < pCtx->size; ++i) {
+        char *data = GET_INPUT_CHAR_INDEX(pCtx, i);
+        if (pCtx->hasNull && isNull(data, pCtx->inputType)) {
+          continue;
+        }
+
+        // TODO extract functions
+        double v = 0;
+        switch (pCtx->inputType) {
+          case TSDB_DATA_TYPE_TINYINT:
+            v = GET_INT8_VAL(data);
+            break;
+          case TSDB_DATA_TYPE_SMALLINT:
+            v = GET_INT16_VAL(data);
+            break;
+          case TSDB_DATA_TYPE_BIGINT:
+            v = (double)(GET_INT64_VAL(data));
+            break;
+          case TSDB_DATA_TYPE_FLOAT:
+            v = GET_FLOAT_VAL(data);
+            break;
+          case TSDB_DATA_TYPE_DOUBLE:
+            v = GET_DOUBLE_VAL(data);
+            break;
+          default:
+            v = GET_INT32_VAL(data);
+            break;
+        }
+
+        if (v < GET_DOUBLE_VAL(&pInfo->minval)) {
+          SET_DOUBLE_VAL(&pInfo->minval, v);
+        }
+
+        if (v > GET_DOUBLE_VAL(&pInfo->maxval)) {
+          SET_DOUBLE_VAL(&pInfo->maxval, v);
+        }
+
+        pInfo->numOfElems += 1;
+      }
+    }
+
+    return;
+  }
+
+  // the second stage, calculate the true percentile value
   for (int32_t i = 0; i < pCtx->size; ++i) {
     char *data = GET_INPUT_CHAR_INDEX(pCtx, i);
     if (pCtx->hasNull && isNull(data, pCtx->inputType)) {
@@ -2477,10 +2535,47 @@ static void percentile_function_f(SQLFunctionCtx *pCtx, int32_t index) {
   if (pCtx->hasNull && isNull(pData, pCtx->inputType)) {
     return;
   }
-  
+
   SResultInfo *pResInfo = GET_RES_INFO(pCtx);
-  
+
   SPercentileInfo *pInfo = (SPercentileInfo *)pResInfo->interResultBuf;
+
+  if (pInfo->stage == 0) {
+    // TODO extract functions
+    double v = 0;
+    switch (pCtx->inputType) {
+      case TSDB_DATA_TYPE_TINYINT:
+        v = GET_INT8_VAL(pData);
+        break;
+      case TSDB_DATA_TYPE_SMALLINT:
+        v = GET_INT16_VAL(pData);
+        break;
+      case TSDB_DATA_TYPE_BIGINT:
+        v = (double)(GET_INT64_VAL(pData));
+        break;
+      case TSDB_DATA_TYPE_FLOAT:
+        v = GET_FLOAT_VAL(pData);
+        break;
+      case TSDB_DATA_TYPE_DOUBLE:
+        v = GET_DOUBLE_VAL(pData);
+        break;
+      default:
+        v = GET_INT32_VAL(pData);
+        break;
+    }
+
+    if (v < GET_DOUBLE_VAL(&pInfo->minval)) {
+      SET_DOUBLE_VAL(&pInfo->minval, v);
+    }
+
+    if (v > GET_DOUBLE_VAL(&pInfo->maxval)) {
+      SET_DOUBLE_VAL(&pInfo->maxval, v);
+    }
+
+    pInfo->numOfElems += 1;
+    return;
+  }
+  
   tMemBucketPut(pInfo->pMemBucket, pData, 1);
   
   SET_VAL(pCtx, 1, 1);
@@ -2493,16 +2588,31 @@ static void percentile_finalizer(SQLFunctionCtx *pCtx) {
   SResultInfo *pResInfo = GET_RES_INFO(pCtx);
   tMemBucket * pMemBucket = ((SPercentileInfo *)pResInfo->interResultBuf)->pMemBucket;
   
-  if (pMemBucket->numOfElems > 0) {  // check for null
+  if (pMemBucket->total > 0) {  // check for null
     *(double *)pCtx->aOutputBuf = getPercentile(pMemBucket, v);
   } else {
     setNull(pCtx->aOutputBuf, pCtx->outputType, pCtx->outputBytes);
   }
   
-  tOrderDescDestroy(pMemBucket->pOrderDesc);
   tMemBucketDestroy(pMemBucket);
-  
   doFinalizer(pCtx);
+}
+
+static void percentile_next_step(SQLFunctionCtx *pCtx) {
+  SResultInfo *    pResInfo = GET_RES_INFO(pCtx);
+  SPercentileInfo *pInfo = pResInfo->interResultBuf;
+
+  if (pInfo->stage == 0) {
+    // all data are null, set it completed
+    if (pInfo->numOfElems == 0) {
+      pResInfo->complete = true;
+    }
+
+    pInfo->stage += 1;
+    pInfo->pMemBucket = tMemBucketCreate(pCtx->inputBytes, pCtx->inputType, GET_DOUBLE_VAL(&pInfo->minval), GET_DOUBLE_VAL(&pInfo->maxval));
+  } else {
+    pResInfo->complete = true;
+  }
 }
 
 //////////////////////////////////////////////////////////////////////////////////
@@ -2551,7 +2661,7 @@ static void apercentile_function(SQLFunctionCtx *pCtx) {
         v = GET_INT16_VAL(data);
         break;
       case TSDB_DATA_TYPE_BIGINT:
-        v = GET_INT64_VAL(data);
+        v = (double)(GET_INT64_VAL(data));
         break;
       case TSDB_DATA_TYPE_FLOAT:
         v = GET_FLOAT_VAL(data);
@@ -2596,7 +2706,7 @@ static void apercentile_function_f(SQLFunctionCtx *pCtx, int32_t index) {
       v = GET_INT16_VAL(pData);
       break;
     case TSDB_DATA_TYPE_BIGINT:
-      v = GET_INT64_VAL(pData);
+      v = (double)(GET_INT64_VAL(pData));
       break;
     case TSDB_DATA_TYPE_FLOAT:
       v = GET_FLOAT_VAL(pData);
@@ -2883,7 +2993,7 @@ static void leastsquares_finalizer(SQLFunctionCtx *pCtx) {
   
   double(*param)[3] = pInfo->mat;
   
-  param[1][1] = pInfo->num;
+  param[1][1] = (double)pInfo->num;
   param[1][0] = param[0][1];
   
   param[0][0] -= param[1][0] * (param[0][1] / param[1][1]);
@@ -2913,33 +3023,41 @@ static FORCE_INLINE void date_col_output_function_f(SQLFunctionCtx *pCtx, int32_
 }
 
 static void col_project_function(SQLFunctionCtx *pCtx) {
+  // the number of output rows should not affect the final number of rows, so set it to be 0
+  if (pCtx->numOfParams == 2) {
+    return;
+  }
+
   INC_INIT_VAL(pCtx, pCtx->size);
-  
+
   char *pData = GET_INPUT_CHAR(pCtx);
   if (pCtx->order == TSDB_ORDER_ASC) {
-    memcpy(pCtx->aOutputBuf, pData, (size_t)pCtx->size * pCtx->inputBytes);
+    memcpy(pCtx->aOutputBuf, pData, (size_t) pCtx->size * pCtx->inputBytes);
   } else {
     for(int32_t i = 0; i < pCtx->size; ++i) {
       memcpy(pCtx->aOutputBuf + (pCtx->size - 1 - i) * pCtx->inputBytes, pData + i * pCtx->inputBytes,
              pCtx->inputBytes);
     }
   }
-  
+
   pCtx->aOutputBuf += pCtx->size * pCtx->outputBytes;
 }
 
 static void col_project_function_f(SQLFunctionCtx *pCtx, int32_t index) {
   SResultInfo *pResInfo = GET_RES_INFO(pCtx);
-  
+  if (pCtx->numOfParams == 2) {  // the number of output rows should not affect the final number of rows, so set it to be 0
+    return;
+  }
+
   // only one output
   if (pCtx->param[0].i64Key == 1 && pResInfo->numOfRes >= 1) {
     return;
   }
-  
+
   INC_INIT_VAL(pCtx, 1);
   char *pData = GET_INPUT_CHAR_INDEX(pCtx, index);
   memcpy(pCtx->aOutputBuf, pData, pCtx->inputBytes);
-  
+
   pCtx->aOutputBuf += pCtx->inputBytes;
 }
 
@@ -2952,10 +3070,14 @@ static void tag_project_function(SQLFunctionCtx *pCtx) {
   INC_INIT_VAL(pCtx, pCtx->size);
   
   assert(pCtx->inputBytes == pCtx->outputBytes);
-  
-  for (int32_t i = 0; i < pCtx->size; ++i) {
-    tVariantDump(&pCtx->tag, pCtx->aOutputBuf, pCtx->outputType, true);
-    
+
+  tVariantDump(&pCtx->tag, pCtx->aOutputBuf, pCtx->outputType, true);
+  char* data = pCtx->aOutputBuf;
+  pCtx->aOutputBuf += pCtx->outputBytes;
+
+  // directly copy from the first one
+  for (int32_t i = 1; i < pCtx->size; ++i) {
+    memmove(pCtx->aOutputBuf, data, pCtx->outputBytes);
     pCtx->aOutputBuf += pCtx->outputBytes;
   }
 }
@@ -3031,13 +3153,13 @@ static void diff_function(SQLFunctionCtx *pCtx) {
           pCtx->param[1].i64Key = pData[i];
           pCtx->param[1].nType = pCtx->inputType;
         } else if ((i == 0 && pCtx->order == TSDB_ORDER_ASC) || (i == pCtx->size - 1 && pCtx->order == TSDB_ORDER_DESC)) {
-          *pOutput = pData[i] - pCtx->param[1].i64Key;
+          *pOutput = (int32_t)(pData[i] - pCtx->param[1].i64Key);
           *pTimestamp = pCtx->ptsList[i];
           
           pOutput += 1;
           pTimestamp += 1;
         } else {
-          *pOutput = pData[i] - pCtx->param[1].i64Key;  // direct previous may be null
+          *pOutput = (int32_t)(pData[i] - pCtx->param[1].i64Key);  // direct previous may be null
           *pTimestamp = pCtx->ptsList[i];
           
           pOutput += 1;
@@ -3125,13 +3247,13 @@ static void diff_function(SQLFunctionCtx *pCtx) {
           pCtx->param[1].dKey = pData[i];
           pCtx->param[1].nType = pCtx->inputType;
         } else if ((i == 0 && pCtx->order == TSDB_ORDER_ASC) || (i == pCtx->size - 1 && pCtx->order == TSDB_ORDER_DESC)) {
-          *pOutput = pData[i] - pCtx->param[1].dKey;
+          *pOutput = (float)(pData[i] - pCtx->param[1].dKey);
           *pTimestamp = pCtx->ptsList[i];
           
           pOutput += 1;
           pTimestamp += 1;
         } else {
-          *pOutput = pData[i] - pCtx->param[1].dKey;
+          *pOutput = (float)(pData[i] - pCtx->param[1].dKey);
           *pTimestamp = pCtx->ptsList[i];
           
           pOutput += 1;
@@ -3158,12 +3280,12 @@ static void diff_function(SQLFunctionCtx *pCtx) {
           pCtx->param[1].i64Key = pData[i];
           pCtx->param[1].nType = pCtx->inputType;
         } else if ((i == 0 && pCtx->order == TSDB_ORDER_ASC) || (i == pCtx->size - 1 && pCtx->order == TSDB_ORDER_DESC)) {
-          *pOutput = pData[i] - pCtx->param[1].i64Key;
+          *pOutput = (int16_t)(pData[i] - pCtx->param[1].i64Key);
           *pTimestamp = pCtx->ptsList[i];
           pOutput += 1;
           pTimestamp += 1;
         } else {
-          *pOutput = pData[i] - pCtx->param[1].i64Key;
+          *pOutput = (int16_t)(pData[i] - pCtx->param[1].i64Key);
           *pTimestamp = pCtx->ptsList[i];
           
           pOutput += 1;
@@ -3189,13 +3311,13 @@ static void diff_function(SQLFunctionCtx *pCtx) {
           pCtx->param[1].i64Key = pData[i];
           pCtx->param[1].nType = pCtx->inputType;
         } else if ((i == 0 && pCtx->order == TSDB_ORDER_ASC) || (i == pCtx->size - 1 && pCtx->order == TSDB_ORDER_DESC)) {
-          *pOutput = pData[i] - pCtx->param[1].i64Key;
+          *pOutput = (int8_t)(pData[i] - pCtx->param[1].i64Key);
           *pTimestamp = pCtx->ptsList[i];
           
           pOutput += 1;
           pTimestamp += 1;
         } else {
-          *pOutput = pData[i] - pCtx->param[1].i64Key;
+          *pOutput = (int8_t)(pData[i] - pCtx->param[1].i64Key);
           *pTimestamp = pCtx->ptsList[i];
           
           pOutput += 1;
@@ -3260,7 +3382,7 @@ static void diff_function_f(SQLFunctionCtx *pCtx, int32_t index) {
         pCtx->param[1].nType = pCtx->inputType;
         pCtx->param[1].i64Key = *(int32_t *)pData;
       } else {
-        *(int32_t *)pCtx->aOutputBuf = *(int32_t *)pData - pCtx->param[1].i64Key;
+        *(int32_t *)pCtx->aOutputBuf = *(int32_t *)pData - (int32_t)pCtx->param[1].i64Key;
         pCtx->param[1].i64Key = *(int32_t *)pData;
         *(int64_t *)pCtx->ptsOutputBuf = pCtx->ptsList[index];
       }
@@ -3339,10 +3461,10 @@ static void arithmetic_function_f(SQLFunctionCtx *pCtx, int32_t index) {
         continue;                                                                                 \
       }                                                                                           \
       if (inputData[i] < minOutput) {                                                             \
-        minOutput = inputData[i];                                                                 \
+        minOutput = (double)inputData[i];                                                                 \
       }                                                                                           \
       if (inputData[i] > maxOutput) {                                                             \
-        maxOutput = inputData[i];                                                                 \
+        maxOutput = (double)inputData[i];                                                                 \
       }                                                                                           \
       numOfNotNullElem++;                                                                         \
     }                                                                                             \
@@ -3372,7 +3494,7 @@ static void spread_function(SQLFunctionCtx *pCtx) {
   SResultInfo *pResInfo = GET_RES_INFO(pCtx);
   SSpreadInfo *pInfo = pResInfo->interResultBuf;
   
-  int32_t numOfElems = pCtx->size;
+  int32_t numOfElems = 0;
   
   // todo : opt with pre-calculated result
   // column missing cause the hasNull to be true
@@ -3387,19 +3509,19 @@ static void spread_function(SQLFunctionCtx *pCtx) {
     if ((pCtx->inputType >= TSDB_DATA_TYPE_TINYINT && pCtx->inputType <= TSDB_DATA_TYPE_BIGINT) ||
         (pCtx->inputType == TSDB_DATA_TYPE_TIMESTAMP)) {
       if (pInfo->min > pCtx->preAggVals.statis.min) {
-        pInfo->min = pCtx->preAggVals.statis.min;
+        pInfo->min = (double)pCtx->preAggVals.statis.min;
       }
       
       if (pInfo->max < pCtx->preAggVals.statis.max) {
-        pInfo->max = pCtx->preAggVals.statis.max;
+        pInfo->max = (double)pCtx->preAggVals.statis.max;
       }
     } else if (pCtx->inputType == TSDB_DATA_TYPE_DOUBLE || pCtx->inputType == TSDB_DATA_TYPE_FLOAT) {
-      if (pInfo->min > GET_DOUBLE_VAL(&(pCtx->preAggVals.statis.min))) {
-        pInfo->min = GET_DOUBLE_VAL(&(pCtx->preAggVals.statis.min));
+      if (pInfo->min > GET_DOUBLE_VAL((const char *)&(pCtx->preAggVals.statis.min))) {
+        pInfo->min = GET_DOUBLE_VAL((const char *)&(pCtx->preAggVals.statis.min));
       }
       
-      if (pInfo->max < GET_DOUBLE_VAL(&(pCtx->preAggVals.statis.max))) {
-        pInfo->max = GET_DOUBLE_VAL(&(pCtx->preAggVals.statis.max));
+      if (pInfo->max < GET_DOUBLE_VAL((const char *)&(pCtx->preAggVals.statis.max))) {
+        pInfo->max = GET_DOUBLE_VAL((const char *)&(pCtx->preAggVals.statis.max));
       }
     }
     
@@ -3460,7 +3582,7 @@ static void spread_function_f(SQLFunctionCtx *pCtx, int32_t index) {
   } else if (pCtx->inputType == TSDB_DATA_TYPE_INT) {
     val = GET_INT32_VAL(pData);
   } else if (pCtx->inputType == TSDB_DATA_TYPE_BIGINT || pCtx->inputType == TSDB_DATA_TYPE_TIMESTAMP) {
-    val = GET_INT64_VAL(pData);
+    val = (double)(GET_INT64_VAL(pData));
   } else if (pCtx->inputType == TSDB_DATA_TYPE_DOUBLE) {
     val = GET_DOUBLE_VAL(pData);
   } else if (pCtx->inputType == TSDB_DATA_TYPE_FLOAT) {
@@ -3903,11 +4025,11 @@ static void ts_comp_function(SQLFunctionCtx *pCtx) {
   
   // primary ts must be existed, so no need to check its existance
   if (pCtx->order == TSDB_ORDER_ASC) {
-    tsBufAppend(pTSbuf, 0, pCtx->tag.i64Key, input, pCtx->size * TSDB_KEYSIZE);
+    tsBufAppend(pTSbuf, 0, &pCtx->tag, input, pCtx->size * TSDB_KEYSIZE);
   } else {
     for (int32_t i = pCtx->size - 1; i >= 0; --i) {
       char *d = GET_INPUT_CHAR_INDEX(pCtx, i);
-      tsBufAppend(pTSbuf, 0, pCtx->tag.i64Key, d, TSDB_KEYSIZE);
+      tsBufAppend(pTSbuf, 0, &pCtx->tag, d, TSDB_KEYSIZE);
     }
   }
   
@@ -3926,7 +4048,7 @@ static void ts_comp_function_f(SQLFunctionCtx *pCtx, int32_t index) {
   
   STSBuf *pTSbuf = pInfo->pTSBuf;
   
-  tsBufAppend(pTSbuf, 0, pCtx->tag.i64Key, pData, TSDB_KEYSIZE);
+  tsBufAppend(pTSbuf, 0, &pCtx->tag, pData, TSDB_KEYSIZE);
   SET_VAL(pCtx, pCtx->size, 1);
   
   pResInfo->hasResult = DATA_SET_FLAG;
@@ -3941,7 +4063,7 @@ static void ts_comp_finalize(SQLFunctionCtx *pCtx) {
   tsBufFlush(pTSbuf);
   strcpy(pCtx->aOutputBuf, pTSbuf->path);
   
-  tsBufDestory(pTSbuf);
+  tsBufDestroy(pTSbuf);
   doFinalizer(pCtx);
 }
 
@@ -4408,7 +4530,7 @@ static void sumrate_finalizer(SQLFunctionCtx *pCtx) {
  *    e.g., count/sum/avg/min/max/stddev/percentile/apercentile/first/last...
  *
  */
-int32_t funcCompatDefList[] = {
+int32_t functionCompatList[] = {
     // count,       sum,      avg,       min,      max,  stddev,    percentile, apercentile, first,   last
     1,          1,        1,         1,        1,      1,          1,           1,        1,      1,
     // last_row,    top,    bottom,     spread,    twa,  leastsqr,     ts,       ts_dummy, tag_dummy, ts_z
@@ -4447,7 +4569,7 @@ SQLAggFuncElem aAggs[] = {{
                               function_finalizer,
                               sum_func_merge,
                               sum_func_second_merge,
-                              precal_req_load_info,
+                              statisRequired,
                           },
                           {
                               // 2
@@ -4462,7 +4584,7 @@ SQLAggFuncElem aAggs[] = {{
                               avg_finalizer,
                               avg_func_merge,
                               avg_func_second_merge,
-                              precal_req_load_info,
+                              statisRequired,
                           },
                           {
                               // 3
@@ -4477,7 +4599,7 @@ SQLAggFuncElem aAggs[] = {{
                               function_finalizer,
                               min_func_merge,
                               min_func_second_merge,
-                              precal_req_load_info,
+                              statisRequired,
                           },
                           {
                               // 4
@@ -4492,7 +4614,7 @@ SQLAggFuncElem aAggs[] = {{
                               function_finalizer,
                               max_func_merge,
                               max_func_second_merge,
-                              precal_req_load_info,
+                              statisRequired,
                           },
                           {
                               // 5
@@ -4507,7 +4629,7 @@ SQLAggFuncElem aAggs[] = {{
                               stddev_finalizer,
                               noop1,
                               noop1,
-                              data_req_load_info,
+                              dataBlockRequired,
                           },
                           {
                               // 6
@@ -4518,11 +4640,11 @@ SQLAggFuncElem aAggs[] = {{
                               percentile_function_setup,
                               percentile_function,
                               percentile_function_f,
-                              no_next_step,
+                              percentile_next_step,
                               percentile_finalizer,
                               noop1,
                               noop1,
-                              data_req_load_info,
+                              dataBlockRequired,
                           },
                           {
                               // 7
@@ -4537,7 +4659,7 @@ SQLAggFuncElem aAggs[] = {{
                               apercentile_finalizer,
                               apercentile_func_merge,
                               apercentile_func_second_merge,
-                              data_req_load_info,
+                              dataBlockRequired,
                           },
                           {
                               // 8
@@ -4552,7 +4674,7 @@ SQLAggFuncElem aAggs[] = {{
                               function_finalizer,
                               noop1,
                               noop1,
-                              first_data_req_info,
+                              firstFuncRequired,
                           },
                           {
                               // 9
@@ -4567,7 +4689,7 @@ SQLAggFuncElem aAggs[] = {{
                               function_finalizer,
                               noop1,
                               noop1,
-                              last_data_req_info,
+                              lastFuncRequired,
                           },
                           {
                               // 10
@@ -4583,7 +4705,7 @@ SQLAggFuncElem aAggs[] = {{
                               last_row_finalizer,
                               noop1,
                               last_dist_func_second_merge,
-                              data_req_load_info,
+                              dataBlockRequired,
                           },
                           {
                               // 11
@@ -4599,7 +4721,7 @@ SQLAggFuncElem aAggs[] = {{
                               top_bottom_func_finalizer,
                               top_func_merge,
                               top_func_second_merge,
-                              data_req_load_info,
+                              dataBlockRequired,
                           },
                           {
                               // 12
@@ -4615,7 +4737,7 @@ SQLAggFuncElem aAggs[] = {{
                               top_bottom_func_finalizer,
                               bottom_func_merge,
                               bottom_func_second_merge,
-                              data_req_load_info,
+                              dataBlockRequired,
                           },
                           {
                               // 13
@@ -4645,7 +4767,7 @@ SQLAggFuncElem aAggs[] = {{
                               twa_function_finalizer,
                               twa_func_merge,
                               twa_function_copy,
-                              data_req_load_info,
+                              dataBlockRequired,
                           },
                           {
                               // 15
@@ -4660,7 +4782,7 @@ SQLAggFuncElem aAggs[] = {{
                               leastsquares_finalizer,
                               noop1,
                               noop1,
-                              data_req_load_info,
+                              dataBlockRequired,
                           },
                           {
                               // 16
@@ -4690,7 +4812,7 @@ SQLAggFuncElem aAggs[] = {{
                               doFinalizer,
                               copy_function,
                               copy_function,
-                              data_req_load_info,
+                              dataBlockRequired,
                           },
                           {
                               // 18
@@ -4720,7 +4842,7 @@ SQLAggFuncElem aAggs[] = {{
                               ts_comp_finalize,
                               copy_function,
                               copy_function,
-                              data_req_load_info,
+                              dataBlockRequired,
                           },
                           {
                               // 20
@@ -4750,7 +4872,7 @@ SQLAggFuncElem aAggs[] = {{
                               doFinalizer,
                               copy_function,
                               copy_function,
-                              data_req_load_info,
+                              dataBlockRequired,
                           },
                           {
                               // 22, multi-output, tag function has only one result
@@ -4780,7 +4902,7 @@ SQLAggFuncElem aAggs[] = {{
                               doFinalizer,
                               copy_function,
                               copy_function,
-                              data_req_load_info,
+                              dataBlockRequired,
                           },
                           {
                               // 24
@@ -4795,7 +4917,7 @@ SQLAggFuncElem aAggs[] = {{
                               doFinalizer,
                               noop1,
                               noop1,
-                              data_req_load_info,
+                              dataBlockRequired,
                           },
     // distributed version used in two-stage aggregation processes
                           {
@@ -4811,7 +4933,7 @@ SQLAggFuncElem aAggs[] = {{
                               function_finalizer,
                               first_dist_func_merge,
                               first_dist_func_second_merge,
-                              first_dist_data_req_info,
+                              firstDistFuncRequired,
                           },
                           {
                               // 26
@@ -4826,7 +4948,7 @@ SQLAggFuncElem aAggs[] = {{
                               function_finalizer,
                               last_dist_func_merge,
                               last_dist_func_second_merge,
-                              last_dist_data_req_info,
+                              lastDistFuncRequired,
                           },
                           {
                               // 27
@@ -4841,7 +4963,7 @@ SQLAggFuncElem aAggs[] = {{
                               doFinalizer,
                               noop1,
                               copy_function,
-                              data_req_load_info,
+                              dataBlockRequired,
                           },
                           {
                               // 28
@@ -4856,7 +4978,7 @@ SQLAggFuncElem aAggs[] = {{
                               rate_finalizer,
                               rate_func_merge,
                               rate_func_copy,
-                              data_req_load_info,
+                              dataBlockRequired,
                           },
                           {
                               // 29
@@ -4871,7 +4993,7 @@ SQLAggFuncElem aAggs[] = {{
                               rate_finalizer,
                               rate_func_merge,
                               rate_func_copy,
-                              data_req_load_info,
+                              dataBlockRequired,
                           },
                           {
                               // 30
@@ -4886,7 +5008,7 @@ SQLAggFuncElem aAggs[] = {{
                               sumrate_finalizer,
                               sumrate_func_merge,
                               sumrate_func_second_merge,
-                              data_req_load_info,
+                              dataBlockRequired,
                           },
                           {
                               // 31
@@ -4901,7 +5023,7 @@ SQLAggFuncElem aAggs[] = {{
                               sumrate_finalizer,
                               sumrate_func_merge,
                               sumrate_func_second_merge,
-                              data_req_load_info,
+                              dataBlockRequired,
                           },
                           {
                               // 32
@@ -4916,7 +5038,7 @@ SQLAggFuncElem aAggs[] = {{
                               sumrate_finalizer,
                               sumrate_func_merge,
                               sumrate_func_second_merge,
-                              data_req_load_info,
+                              dataBlockRequired,
                           },
                           {
                               // 33
@@ -4931,7 +5053,7 @@ SQLAggFuncElem aAggs[] = {{
                               sumrate_finalizer,
                               sumrate_func_merge,
                               sumrate_func_second_merge,
-                              data_req_load_info,
+                              dataBlockRequired,
                           },
                           {
                               // 34
@@ -4946,5 +5068,5 @@ SQLAggFuncElem aAggs[] = {{
                               noop1,
                               noop1,
                               noop1,
-                              data_req_load_info,
+                              dataBlockRequired,
                           }};

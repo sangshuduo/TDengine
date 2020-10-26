@@ -20,7 +20,6 @@ extern "C" {
 #endif
 
 typedef void* qinfo_t;
-typedef void (*_qinfo_free_fn_t)(void*);
 
 /**
  * create the qinfo object according to QueryTableMsg
@@ -29,13 +28,8 @@ typedef void (*_qinfo_free_fn_t)(void*);
  * @param qinfo
  * @return
  */
-int32_t qCreateQueryInfo(void* tsdb, int32_t vgId, SQueryTableMsg* pQueryTableMsg, void* param, _qinfo_free_fn_t fn, qinfo_t* qinfo);
+int32_t qCreateQueryInfo(void* tsdb, int32_t vgId, SQueryTableMsg* pQueryTableMsg, qinfo_t* qinfo);
 
-/**
- * Destroy QInfo object
- * @param qinfo  qhandle
- */
-void qDestroyQueryInfo(qinfo_t qinfo);
 
 /**
  * the main query execution function, including query on both table and multitables,
@@ -44,7 +38,7 @@ void qDestroyQueryInfo(qinfo_t qinfo);
  * @param qinfo
  * @return
  */
-void qTableQuery(qinfo_t qinfo);
+bool qTableQuery(qinfo_t qinfo);
 
 /**
  * Retrieve the produced results information, if current query is not paused or completed,
@@ -54,7 +48,7 @@ void qTableQuery(qinfo_t qinfo);
  * @param qinfo
  * @return
  */
-int32_t qRetrieveQueryResultInfo(qinfo_t qinfo);
+int32_t qRetrieveQueryResultInfo(qinfo_t qinfo, bool* buildRes, void* pRspContext);
 
 /**
  *
@@ -66,16 +60,14 @@ int32_t qRetrieveQueryResultInfo(qinfo_t qinfo);
  * @param contLen payload length
  * @return
  */
-int32_t qDumpRetrieveResult(qinfo_t qinfo, SRetrieveTableRsp** pRsp, int32_t* contLen);
+int32_t qDumpRetrieveResult(qinfo_t qinfo, SRetrieveTableRsp** pRsp, int32_t* contLen, bool* continueExec);
 
 /**
- * Decide if more results will be produced or not, NOTE: this function will increase the ref count of QInfo,
- * so it can be only called once for each retrieve
  *
  * @param qinfo
  * @return
  */
-bool qHasMoreResultsToRetrieve(qinfo_t qinfo);
+void* qGetResultRetrieveMsg(qinfo_t qinfo);
 
 /**
  * kill current ongoing query and free query handle automatically
@@ -84,12 +76,21 @@ bool qHasMoreResultsToRetrieve(qinfo_t qinfo);
  */
 int32_t qKillQuery(qinfo_t qinfo);
 
+int32_t qQueryCompleted(qinfo_t qinfo);
+
+
+/**
+ * destroy query info structure
+ * @param qHandle
+ */
+void qDestroyQueryInfo(qinfo_t qHandle);
+
 void* qOpenQueryMgmt(int32_t vgId);
-void  qSetQueryMgmtClosed(void* pExecutor);
+void  qQueryMgmtNotifyClosed(void* pExecutor);
 void  qCleanupQueryMgmt(void* pExecutor);
 void** qRegisterQInfo(void* pMgmt, uint64_t qInfo);
 void** qAcquireQInfo(void* pMgmt, uint64_t key);
-void** qReleaseQInfo(void* pMgmt, void* pQInfo, bool needFree);
+void** qReleaseQInfo(void* pMgmt, void* pQInfo, bool freeHandle);
 
 #ifdef __cplusplus
 }

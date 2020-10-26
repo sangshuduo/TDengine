@@ -22,6 +22,8 @@ extern "C" {
 
 int32_t dnodeInitMgmt();
 void    dnodeCleanupMgmt();
+int32_t dnodeInitMgmtTimer();
+void    dnodeCleanupMgmtTimer();
 void    dnodeDispatchToMgmtQueue(SRpcMsg *rpcMsg);
 
 void*   dnodeGetVnode(int32_t vgId);
@@ -33,8 +35,8 @@ void*   dnodeGetVnodeTsdb(void *pVnode);
 void    dnodeReleaseVnode(void *pVnode);
 
 void    dnodeSendRedirectMsg(SRpcMsg *rpcMsg, bool forShell);
-void    dnodeGetMnodeIpSetForPeer(void *ipSet);
-void    dnodeGetMnodeIpSetForShell(void *ipSet);
+void    dnodeGetMnodeEpSetForPeer(void *epSet);
+void    dnodeGetMnodeEpSetForShell(void *epSet);
 
 #ifdef __cplusplus
 }

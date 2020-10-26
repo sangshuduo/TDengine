@@ -38,6 +38,10 @@ extern "C" {
 #define TSDB_STATUS_COMMIT_START 1
 #define TSDB_STATUS_COMMIT_OVER 2
 
+// TSDB STATE DEFINITION
+#define TSDB_STATE_OK 0x0
+#define TSDB_STATE_BAD_FILE 0x1
+
 // --------- TSDB APPLICATION HANDLE DEFINITION
 typedef struct {
   void *appH;
@@ -46,7 +50,6 @@ typedef struct {
   int (*eventCallBack)(void *);
   void *(*cqCreateFunc)(void *handle, uint64_t uid, int sid, char *sqlStr, STSchema *pSchema);
   void (*cqDropFunc)(void *handle);
-  void *(*configFunc)(int32_t vgId, int32_t sid);
 } STsdbAppH;
 
 // --------- TSDB REPOSITORY CONFIGURATION DEFINITION
@@ -54,14 +57,12 @@ typedef struct {
   int32_t tsdbId;
   int32_t cacheBlockSize;
   int32_t totalBlocks;
-  int32_t maxTables;    // maximum number of tables this repository can have
   int32_t daysPerFile;  // day per file sharding policy
   int32_t keep;         // day of data to keep
   int32_t keep1;
   int32_t keep2;
   int32_t minRowsPerFileBlock;  // minimum rows per file block
   int32_t maxRowsPerFileBlock;  // maximum rows per file block
-  int32_t commitTime;
   int8_t  precision;
   int8_t  compression;
 } STsdbCfg;
@@ -83,6 +84,7 @@ int32_t      tsdbDropRepo(char *rootDir);
 TSDB_REPO_T *tsdbOpenRepo(char *rootDir, STsdbAppH *pAppH);
 void         tsdbCloseRepo(TSDB_REPO_T *repo, int toCommit);
 int32_t      tsdbConfigRepo(TSDB_REPO_T *repo, STsdbCfg *pCfg);
+int          tsdbGetState(TSDB_REPO_T *repo);
 
 // --------- TSDB TABLE DEFINITION
 typedef struct {
@@ -117,9 +119,8 @@ int   tsdbCreateTable(TSDB_REPO_T *repo, STableCfg *pCfg);
 int   tsdbDropTable(TSDB_REPO_T *pRepo, STableId tableId);
 int   tsdbUpdateTableTagValue(TSDB_REPO_T *repo, SUpdateTableTagValMsg *pMsg);
 TSKEY tsdbGetTableLastKey(TSDB_REPO_T *repo, uint64_t uid);
-void  tsdbStartStream(TSDB_REPO_T *repo);
 
-uint32_t tsdbGetFileInfo(TSDB_REPO_T *repo, char *name, uint32_t *index, uint32_t eindex, int32_t *size);
+uint32_t tsdbGetFileInfo(TSDB_REPO_T *repo, char *name, uint32_t *index, uint32_t eindex, int64_t *size);
 
 // the TSDB repository info
 typedef struct STsdbRepoInfo {
@@ -171,39 +172,39 @@ typedef struct SDataBlockInfo {
 } SDataBlockInfo;
 
 typedef struct {
-  size_t   numOfTables;
-  SArray   *pGroupList;
-  SHashObj *map;         // speedup acquire the tableQueryInfo from STableId
-} STableGroupInfo;
+  void  *pTable;
+  TSKEY  lastKey;
+} STableKeyInfo;
 
-typedef struct SQueryRowCond {
-  int32_t rel;
-  TSKEY   ts;
-} SQueryRowCond;
+typedef struct {
+  size_t    numOfTables;
+  SArray   *pGroupList;
+  SHashObj *map;         // speedup acquire the tableQueryInfo by table uid
+} STableGroupInfo;
 
 /**
  * Get the data block iterator, starting from position according to the query condition
  *
  * @param tsdb       tsdb handle
  * @param pCond      query condition, including time window, result set order, and basic required columns for each block
- * @param tableqinfoGroupInfo  tableId list in the form of set, seperated into different groups according to group by condition
+ * @param tableInfoGroup  table object list in the form of set, grouped into different sets according to the
+ *                        group by condition
  * @param qinfo      query info handle from query processor
  * @return
  */
-TsdbQueryHandleT *tsdbQueryTables(TSDB_REPO_T *tsdb, STsdbQueryCond *pCond, STableGroupInfo *tableqinfoGroupInfo, void *qinfo);
+TsdbQueryHandleT *tsdbQueryTables(TSDB_REPO_T *tsdb, STsdbQueryCond *pCond, STableGroupInfo *tableInfoGroup, void *qinfo);
 
 /**
  * Get the last row of the given query time window for all the tables in STableGroupInfo object.
  * Note that only one data block with only row will be returned while invoking retrieve data block function for
  * all tables in this group.
  *
- * @param tsdb        tsdb handle
- * @param pCond       query condition, including time window, result set order, and basic required columns for each
- * block
- * @param tableqinfoGroupInfo   tableId list.
+ * @param tsdb   tsdb handle
+ * @param pCond  query condition, including time window, result set order, and basic required columns for each block
+ * @param tableInfo  table list.
  * @return
  */
-TsdbQueryHandleT tsdbQueryLastRow(TSDB_REPO_T *tsdb, STsdbQueryCond *pCond, STableGroupInfo *tableqinfoGroupInfo, void *qinfo);
+TsdbQueryHandleT tsdbQueryLastRow(TSDB_REPO_T *tsdb, STsdbQueryCond *pCond, STableGroupInfo *tableInfo, void *qinfo);
 
 /**
  * get the queried table object list
@@ -269,7 +270,7 @@ SArray *tsdbRetrieveDataBlock(TsdbQueryHandleT *pQueryHandle, SArray *pColumnIdL
  * @param stableid. super table sid
  * @param pTagCond. tag query condition
  */
-int32_t tsdbQuerySTableByTagCond(TSDB_REPO_T *tsdb, uint64_t uid, const char *pTagCond, size_t len,
+int32_t tsdbQuerySTableByTagCond(TSDB_REPO_T *tsdb, uint64_t uid, TSKEY key, const char *pTagCond, size_t len,
                                  int16_t tagNameRelType, const char *tbnameCond, STableGroupInfo *pGroupList,
                                  SColIndex *pColIndex, int32_t numOfCols);
 
@@ -277,7 +278,7 @@ int32_t tsdbQuerySTableByTagCond(TSDB_REPO_T *tsdb, uint64_t uid, const char *pT
  * destory the created table group list, which is generated by tag query
  * @param pGroupList
  */
-void tsdbDestoryTableGroup(STableGroupInfo *pGroupList);
+void tsdbDestroyTableGroup(STableGroupInfo *pGroupList);
 
 /**
  * create the table group result including only one table, used to handle the normal table query
@@ -287,7 +288,7 @@ void tsdbDestoryTableGroup(STableGroupInfo *pGroupList);
  * @param pGroupInfo  the generated result
  * @return
  */
-int32_t tsdbGetOneTableGroup(TSDB_REPO_T *tsdb, uint64_t uid, STableGroupInfo *pGroupInfo);
+int32_t tsdbGetOneTableGroup(TSDB_REPO_T *tsdb, uint64_t uid, TSKEY startKey, STableGroupInfo *pGroupInfo);
 
 /**
  *

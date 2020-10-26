@@ -16,7 +16,6 @@
 #include "os.h"
 #include "tlog.h"
 #include "tsched.h"
-#include "ttime.h"
 #include "ttimer.h"
 #include "tutil.h"
 
@@ -24,10 +23,10 @@ extern int32_t tscEmbedded;
 
 #define tmrFatal(...) { if (tmrDebugFlag & DEBUG_FATAL) { taosPrintLog("TMR FATAL ", tscEmbedded ? 255 : tmrDebugFlag, __VA_ARGS__); }}
 #define tmrError(...) { if (tmrDebugFlag & DEBUG_ERROR) { taosPrintLog("TMR ERROR ", tscEmbedded ? 255 : tmrDebugFlag, __VA_ARGS__); }}
-#define tmrWarn(...)  { if (tmrDebugFlag & DEBUG_WARN)  { taosPrintLog("TMR WARN  ", tscEmbedded ? 255 : tmrDebugFlag, __VA_ARGS__); }}
-#define tmrInfo(...)  { if (tmrDebugFlag & DEBUG_INFO)  { taosPrintLog("TMR INFO  ", tscEmbedded ? 255 : tmrDebugFlag, __VA_ARGS__); }}
-#define tmrDebug(...) { if (tmrDebugFlag & DEBUG_DEBUG) { taosPrintLog("TMR DEBUG ", tmrDebugFlag, __VA_ARGS__); }}
-#define tmrTrace(...) { if (tmrDebugFlag & DEBUG_TRACE) { taosPrintLog("TMR TRACE ", tmrDebugFlag, __VA_ARGS__); }}
+#define tmrWarn(...)  { if (tmrDebugFlag & DEBUG_WARN)  { taosPrintLog("TMR WARN ", tscEmbedded ? 255 : tmrDebugFlag, __VA_ARGS__); }}
+#define tmrInfo(...)  { if (tmrDebugFlag & DEBUG_INFO)  { taosPrintLog("TMR ", tscEmbedded ? 255 : tmrDebugFlag, __VA_ARGS__); }}
+#define tmrDebug(...) { if (tmrDebugFlag & DEBUG_DEBUG) { taosPrintLog("TMR ", tmrDebugFlag, __VA_ARGS__); }}
+#define tmrTrace(...) { if (tmrDebugFlag & DEBUG_TRACE) { taosPrintLog("TMR ", tmrDebugFlag, __VA_ARGS__); }}
 
 #define TIMER_STATE_WAITING 0
 #define TIMER_STATE_EXPIRED 1
@@ -446,7 +445,7 @@ bool taosTmrStopA(tmr_h* timerId) {
 bool taosTmrReset(TAOS_TMR_CALLBACK fp, int mseconds, void* param, void* handle, tmr_h* pTmrId) {
   tmr_ctrl_t* ctrl = (tmr_ctrl_t*)handle;
   if (ctrl == NULL || ctrl->label[0] == 0) {
-    return NULL;
+    return false;
   }
 
   uintptr_t  id = (uintptr_t)*pTmrId;
@@ -492,7 +491,7 @@ static void taosTmrModuleInit(void) {
     return;
   }
 
-  for (int i = 0; i < tsMaxTmrCtrl - 1; ++i) {
+  for (uint32_t i = 0; i < tsMaxTmrCtrl - 1; ++i) {
     tmr_ctrl_t* ctrl = tmrCtrls + i;
     ctrl->next = ctrl + 1;
   }

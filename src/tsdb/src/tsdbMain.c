@@ -12,6 +12,8 @@
  * You should have received a copy of the GNU Affero General Public License
  * along with this program. If not, see <http://www.gnu.org/licenses/>.
  */
+
+// no test file errors here
 #include "tsdbMain.h"
 #include "os.h"
 #include "talgo.h"
@@ -19,11 +21,7 @@
 #include "tchecksum.h"
 #include "tscompression.h"
 #include "tsdb.h"
-#include "ttime.h"
 #include "tulog.h"
-
-#include <pthread.h>
-#include <sys/stat.h>
 
 #define TSDB_CFG_FILE_NAME "config"
 #define TSDB_DATA_DIR_NAME "data"
@@ -62,16 +60,30 @@ static int         tsdbRestoreInfo(STsdbRepo *pRepo);
 static int         tsdbInitSubmitBlkIter(SSubmitBlk *pBlock, SSubmitBlkIter *pIter);
 static void        tsdbAlterCompression(STsdbRepo *pRepo, int8_t compression);
 static int         tsdbAlterKeep(STsdbRepo *pRepo, int32_t keep);
-static int         tsdbAlterMaxTables(STsdbRepo *pRepo, int32_t maxTables);
 static int         tsdbAlterCacheTotalBlocks(STsdbRepo *pRepo, int totalBlocks);
 static int         keyFGroupCompFunc(const void *key, const void *fgroup);
 static int         tsdbEncodeCfg(void **buf, STsdbCfg *pCfg);
 static void *      tsdbDecodeCfg(void *buf, STsdbCfg *pCfg);
 static int         tsdbCheckTableSchema(STsdbRepo *pRepo, SSubmitBlk *pBlock, STable *pTable);
 static int         tsdbScanAndConvertSubmitMsg(STsdbRepo *pRepo, SSubmitMsg *pMsg);
+static void        tsdbStartStream(STsdbRepo *pRepo);
+static void        tsdbStopStream(STsdbRepo *pRepo);
 
 // Function declaration
 int32_t tsdbCreateRepo(char *rootDir, STsdbCfg *pCfg) {
+  DIR *dir = opendir(rootDir);
+  if (dir) {
+    tsdbDebug("repository %s already exists", rootDir);
+    closedir(dir);
+    return 0;
+  } else {
+    if (ENOENT != errno) {
+      tsdbError("failed to open directory %s since %s", rootDir, strerror(errno));
+      terrno = TAOS_SYSTEM_ERROR(errno);
+      return -1;
+    }
+  }
+
   if (mkdir(rootDir, 0755) < 0) {
     tsdbError("vgId:%d failed to create rootDir %s since %s", pCfg->tsdbId, rootDir, strerror(errno));
     terrno = TAOS_SYSTEM_ERROR(errno);
@@ -83,10 +95,10 @@ int32_t tsdbCreateRepo(char *rootDir, STsdbCfg *pCfg) {
   if (tsdbSetRepoEnv(rootDir, pCfg) < 0) return -1;
 
   tsdbDebug(
-      "vgId:%d tsdb env create succeed! cacheBlockSize %d totalBlocks %d maxTables %d daysPerFile %d keep "
+      "vgId:%d tsdb env create succeed! cacheBlockSize %d totalBlocks %d daysPerFile %d keep "
       "%d minRowsPerFileBlock %d maxRowsPerFileBlock %d precision %d compression %d",
-      pCfg->tsdbId, pCfg->cacheBlockSize, pCfg->totalBlocks, pCfg->maxTables, pCfg->daysPerFile, pCfg->keep,
-      pCfg->minRowsPerFileBlock, pCfg->maxRowsPerFileBlock, pCfg->precision, pCfg->compression);
+      pCfg->tsdbId, pCfg->cacheBlockSize, pCfg->totalBlocks, pCfg->daysPerFile, pCfg->keep, pCfg->minRowsPerFileBlock,
+      pCfg->maxRowsPerFileBlock, pCfg->precision, pCfg->compression);
   return 0;
 }
 
@@ -95,6 +107,8 @@ int32_t tsdbDropRepo(char *rootDir) { return tsdbUnsetRepoEnv(rootDir); }
 TSDB_REPO_T *tsdbOpenRepo(char *rootDir, STsdbAppH *pAppH) {
   STsdbCfg   config = {0};
   STsdbRepo *pRepo = NULL;
+
+  terrno = TSDB_CODE_SUCCESS;
 
   if (tsdbLoadConfig(rootDir, &config) < 0) {
     tsdbError("failed to open repo in rootDir %s since %s", rootDir, tstrerror(terrno));
@@ -127,7 +141,7 @@ TSDB_REPO_T *tsdbOpenRepo(char *rootDir, STsdbAppH *pAppH) {
     goto _err;
   }
 
-  // pRepo->state = TSDB_REPO_STATE_ACTIVE;
+  tsdbStartStream(pRepo);
 
   tsdbDebug("vgId:%d open tsdb repository succeed!", REPO_ID(pRepo));
 
@@ -144,6 +158,8 @@ void tsdbCloseRepo(TSDB_REPO_T *repo, int toCommit) {
 
   STsdbRepo *pRepo = (STsdbRepo *)repo;
   int        vgId = REPO_ID(pRepo);
+
+  tsdbStopStream(pRepo);
 
   if (toCommit) {
     tsdbAsyncCommit(pRepo);
@@ -190,10 +206,12 @@ int32_t tsdbInsertData(TSDB_REPO_T *repo, SSubmitMsg *pMsg, SShellSubmitRspMsg *
   }
 
   if (pRsp != NULL) pRsp->affectedRows = htonl(affectedrows);
+
+  if (tsdbCheckCommit(pRepo) < 0) return -1;
   return 0;
 }
 
-uint32_t tsdbGetFileInfo(TSDB_REPO_T *repo, char *name, uint32_t *index, uint32_t eindex, int32_t *size) {
+uint32_t tsdbGetFileInfo(TSDB_REPO_T *repo, char *name, uint32_t *index, uint32_t eindex, int64_t *size) {
   STsdbRepo *pRepo = (STsdbRepo *)repo;
   // STsdbMeta *pMeta = pRepo->tsdbMeta;
   STsdbFileH *pFileH = pRepo->tsdbFileH;
@@ -207,75 +225,65 @@ uint32_t tsdbGetFileInfo(TSDB_REPO_T *repo, char *name, uint32_t *index, uint32_
 
   char *sdup = strdup(pRepo->rootDir);
   char *prefix = dirname(sdup);
+  int   prefixLen = (int)strlen(prefix);
 
   if (name[0] == 0) {  // get the file from index or after, but not larger than eindex
-    int fid = (*index) / 3;
+    taosTFree(sdup);
+    int fid = (*index) / TSDB_FILE_TYPE_MAX;
 
     if (pFileH->nFGroups == 0 || fid > pFileH->pFGroup[pFileH->nFGroups - 1].fileId) {
       if (*index <= TSDB_META_FILE_INDEX && TSDB_META_FILE_INDEX <= eindex) {
         fname = tsdbGetMetaFileName(pRepo->rootDir);
         *index = TSDB_META_FILE_INDEX;
+        magic = TSDB_META_FILE_MAGIC(pRepo->tsdbMeta);
       } else {
-        tfree(sdup);
         return 0;
       }
     } else {
       SFileGroup *pFGroup =
           taosbsearch(&fid, pFileH->pFGroup, pFileH->nFGroups, sizeof(SFileGroup), keyFGroupCompFunc, TD_GE);
       if (pFGroup->fileId == fid) {
-        fname = strdup(pFGroup->files[(*index) % 3].fname);
+        fname = strdup(pFGroup->files[(*index) % TSDB_FILE_TYPE_MAX].fname);
+        magic = pFGroup->files[(*index) % TSDB_FILE_TYPE_MAX].info.magic;
       } else {
-        if (pFGroup->fileId * 3 + 2 < eindex) {
+        if ((pFGroup->fileId + 1) * TSDB_FILE_TYPE_MAX - 1 < (int)eindex) {
           fname = strdup(pFGroup->files[0].fname);
-          *index = pFGroup->fileId * 3;
+          *index = pFGroup->fileId * TSDB_FILE_TYPE_MAX;
+          magic = pFGroup->files[0].info.magic;
         } else {
-          tfree(sdup);
           return 0;
         }
       }
     }
-    strcpy(name, fname + strlen(prefix));
-  } else {                                 // get the named file at the specified index. If not there, return 0
-    if (*index == TSDB_META_FILE_INDEX) {  // get meta file
-      fname = tsdbGetMetaFileName(pRepo->rootDir);
-    } else {
-      int         fid = (*index) / 3;
-      SFileGroup *pFGroup = tsdbSearchFGroup(pFileH, fid, TD_EQ);
-      if (pFGroup == NULL) {  // not found
-        tfree(sdup);
-        return 0;
-      }
-
-      SFile *pFile = &pFGroup->files[(*index) % 3];
-      fname = strdup(pFile->fname);
+    strcpy(name, fname + prefixLen);
+  } else {  // get the named file at the specified index. If not there, return 0
+    fname = malloc(prefixLen + strlen(name) + 2);
+    sprintf(fname, "%s/%s", prefix, name);
+    if (access(fname, F_OK) != 0) {
+      taosFree(fname);
+      taosFree(sdup);
+      return 0;
     }
+    if (*index == TSDB_META_FILE_INDEX) {  // get meta file
+      tsdbGetStoreInfo(fname, &magic, size);
+    } else {
+      tsdbGetFileInfoImpl(fname, &magic, size);
+    }
+    taosFree(fname);
+    taosFree(sdup);
+    return magic;
   }
 
   if (stat(fname, &fState) < 0) {
-    tfree(sdup);
-    tfree(fname);
+    taosTFree(fname);
     return 0;
   }
 
-  tfree(sdup);
   *size = fState.st_size;
-  magic = *size;
+  // magic = *size;
 
-  tfree(fname);
+  taosTFree(fname);
   return magic;
-}
-
-void tsdbStartStream(TSDB_REPO_T *repo) {
-  STsdbRepo *pRepo = (STsdbRepo *)repo;
-  STsdbMeta *pMeta = pRepo->tsdbMeta;
-
-  for (int i = 0; i < pRepo->config.maxTables; i++) {
-    STable *pTable = pMeta->tables[i];
-    if (pTable && pTable->type == TSDB_STREAM_TABLE) {
-      pTable->cqhandle = (*pRepo->appH.cqCreateFunc)(pRepo->appH.cqH, TABLE_UID(pTable), TABLE_TID(pTable), pTable->sql,
-                                                     tsdbGetTableSchemaImpl(pTable, false, false, -1));
-    }
-  }
 }
 
 STsdbCfg *tsdbGetCfg(const TSDB_REPO_T *repo) {
@@ -313,13 +321,6 @@ int32_t tsdbConfigRepo(TSDB_REPO_T *repo, STsdbCfg *pCfg) {
     tsdbAlterCacheTotalBlocks(pRepo, pCfg->totalBlocks);
     configChanged = true;
   }
-  if (pRCfg->maxTables != pCfg->maxTables) {
-    if (tsdbAlterMaxTables(pRepo, pCfg->maxTables) < 0) {
-      tsdbError("vgId:%d failed to configure repo when alter maxTables since %s", REPO_ID(pRepo), tstrerror(terrno));
-      return -1;
-    }
-    configChanged = true;
-  }
 
   if (configChanged) {
     if (tsdbSaveConfig(pRepo->rootDir, &pRepo->config) < 0) {
@@ -339,9 +340,13 @@ void tsdbReportStat(void *repo, int64_t *totalPoints, int64_t *totalStorage, int
   *compStorage = pRepo->stat.compStorage;
 }
 
+int tsdbGetState(TSDB_REPO_T *repo) {
+  return ((STsdbRepo *)repo)->state;
+}
+
 // ----------------- INTERNAL FUNCTIONS -----------------
 char *tsdbGetMetaFileName(char *rootDir) {
-  int   tlen = strlen(rootDir) + strlen(TSDB_META_FILE_NAME) + 2;
+  int   tlen = (int)(strlen(rootDir) + strlen(TSDB_META_FILE_NAME) + 2);
   char *fname = calloc(1, tlen);
   if (fname == NULL) {
     terrno = TSDB_CODE_TDB_OUT_OF_MEMORY;
@@ -352,8 +357,8 @@ char *tsdbGetMetaFileName(char *rootDir) {
   return fname;
 }
 
-void tsdbGetDataFileName(STsdbRepo *pRepo, int fid, int type, char *fname) {
-  snprintf(fname, TSDB_FILENAME_LEN, "%s/%s/v%df%d%s", pRepo->rootDir, TSDB_DATA_DIR_NAME, REPO_ID(pRepo), fid, tsdbFileSuffix[type]);
+void tsdbGetDataFileName(char *rootDir, int vid, int fid, int type, char *fname) {
+  snprintf(fname, TSDB_FILENAME_LEN, "%s/%s/v%df%d%s", rootDir, TSDB_DATA_DIR_NAME, vid, fid, tsdbFileSuffix[type]);
 }
 
 int tsdbLockRepo(STsdbRepo *pRepo) {
@@ -380,7 +385,7 @@ int tsdbUnlockRepo(STsdbRepo *pRepo) {
 }
 
 char *tsdbGetDataDirName(char *rootDir) {
-  int   tlen = strlen(rootDir) + strlen(TSDB_DATA_DIR_NAME) + 2;
+  int   tlen = (int)(strlen(rootDir) + strlen(TSDB_DATA_DIR_NAME) + 2);
   char *fname = calloc(1, tlen);
   if (fname == NULL) {
     terrno = TSDB_CODE_TDB_OUT_OF_MEMORY;
@@ -389,6 +394,33 @@ char *tsdbGetDataDirName(char *rootDir) {
 
   snprintf(fname, tlen, "%s/%s", rootDir, TSDB_DATA_DIR_NAME);
   return fname;
+}
+
+int tsdbGetNextMaxTables(int tid) {
+  ASSERT(tid >= 1 && tid <= TSDB_MAX_TABLES);
+  int maxTables = TSDB_INIT_NTABLES;
+  while (true) {
+    maxTables = MIN(maxTables, TSDB_MAX_TABLES);
+    if (tid <= maxTables) break;
+    maxTables *= 2;
+  }
+
+  return maxTables + 1;
+}
+
+int tsdbCheckCommit(STsdbRepo *pRepo) {
+  ASSERT(pRepo->mem != NULL);
+  STsdbCfg *pCfg = &(pRepo->config);
+
+  STsdbBufBlock *pBufBlock = tsdbGetCurrBufBlock(pRepo);
+  ASSERT(pBufBlock != NULL);
+  if ((pRepo->mem->extraBuffList != NULL) ||
+      ((listNEles(pRepo->mem->bufBlockList) >= pCfg->totalBlocks / 3) && (pBufBlock->remain < TSDB_BUFFER_RESERVE))) {
+    // trigger commit
+    if (tsdbAsyncCommit(pRepo) < 0) return -1;
+  }
+
+  return 0;
 }
 
 STsdbMeta *    tsdbGetMeta(TSDB_REPO_T *pRepo) { return ((STsdbRepo *)pRepo)->tsdbMeta; }
@@ -421,17 +453,6 @@ static int32_t tsdbCheckAndSetDefaultCfg(STsdbCfg *pCfg) {
   if (pCfg->tsdbId < 0) {
     tsdbError("vgId:%d invalid vgroup ID", pCfg->tsdbId);
     goto _err;
-  }
-
-  // Check maxTables
-  if (pCfg->maxTables == -1) {
-    pCfg->maxTables = TSDB_DEFAULT_TABLES+1;
-  } else {
-    if (pCfg->maxTables - 1 < TSDB_MIN_TABLES || pCfg->maxTables - 1 > TSDB_MAX_TABLES) {
-      tsdbError("vgId:%d invalid maxTables configuration! maxTables %d TSDB_MIN_TABLES %d TSDB_MAX_TABLES %d",
-                pCfg->tsdbId, pCfg->maxTables - 1, TSDB_MIN_TABLES, TSDB_MAX_TABLES);
-      goto _err;
-    }
   }
 
   // Check daysPerFile
@@ -558,7 +579,7 @@ static int32_t tsdbSaveConfig(char *rootDir, STsdbCfg *pCfg) {
 
   taosCalcChecksumAppend(0, (uint8_t *)buf, TSDB_FILE_HEAD_SIZE);
 
-  if (twrite(fd, (void *)buf, TSDB_FILE_HEAD_SIZE) < TSDB_FILE_HEAD_SIZE) {
+  if (taosTWrite(fd, (void *)buf, TSDB_FILE_HEAD_SIZE) < TSDB_FILE_HEAD_SIZE) {
     tsdbError("vgId:%d failed to write %d bytes to file %s since %s", pCfg->tsdbId, TSDB_FILE_HEAD_SIZE, fname,
               strerror(errno));
     terrno = TAOS_SYSTEM_ERROR(errno);
@@ -576,7 +597,7 @@ static int32_t tsdbSaveConfig(char *rootDir, STsdbCfg *pCfg) {
   return 0;
 
 _err:
-  tfree(fname);
+  taosTFree(fname);
   if (fd >= 0) close(fd);
   return -1;
 }
@@ -599,7 +620,7 @@ static int tsdbLoadConfig(char *rootDir, STsdbCfg *pCfg) {
     goto _err;
   }
 
-  if (tread(fd, (void *)buf, TSDB_FILE_HEAD_SIZE) < TSDB_FILE_HEAD_SIZE) {
+  if (taosTRead(fd, (void *)buf, TSDB_FILE_HEAD_SIZE) < TSDB_FILE_HEAD_SIZE) {
     tsdbError("failed to read %d bytes from file %s since %s", TSDB_FILE_HEAD_SIZE, fname, strerror(errno));
     terrno = TAOS_SYSTEM_ERROR(errno);
     goto _err;
@@ -613,19 +634,19 @@ static int tsdbLoadConfig(char *rootDir, STsdbCfg *pCfg) {
 
   tsdbDecodeCfg(buf, pCfg);
 
-  tfree(fname);
+  taosTFree(fname);
   close(fd);
 
   return 0;
 
 _err:
-  tfree(fname);
+  taosTFree(fname);
   if (fd >= 0) close(fd);
   return -1;
 }
 
 static char *tsdbGetCfgFname(char *rootDir) {
-  int   tlen = strlen(rootDir) + strlen(TSDB_CFG_FILE_NAME) + 2;
+  int   tlen = (int)(strlen(rootDir) + strlen(TSDB_CFG_FILE_NAME) + 2);
   char *fname = calloc(1, tlen);
   if (fname == NULL) {
     terrno = TSDB_CODE_TDB_OUT_OF_MEMORY;
@@ -642,6 +663,8 @@ static STsdbRepo *tsdbNewRepo(char *rootDir, STsdbAppH *pAppH, STsdbCfg *pCfg) {
     terrno = TSDB_CODE_TDB_OUT_OF_MEMORY;
     goto _err;
   }
+
+  pRepo->state = TSDB_STATE_OK;
 
   int code = pthread_mutex_init(&pRepo->mutex, NULL);
   if (code != 0) {
@@ -692,7 +715,7 @@ static void tsdbFreeRepo(STsdbRepo *pRepo) {
     tsdbFreeMeta(pRepo->tsdbMeta);
     // tsdbFreeMemTable(pRepo->mem);
     // tsdbFreeMemTable(pRepo->imem);
-    tfree(pRepo->rootDir);
+    taosTFree(pRepo->rootDir);
     pthread_mutex_destroy(&pRepo->mutex);
     free(pRepo);
   }
@@ -719,6 +742,7 @@ static int32_t tsdbInsertDataToTable(STsdbRepo *pRepo, SSubmitBlk *pBlock, TSKEY
   STsdbMeta *pMeta = pRepo->tsdbMeta;
   int64_t    points = 0;
 
+  ASSERT(pBlock->tid < pMeta->maxTables);
   STable *pTable = pMeta->tables[pBlock->tid];
   ASSERT(pTable != NULL && TABLE_UID(pTable) == pBlock->uid);
 
@@ -785,7 +809,6 @@ static SDataRow tsdbGetSubmitBlkNext(SSubmitBlkIter *pIter) {
 }
 
 static int tsdbRestoreInfo(STsdbRepo *pRepo) {
-  // TODO
   STsdbMeta * pMeta = pRepo->tsdbMeta;
   STsdbFileH *pFileH = pRepo->tsdbFileH;
   SFileGroup *pFGroup = NULL;
@@ -797,11 +820,14 @@ static int tsdbRestoreInfo(STsdbRepo *pRepo) {
 
   tsdbInitFileGroupIter(pFileH, &iter, TSDB_ORDER_DESC);
   while ((pFGroup = tsdbGetFileGroupNext(&iter)) != NULL) {
+    if (pFGroup->state) continue;
     if (tsdbSetAndOpenHelperFile(&rhelper, pFGroup) < 0) goto _err;
-    for (int i = 1; i < pRepo->config.maxTables; i++) {
+    if (tsdbLoadCompIdx(&rhelper, NULL) < 0) goto _err;
+    for (int i = 1; i < pMeta->maxTables; i++) {
       STable *pTable = pMeta->tables[i];
       if (pTable == NULL) continue;
-      SCompIdx *pIdx = &rhelper.pCompIdx[i];
+      if (tsdbSetHelperTable(&rhelper, pTable, pRepo) < 0) goto _err;
+      SCompIdx *pIdx = &(rhelper.curCompIdx);
 
       if (pIdx->offset > 0 && pTable->lastKey < pIdx->maxKey) pTable->lastKey = pIdx->maxKey;
     }
@@ -849,8 +875,8 @@ static int tsdbAlterKeep(STsdbRepo *pRepo, int32_t keep) {
       return -1;
     }
 
-    int mfid = TSDB_KEY_FILEID(taosGetTimestamp(pCfg->precision), pCfg->daysPerFile, pCfg->precision) -
-               TSDB_MAX_FILE(keep, pCfg->daysPerFile);
+    int mfid = (int)(TSDB_KEY_FILEID(taosGetTimestamp(pCfg->precision), pCfg->daysPerFile, pCfg->precision) -
+               TSDB_MAX_FILE(keep, pCfg->daysPerFile));
 
     int i = 0;
     for (; i < pFileH->nFGroups; i++) {
@@ -873,36 +899,6 @@ static int tsdbAlterKeep(STsdbRepo *pRepo, int32_t keep) {
   return 0;
 }
 
-static int tsdbAlterMaxTables(STsdbRepo *pRepo, int32_t maxTables) {
-  // TODO
-  int oldMaxTables = pRepo->config.maxTables;
-  if (oldMaxTables < pRepo->config.maxTables) {
-    terrno = TSDB_CODE_TDB_INVALID_ACTION;
-    return -1;
-  }
-
-  STsdbMeta *pMeta = pRepo->tsdbMeta;
-
-  pMeta->tables = realloc(pMeta->tables, maxTables * sizeof(STable *));
-  memset(&pMeta->tables[oldMaxTables], 0, sizeof(STable *) * (maxTables - oldMaxTables));
-  pRepo->config.maxTables = maxTables;
-
-  if (pRepo->mem) {
-    pRepo->mem->tData = realloc(pRepo->mem->tData, maxTables * sizeof(STableData *));
-    memset(POINTER_SHIFT(pRepo->mem->tData, sizeof(STableData *) * oldMaxTables), 0,
-           sizeof(STableData *) * (maxTables - oldMaxTables));
-  }
-
-  if (pRepo->imem) {
-    pRepo->imem->tData = realloc(pRepo->imem->tData, maxTables * sizeof(STableData *));
-    memset(POINTER_SHIFT(pRepo->imem->tData, sizeof(STableData *) * oldMaxTables), 0,
-           sizeof(STableData *) * (maxTables - oldMaxTables));
-  }
-
-  tsdbDebug("vgId:%d, tsdb maxTables is changed from %d to %d!", pRepo->config.tsdbId, oldMaxTables, maxTables);
-  return 0;
-}
-
 static int keyFGroupCompFunc(const void *key, const void *fgroup) {
   int         fid = *(int *)key;
   SFileGroup *pFGroup = (SFileGroup *)fgroup;
@@ -919,7 +915,6 @@ static int tsdbEncodeCfg(void **buf, STsdbCfg *pCfg) {
   tlen += taosEncodeVariantI32(buf, pCfg->tsdbId);
   tlen += taosEncodeFixedI32(buf, pCfg->cacheBlockSize);
   tlen += taosEncodeVariantI32(buf, pCfg->totalBlocks);
-  tlen += taosEncodeVariantI32(buf, pCfg->maxTables);
   tlen += taosEncodeVariantI32(buf, pCfg->daysPerFile);
   tlen += taosEncodeVariantI32(buf, pCfg->keep);
   tlen += taosEncodeVariantI32(buf, pCfg->keep1);
@@ -936,7 +931,6 @@ static void *tsdbDecodeCfg(void *buf, STsdbCfg *pCfg) {
   buf = taosDecodeVariantI32(buf, &(pCfg->tsdbId));
   buf = taosDecodeFixedI32(buf, &(pCfg->cacheBlockSize));
   buf = taosDecodeVariantI32(buf, &(pCfg->totalBlocks));
-  buf = taosDecodeVariantI32(buf, &(pCfg->maxTables));
   buf = taosDecodeVariantI32(buf, &(pCfg->daysPerFile));
   buf = taosDecodeVariantI32(buf, &(pCfg->keep));
   buf = taosDecodeVariantI32(buf, &(pCfg->keep1));
@@ -1042,7 +1036,7 @@ static int tsdbScanAndConvertSubmitMsg(STsdbRepo *pRepo, SSubmitMsg *pMsg) {
     pBlock->schemaLen = htonl(pBlock->schemaLen);
     pBlock->numOfRows = htons(pBlock->numOfRows);
 
-    if (pBlock->tid <= 0 || pBlock->tid >= pRepo->config.maxTables) {
+    if (pBlock->tid <= 0 || pBlock->tid >= pMeta->maxTables) {
       tsdbError("vgId:%d failed to get table to insert data, uid %" PRIu64 " tid %d", REPO_ID(pRepo), pBlock->uid,
                 pBlock->tid);
       terrno = TSDB_CODE_TDB_INVALID_TABLE_ID;
@@ -1121,3 +1115,27 @@ TSKEY tsdbGetTableLastKey(TSDB_REPO_T *repo, uint64_t uid) {
 }
 
 #endif
+
+static void tsdbStartStream(STsdbRepo *pRepo) {
+  STsdbMeta *pMeta = pRepo->tsdbMeta;
+
+  for (int i = 0; i < pMeta->maxTables; i++) {
+    STable *pTable = pMeta->tables[i];
+    if (pTable && pTable->type == TSDB_STREAM_TABLE) {
+      pTable->cqhandle = (*pRepo->appH.cqCreateFunc)(pRepo->appH.cqH, TABLE_UID(pTable), TABLE_TID(pTable), pTable->sql,
+                                                     tsdbGetTableSchemaImpl(pTable, false, false, -1));
+    }
+  }
+}
+
+
+static void tsdbStopStream(STsdbRepo *pRepo) {
+  STsdbMeta *pMeta = pRepo->tsdbMeta;
+
+  for (int i = 0; i < pMeta->maxTables; i++) {
+    STable *pTable = pMeta->tables[i];
+    if (pTable && pTable->type == TSDB_STREAM_TABLE) {
+      (*pRepo->appH.cqDropFunc)(pTable->cqhandle);
+    }
+  }
+}

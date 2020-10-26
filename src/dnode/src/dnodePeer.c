@@ -29,11 +29,11 @@
 #include "dnodeVWrite.h"
 #include "dnodeMPeer.h"
 
-extern void dnodeUpdateMnodeIpSetForPeer(SRpcIpSet *pIpSet);
+extern void dnodeUpdateMnodeEpSetForPeer(SRpcEpSet *pEpSet);
 static void (*dnodeProcessReqMsgFp[TSDB_MSG_TYPE_MAX])(SRpcMsg *);
-static void dnodeProcessReqMsgFromDnode(SRpcMsg *pMsg, SRpcIpSet *);
+static void dnodeProcessReqMsgFromDnode(SRpcMsg *pMsg, SRpcEpSet *);
 static void (*dnodeProcessRspMsgFp[TSDB_MSG_TYPE_MAX])(SRpcMsg *rpcMsg);
-static void dnodeProcessRspFromDnode(SRpcMsg *pMsg, SRpcIpSet *pIpSet);
+static void dnodeProcessRspFromDnode(SRpcMsg *pMsg, SRpcEpSet *pEpSet);
 static void *tsDnodeServerRpc = NULL;
 static void *tsDnodeClientRpc = NULL;
 
@@ -44,9 +44,11 @@ int32_t dnodeInitServer() {
   dnodeProcessReqMsgFp[TSDB_MSG_TYPE_MD_DROP_STABLE]  = dnodeDispatchToVnodeWriteQueue;
 
   dnodeProcessReqMsgFp[TSDB_MSG_TYPE_MD_CREATE_VNODE] = dnodeDispatchToMgmtQueue; 
+  dnodeProcessReqMsgFp[TSDB_MSG_TYPE_MD_ALTER_VNODE]  = dnodeDispatchToMgmtQueue; 
   dnodeProcessReqMsgFp[TSDB_MSG_TYPE_MD_DROP_VNODE]   = dnodeDispatchToMgmtQueue;
   dnodeProcessReqMsgFp[TSDB_MSG_TYPE_MD_ALTER_STREAM] = dnodeDispatchToMgmtQueue;
   dnodeProcessReqMsgFp[TSDB_MSG_TYPE_MD_CONFIG_DNODE] = dnodeDispatchToMgmtQueue;
+  dnodeProcessReqMsgFp[TSDB_MSG_TYPE_MD_CREATE_MNODE] = dnodeDispatchToMgmtQueue;
 
   dnodeProcessReqMsgFp[TSDB_MSG_TYPE_DM_CONFIG_TABLE] = dnodeDispatchToMnodePeerQueue;
   dnodeProcessReqMsgFp[TSDB_MSG_TYPE_DM_CONFIG_VNODE] = dnodeDispatchToMnodePeerQueue;
@@ -60,7 +62,7 @@ int32_t dnodeInitServer() {
   rpcInit.label        = "DND-S";
   rpcInit.numOfThreads = 1;
   rpcInit.cfp          = dnodeProcessReqMsgFromDnode;
-  rpcInit.sessions     = 100;
+  rpcInit.sessions     = TSDB_MAX_VNODES;
   rpcInit.connType     = TAOS_CONN_SERVER;
   rpcInit.idleTime     = tsShellActivityTimer * 1000;
 
@@ -82,7 +84,7 @@ void dnodeCleanupServer() {
   }
 }
 
-static void dnodeProcessReqMsgFromDnode(SRpcMsg *pMsg, SRpcIpSet *pIpSet) {
+static void dnodeProcessReqMsgFromDnode(SRpcMsg *pMsg, SRpcEpSet *pEpSet) {
   SRpcMsg rspMsg = {
     .handle  = pMsg->handle,
     .pCont   = NULL,
@@ -92,7 +94,7 @@ static void dnodeProcessReqMsgFromDnode(SRpcMsg *pMsg, SRpcIpSet *pIpSet) {
   if (pMsg->pCont == NULL) return;
 
   if (dnodeGetRunStatus() != TSDB_DNODE_RUN_STATUS_RUNING) {
-    rspMsg.code = TSDB_CODE_RPC_NOT_READY;
+    rspMsg.code = TSDB_CODE_APP_NOT_READY;
     rpcSendResponse(&rspMsg);
     rpcFreeCont(pMsg->pCont);
     dDebug("RPC %p, msg:%s is ignored since dnode not running", pMsg->handle, taosMsg[pMsg->msgType]);
@@ -122,7 +124,7 @@ int32_t dnodeInitClient() {
   rpcInit.label        = "DND-C";
   rpcInit.numOfThreads = 1;
   rpcInit.cfp          = dnodeProcessRspFromDnode;
-  rpcInit.sessions     = 100;
+  rpcInit.sessions     = TSDB_MAX_VNODES;
   rpcInit.connType     = TAOS_CONN_CLIENT;
   rpcInit.idleTime     = tsShellActivityTimer * 1000;
   rpcInit.user         = "t";
@@ -147,9 +149,9 @@ void dnodeCleanupClient() {
   }
 }
 
-static void dnodeProcessRspFromDnode(SRpcMsg *pMsg, SRpcIpSet *pIpSet) {
-  if (pMsg->msgType == TSDB_MSG_TYPE_DM_STATUS_RSP && pIpSet) {
-    dnodeUpdateMnodeIpSetForPeer(pIpSet);
+static void dnodeProcessRspFromDnode(SRpcMsg *pMsg, SRpcEpSet *pEpSet) {
+  if (pMsg->msgType == TSDB_MSG_TYPE_DM_STATUS_RSP && pEpSet) {
+    dnodeUpdateMnodeEpSetForPeer(pEpSet);
   }
 
   if (dnodeProcessRspMsgFp[pMsg->msgType]) {    
@@ -165,12 +167,16 @@ void dnodeAddClientRspHandle(uint8_t msgType, void (*fp)(SRpcMsg *rpcMsg)) {
   dnodeProcessRspMsgFp[msgType] = fp;
 }
 
-void dnodeSendMsgToDnode(SRpcIpSet *ipSet, SRpcMsg *rpcMsg) {
-  rpcSendRequest(tsDnodeClientRpc, ipSet, rpcMsg);
+void dnodeSendMsgToDnode(SRpcEpSet *epSet, SRpcMsg *rpcMsg) {
+  rpcSendRequest(tsDnodeClientRpc, epSet, rpcMsg);
 }
 
-void dnodeSendMsgToDnodeRecv(SRpcMsg *rpcMsg, SRpcMsg *rpcRsp) {
-  SRpcIpSet ipSet = {0};
-  dnodeGetMnodeIpSetForPeer(&ipSet);
-  rpcSendRecv(tsDnodeClientRpc, &ipSet, rpcMsg, rpcRsp);
+void dnodeSendMsgToMnodeRecv(SRpcMsg *rpcMsg, SRpcMsg *rpcRsp) {
+  SRpcEpSet epSet = {0};
+  dnodeGetMnodeEpSetForPeer(&epSet);
+  rpcSendRecv(tsDnodeClientRpc, &epSet, rpcMsg, rpcRsp);
+}
+
+void dnodeSendMsgToDnodeRecv(SRpcMsg *rpcMsg, SRpcMsg *rpcRsp, SRpcEpSet *epSet) {
+  rpcSendRecv(tsDnodeClientRpc, epSet, rpcMsg, rpcRsp);
 }

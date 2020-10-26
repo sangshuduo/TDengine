@@ -53,14 +53,20 @@ int32_t mnodeProcessPeerReq(SMnodeMsg *pMsg) {
 
   if (!sdbIsMaster()) {
     SMnodeRsp *rpcRsp = &pMsg->rpcRsp;
-    SRpcIpSet *ipSet = rpcMallocCont(sizeof(SRpcIpSet));
-    mnodeGetMnodeIpSetForPeer(ipSet);
-    rpcRsp->rsp = ipSet;
-    rpcRsp->len = sizeof(SRpcIpSet);
+    SRpcEpSet *epSet = rpcMallocCont(sizeof(SRpcEpSet));
+    mnodeGetMnodeEpSetForPeer(epSet);
+    rpcRsp->rsp = epSet;
+    rpcRsp->len = sizeof(SRpcEpSet);
 
-    mDebug("%p, msg:%s in mpeer queue, will be redireced inUse:%d", pMsg->rpcMsg.ahandle, taosMsg[pMsg->rpcMsg.msgType], ipSet->inUse);
-    for (int32_t i = 0; i < ipSet->numOfIps; ++i) {
-      mDebug("mnode index:%d ip:%s:%d", i, ipSet->fqdn[i], htons(ipSet->port[i]));
+    mDebug("%p, msg:%s in mpeer queue will be redirected, numOfEps:%d inUse:%d", pMsg->rpcMsg.ahandle,
+           taosMsg[pMsg->rpcMsg.msgType], epSet->numOfEps, epSet->inUse);
+    for (int32_t i = 0; i < epSet->numOfEps; ++i) {
+      if (strcmp(epSet->fqdn[i], tsLocalFqdn) == 0 && htons(epSet->port[i]) == tsServerPort + TSDB_PORT_DNODEDNODE) {
+        epSet->inUse = (i + 1) % epSet->numOfEps;
+        mDebug("mnode index:%d ep:%s:%u, set inUse to %d", i, epSet->fqdn[i], htons(epSet->port[i]), epSet->inUse);
+      } else {
+        mDebug("mnode index:%d ep:%s:%u", i, epSet->fqdn[i], htons(epSet->port[i]));
+      }
     }
 
     return TSDB_CODE_RPC_REDIRECT;
@@ -75,6 +81,11 @@ int32_t mnodeProcessPeerReq(SMnodeMsg *pMsg) {
 }
 
 void mnodeProcessPeerRsp(SRpcMsg *pMsg) {
+  if (!sdbIsMaster()) {
+    mError("%p, msg:%s is not processed for it is not master", pMsg->ahandle, taosMsg[pMsg->msgType]);
+    return;
+  }
+
   if (tsMnodeProcessPeerRspFp[pMsg->msgType]) {
     (*tsMnodeProcessPeerRspFp[pMsg->msgType])(pMsg);
   } else {

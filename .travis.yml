@@ -13,7 +13,7 @@ branches:
 
 matrix:
   - os: linux
-    dist: bionic
+    dist: focal
     language: c
 
     git:
@@ -28,12 +28,12 @@ matrix:
           - build-essential
           - cmake
           - net-tools
-          - python-pip
-          - python-setuptools
           - python3-pip
           - python3-setuptools
           - valgrind
           - psmisc
+          - unixodbc
+          - unixodbc-dev
 
     before_script:
       - export TZ=Asia/Harbin
@@ -54,13 +54,21 @@ matrix:
           cd ${TRAVIS_BUILD_DIR}/debug
           make install > /dev/null || travis_terminate $?
 
-          pip install numpy
-          pip install --user ${TRAVIS_BUILD_DIR}/src/connector/python/linux/python2/
-          pip3 install numpy
+          py3ver=`python3 --version|awk '{print $2}'|cut -d "." -f 1,2` && apt install python$py3ver-dev
+          pip3 install psutil
+          pip3 install guppy3
           pip3 install --user ${TRAVIS_BUILD_DIR}/src/connector/python/linux/python3/
 
           cd ${TRAVIS_BUILD_DIR}/tests
           ./test-all.sh smoke || travis_terminate $?
+          sleep 1
+
+          cd ${TRAVIS_BUILD_DIR}/tests/pytest
+          pkill -TERM -x taosd
+          fuser -k -n tcp 6030
+          sleep 1
+          ./crash_gen.sh -a -p -t 4 -s 2000|| travis_terminate $?
+          sleep 1
 
           cd ${TRAVIS_BUILD_DIR}/tests/pytest
           ./valgrind-test.sh 2>&1 > mem-error-out.log
@@ -160,7 +168,7 @@ matrix:
 
     script:
       - cmake .. > /dev/null
-      - make > /dev/null
+      - make
 
   - os: linux
     dist: bionic
@@ -185,7 +193,7 @@ matrix:
 
     script:
       - cmake .. > /dev/null
-      - make > /dev/null
+      - make  > /dev/null
 
   - os: linux
     arch: arm64

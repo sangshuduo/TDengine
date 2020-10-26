@@ -49,15 +49,22 @@ int32_t mnodeProcessRead(SMnodeMsg *pMsg) {
 
   if (!sdbIsMaster()) {
     SMnodeRsp *rpcRsp = &pMsg->rpcRsp;
-    SRpcIpSet *ipSet = rpcMallocCont(sizeof(SRpcIpSet));
-    mnodeGetMnodeIpSetForShell(ipSet);
-    rpcRsp->rsp = ipSet;
-    rpcRsp->len = sizeof(SRpcIpSet);
+    SRpcEpSet *epSet = rpcMallocCont(sizeof(SRpcEpSet));
+    mnodeGetMnodeEpSetForShell(epSet);
 
-    mDebug("%p, msg:%s in mread queue, will be redireced, inUse:%d", pMsg->rpcMsg.ahandle, taosMsg[pMsg->rpcMsg.msgType], ipSet->inUse);
-    for (int32_t i = 0; i < ipSet->numOfIps; ++i) {
-      mDebug("mnode index:%d ip:%s:%d", i, ipSet->fqdn[i], htons(ipSet->port[i]));
+    mDebug("%p, msg:%s in mread queue will be redirected, numOfEps:%d inUse:%d", pMsg->rpcMsg.ahandle,
+           taosMsg[pMsg->rpcMsg.msgType], epSet->numOfEps, epSet->inUse);
+    for (int32_t i = 0; i < epSet->numOfEps; ++i) {
+      if (strcmp(epSet->fqdn[i], tsLocalFqdn) == 0 && htons(epSet->port[i]) == tsServerPort) {
+        epSet->inUse = (i + 1) % epSet->numOfEps;
+        mDebug("mnode index:%d ep:%s:%u, set inUse to %d", i, epSet->fqdn[i], htons(epSet->port[i]), epSet->inUse);
+      } else {
+        mDebug("mnode index:%d ep:%s:%u", i, epSet->fqdn[i], htons(epSet->port[i]));
+      }
     }
+
+    rpcRsp->rsp = epSet;
+    rpcRsp->len = sizeof(SRpcEpSet);
 
     return TSDB_CODE_RPC_REDIRECT;
   }

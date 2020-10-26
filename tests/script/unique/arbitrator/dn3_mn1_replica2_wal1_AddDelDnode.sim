@@ -23,11 +23,11 @@ system sh/cfg.sh -n dnode3 -c balanceInterval -v 10
 system sh/cfg.sh -n dnode4 -c balanceInterval -v 10
 system sh/cfg.sh -n dnode5 -c balanceInterval -v 10
 
-system sh/cfg.sh -n dnode1 -c numOfTotalVnodes -v 4
-system sh/cfg.sh -n dnode2 -c numOfTotalVnodes -v 4
-system sh/cfg.sh -n dnode3 -c numOfTotalVnodes -v 4
-system sh/cfg.sh -n dnode4 -c numOfTotalVnodes -v 4
-system sh/cfg.sh -n dnode5 -c numOfTotalVnodes -v 4
+system sh/cfg.sh -n dnode1 -c maxVgroupsPerDb -v 16
+system sh/cfg.sh -n dnode2 -c maxVgroupsPerDb -v 16
+system sh/cfg.sh -n dnode3 -c maxVgroupsPerDb -v 16
+system sh/cfg.sh -n dnode4 -c maxVgroupsPerDb -v 16
+system sh/cfg.sh -n dnode5 -c maxVgroupsPerDb -v 16
 
 system sh/cfg.sh -n dnode1 -c maxtablesPerVnode -v 4
 system sh/cfg.sh -n dnode2 -c maxtablesPerVnode -v 4
@@ -41,11 +41,11 @@ system sh/cfg.sh -n dnode3 -c mnodeEqualVnodeNum -v 200
 system sh/cfg.sh -n dnode4 -c mnodeEqualVnodeNum -v 200
 system sh/cfg.sh -n dnode5 -c mnodeEqualVnodeNum -v 200
 
-system sh/cfg.sh -n dnode1 -c alternativeRole -v 1
-system sh/cfg.sh -n dnode2 -c alternativeRole -v 2
-system sh/cfg.sh -n dnode3 -c alternativeRole -v 2
-system sh/cfg.sh -n dnode4 -c alternativeRole -v 2
-system sh/cfg.sh -n dnode5 -c alternativeRole -v 2
+system sh/cfg.sh -n dnode1 -c role -v 1
+system sh/cfg.sh -n dnode2 -c role -v 2
+system sh/cfg.sh -n dnode3 -c role -v 2
+system sh/cfg.sh -n dnode4 -c role -v 2
+system sh/cfg.sh -n dnode5 -c role -v 2
 
 system sh/cfg.sh -n dnode1 -c arbitrator -v $arbitrator
 system sh/cfg.sh -n dnode2 -c arbitrator -v $arbitrator
@@ -208,13 +208,13 @@ system sh/deploy.sh -n dnode3 -i 3
 system sh/cfg.sh -n dnode3 -c numOfMnodes -v 1
 system sh/cfg.sh -n dnode3 -c walLevel -v 1
 system sh/cfg.sh -n dnode3 -c balanceInterval -v 10
-system sh/cfg.sh -n dnode3 -c numOfTotalVnodes -v 4
 system sh/cfg.sh -n dnode3 -c maxtablesPerVnode -v 4
 system sh/cfg.sh -n dnode3 -c mnodeEqualVnodeNum -v 200
-system sh/cfg.sh -n dnode3 -c alternativeRole -v 2
+system sh/cfg.sh -n dnode3 -c role -v 2
 system sh/cfg.sh -n dnode3 -c arbitrator -v $arbitrator
 system sh/cfg.sh -n dnode3 -c offlineThreshold -v 10
 system sh/cfg.sh -n dnode3 -c enableCoreFile -v 1
+system sh/cfg.sh -n dnode3 -c maxVgroupsPerDb -v 16
 
 system sh/exec.sh -n dnode3 -s start
 sql create dnode $hostname3
@@ -322,7 +322,7 @@ $totalRows = 0
 $tsStart = 1420041600000
 
 $db = db1
-sql create database $db replica 2 maxTables 4
+sql create database $db replica 2
 sql use $db
 $stb = stb
 sql create table $stb (ts timestamp, c1 int) tags(t1 int)

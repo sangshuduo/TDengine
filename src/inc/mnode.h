@@ -42,6 +42,7 @@ typedef struct SMnodeMsg {
   int8_t    expected;
   int8_t    retry;
   int32_t   code;
+  void *    pObj;
   struct SAcctObj * pAcct;
   struct SDnodeObj *pDnode;
   struct SUserObj * pUser;
@@ -59,7 +60,8 @@ int32_t mnodeInitSystem();
 int32_t mnodeStartSystem();
 void    mnodeCleanupSystem();
 void    mnodeStopSystem();
-void    sdbUpdateSync();
+void    sdbUpdateAsync();
+void    sdbUpdateSync(void *pMnodes);
 bool    mnodeIsRunning();
 int32_t mnodeProcessRead(SMnodeMsg *pMsg);
 int32_t mnodeProcessWrite(SMnodeMsg *pMsg);

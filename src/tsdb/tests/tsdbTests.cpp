@@ -35,11 +35,13 @@ static int insertData(SInsertInfo *pInfo) {
 
   for (int k = 0; k < pInfo->totalRows/pInfo->rowsPerSubmit; k++) {
     memset((void *)pMsg, 0, sizeof(SSubmitMsg));
-    SSubmitBlk *pBlock = pMsg->blocks;
+    SSubmitBlk *pBlock = (SSubmitBlk *)pMsg->blocks;
     pBlock->uid = pInfo->uid;
     pBlock->tid = pInfo->tid;
     pBlock->sversion = pInfo->sversion;
-    pBlock->len = 0;
+    pBlock->dataLen = 0;
+    pBlock->schemaLen = 0;
+    pBlock->numOfRows = 0;
     for (int i = 0; i < pInfo->rowsPerSubmit; i++) {
       // start_time += 1000;
       if (pInfo->isAscend) {
@@ -47,7 +49,7 @@ static int insertData(SInsertInfo *pInfo) {
       } else {
         start_time -= pInfo->interval;
       }
-      SDataRow row = (SDataRow)(pBlock->data + pBlock->len);
+      SDataRow row = (SDataRow)(pBlock->data + pBlock->dataLen);
       tdInitDataRow(row, pInfo->pSchema);
 
       for (int j = 0; j < schemaNCols(pInfo->pSchema); j++) {
@@ -59,13 +61,15 @@ static int insertData(SInsertInfo *pInfo) {
           tdAppendColVal(row, (void *)(&val), pTCol->type, pTCol->bytes, pTCol->offset);
         }
       }
-      pBlock->len += dataRowLen(row);
+      pBlock->dataLen += dataRowLen(row);
+      pBlock->numOfRows++;
     }
-    pMsg->length = pMsg->length + sizeof(SSubmitBlk) + pBlock->len;
+    pMsg->length = sizeof(SSubmitMsg) + sizeof(SSubmitBlk) + pBlock->dataLen;
     pMsg->numOfBlocks = 1;
 
-    pBlock->len = htonl(pBlock->len);
+    pBlock->dataLen = htonl(pBlock->dataLen);
     pBlock->numOfRows = htonl(pBlock->numOfRows);
+    pBlock->schemaLen = htonl(pBlock->schemaLen);
     pBlock->uid = htobe64(pBlock->uid);
     pBlock->tid = htonl(pBlock->tid);
 
@@ -74,10 +78,9 @@ static int insertData(SInsertInfo *pInfo) {
 
     pMsg->length = htonl(pMsg->length);
     pMsg->numOfBlocks = htonl(pMsg->numOfBlocks);
-    pMsg->compressed = htonl(pMsg->numOfBlocks);
 
     if (tsdbInsertData(pInfo->pRepo, pMsg, NULL) < 0) {
-      tfree(pMsg);
+      taosTFree(pMsg);
       return -1;
     }
   }
@@ -85,7 +88,7 @@ static int insertData(SInsertInfo *pInfo) {
   double etime = getCurTime();
 
   printf("Spent %f seconds to write %d records\n", etime - stime, pInfo->totalRows);
-  tfree(pMsg);
+  taosTFree(pMsg);
   return 0;
 }
 
@@ -95,7 +98,7 @@ static void tsdbSetCfg(STsdbCfg *pCfg, int32_t tsdbId, int32_t cacheBlockSize, i
   pCfg->tsdbId = tsdbId;
   pCfg->cacheBlockSize = cacheBlockSize;
   pCfg->totalBlocks = totalBlocks;
-  pCfg->maxTables = maxTables;
+  // pCfg->maxTables = maxTables;
   pCfg->daysPerFile = daysPerFile;
   pCfg->keep = keep;
   pCfg->minRowsPerFileBlock = minRows;

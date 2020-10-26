@@ -21,8 +21,16 @@ extern "C" {
 #endif
 
 #include "os.h"
-#include "tref.h"
+#include "tlockfree.h"
 #include "hash.h"
+
+#if defined(_TD_ARM_32) 
+  #define TSDB_CACHE_PTR_KEY  TSDB_DATA_TYPE_INT
+  #define TSDB_CACHE_PTR_TYPE int32_t
+#else
+  #define TSDB_CACHE_PTR_KEY  TSDB_DATA_TYPE_BIGINT  
+  #define TSDB_CACHE_PTR_TYPE int64_t
+#endif
 
 typedef void (*__cache_free_fn_t)(void*);
 
@@ -33,17 +41,20 @@ typedef struct SCacheStatis {
   int64_t refreshCount;
 } SCacheStatis;
 
+struct STrashElem;
+
 typedef struct SCacheDataNode {
-  uint64_t addedTime;    // the added time when this element is added or updated into cache
-  uint64_t lifespan;     // expiredTime expiredTime when this element should be remove from cache
-  uint64_t signature;
-  uint32_t size;         // allocated size for current SCacheDataNode
+  uint64_t           addedTime;    // the added time when this element is added or updated into cache
+  uint64_t           lifespan;     // life duration when this element should be remove from cache
+  uint64_t           expireTime;   // expire time
+  uint64_t           signature;
+  struct STrashElem *pTNodeHeader; // point to trash node head
+  uint16_t           keySize: 15;  // max key size: 32kb
+  bool               inTrashcan: 1;// denote if it is in trash or not
+  uint32_t           size;         // allocated size for current SCacheDataNode
   T_REF_DECLARE()
-  uint16_t keySize: 15;  // max key size: 32kb
-  bool     inTrashCan: 1;// denote if it is in trash or not
-  int32_t  extendFactor; // number of life span extend
-  char    *key;
-  char     data[];
+  char              *key;
+  char               data[];
 } SCacheDataNode;
 
 typedef struct STrashElem {
@@ -65,8 +76,6 @@ typedef struct {
   int64_t         refreshTime;
   STrashElem *    pTrash;
   char*           name;
-//  void *          tmrCtrl;
-//  void *          pTimer;
   SCacheStatis    statistics;
   SHashObj *      pHashTable;
   __cache_free_fn_t freeFp;
@@ -102,7 +111,7 @@ SCacheObj *taosCacheInit(int32_t keyType, int64_t refreshTimeInSeconds, bool ext
  * @param keepTime      survival time in second
  * @return              cached element
  */
-void *taosCachePut(SCacheObj *pCacheObj, const void *key, size_t keyLen, const void *pData, size_t dataSize, int keepTimeInSeconds);
+void *taosCachePut(SCacheObj *pCacheObj, const void *key, size_t keyLen, const void *pData, size_t dataSize, int durationMS);
 
 /**
  * get data from cache
@@ -111,16 +120,6 @@ void *taosCachePut(SCacheObj *pCacheObj, const void *key, size_t keyLen, const v
  * @return              cached data or NULL
  */
 void *taosCacheAcquireByKey(SCacheObj *pCacheObj, const void *key, size_t keyLen);
-
-/**
- * update the expire time of data in cache 
- * @param pCacheObj     cache object
- * @param key           key
- * @param keyLen        keyLen
- * @param expireTime    new expire time of data
- * @return
- */ 
-void* taosCacheUpdateExpireTimeByName(SCacheObj *pCacheObj, void *key, size_t keyLen, uint64_t expireTime);
 
 /**
  * Add one reference count for the exist data, and assign this data for a new owner.

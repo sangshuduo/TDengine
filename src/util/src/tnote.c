@@ -13,6 +13,7 @@
  * along with this program. If not, see <http://www.gnu.org/licenses/>.
  */
 
+#include "os.h"
 #include "tnote.h"
 
 taosNoteInfo  m_HttpNote;
@@ -252,7 +253,7 @@ void taosNotePrint(taosNoteInfo * pNote, const char * const format, ...)
                 ptm->tm_min, ptm->tm_sec, (int)timeSecs.tv_usec, taosGetPthreadId());
 #else
   len = sprintf(buffer, "%02d/%02d %02d:%02d:%02d.%06d %lx ", ptm->tm_mon + 1, ptm->tm_mday, ptm->tm_hour, ptm->tm_min,
-                ptm->tm_sec, (int)timeSecs.tv_usec, pthread_self());
+                ptm->tm_sec, (int)timeSecs.tv_usec, (unsigned long int)pthread_self());
 #endif
     va_start(argpointer, format);
     len += vsnprintf(buffer + len, MAX_NOTE_LINE_SIZE - len, format, argpointer);
@@ -264,7 +265,7 @@ void taosNotePrint(taosNoteInfo * pNote, const char * const format, ...)
     buffer[len] = 0;
 
     if (pNote->taosNoteFd >= 0)  {
-        twrite(pNote->taosNoteFd, buffer, (unsigned int)len);
+        taosTWrite(pNote->taosNoteFd, buffer, (unsigned int)len);
 
         if (pNote->taosNoteMaxLines > 0) {
             pNote->taosNoteLines++;

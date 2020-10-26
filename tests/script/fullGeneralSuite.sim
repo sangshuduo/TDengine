@@ -24,6 +24,7 @@ run general/compute/diff2.sim
 run general/compute/first.sim
 run general/compute/interval.sim
 run general/compute/last.sim
+run general/compute/last_row.sim
 run general/compute/leastsquare.sim
 run general/compute/max.sim
 run general/compute/min.sim
@@ -129,13 +130,11 @@ run general/parser/join.sim
 run general/parser/join_multivnode.sim
 run general/parser/select_with_tags.sim
 run general/parser/groupby.sim
-run general/parser/bug.sim
 run general/parser/tags_dynamically_specifiy.sim
 run general/parser/set_tag_vals.sim
 #unsupport run general/parser/repeatAlter.sim
 #unsupport run general/parser/slimit_alter_tags.sim
 #unsupport run general/parser/stream_on_sys.sim
-run general/parser/stream.sim
 #unsupport run general/parser/repeatStream.sim
 run general/stable/disk.sim
 run general/stable/dnode3.sim
@@ -212,15 +211,14 @@ run general/vector/table_mix.sim
 run general/vector/table_query.sim
 run general/vector/table_time.sim
 run general/stream/restart_stream.sim
-run general/stream/stream_1.sim
-run general/stream/stream_2.sim
 run general/stream/stream_3.sim
 run general/stream/stream_restart.sim
 run general/stream/table_1.sim
-run general/stream/metrics_1.sim
 run general/stream/table_n.sim
 run general/stream/metrics_n.sim
 run general/stream/table_del.sim
 run general/stream/metrics_del.sim
 run general/stream/table_replica1_vnoden.sim
 run general/stream/metrics_replica1_vnoden.sim
+run general/db/show_create_db.sim
+run general/db/show_create_table.sim

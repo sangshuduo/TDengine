@@ -18,7 +18,6 @@
 #include "trpc.h"
 #include "tsclient.h"
 #include "tsocket.h"
-#include "ttime.h"
 #include "ttimer.h"
 #include "tutil.h"
 #include "tscLog.h"
@@ -34,6 +33,7 @@ typedef struct SSubscriptionProgress {
 typedef struct SSub {
   void *                  signature;
   char                    topic[32];
+  tsem_t                  sem;
   int64_t                 lastSyncTime;
   int64_t                 lastConsumeTime;
   TAOS *                  taos;
@@ -83,84 +83,120 @@ void tscUpdateSubscriptionProgress(void* sub, int64_t uid, TSKEY ts) {
 
 static void asyncCallback(void *param, TAOS_RES *tres, int code) {
   assert(param != NULL);
-  SSqlObj *pSql = ((SSqlObj *)param);
-  
-  pSql->res.code = code;
-  sem_post(&pSql->rspSem);
+  SSub *pSub = ((SSub *)param);
+  pSub->pSql->res.code = code;
+  tsem_post(&pSub->sem);
 }
 
 
 static SSub* tscCreateSubscription(STscObj* pObj, const char* topic, const char* sql) {
-  SSub* pSub = NULL;
+  int code = TSDB_CODE_SUCCESS, line = __LINE__;
+  SSqlObj* pSql = NULL;
 
-  TRY( 8 ) {
-    SSqlObj* pSql = calloc_throw(1, sizeof(SSqlObj));
-    CLEANUP_PUSH_FREE(true, pSql);
-    SSqlCmd *pCmd = &pSql->cmd;
-    SSqlRes *pRes = &pSql->res;
+  SSub* pSub = calloc(1, sizeof(SSub));
+  if (pSub == NULL) {
+    line = __LINE__;
+    code = TSDB_CODE_TSC_OUT_OF_MEMORY;
+    goto fail;
+  }
+  pSub->signature = pSub;
+  if (tsem_init(&pSub->sem, 0, 0) == -1) {
+    line = __LINE__;
+    code = TAOS_SYSTEM_ERROR(errno);
+    goto fail;
+  }
 
-    if (tsem_init(&pSql->rspSem, 0, 0) == -1) {
-      THROW(TAOS_SYSTEM_ERROR(errno));
-    }
-    CLEANUP_PUSH_INT_PTR(true, tsem_destroy, &pSql->rspSem);
+  tstrncpy(pSub->topic, topic, sizeof(pSub->topic));
+  pSub->progress = taosArrayInit(32, sizeof(SSubscriptionProgress));
+  if (pSub->progress == NULL) {
+    line = __LINE__;
+    code = TSDB_CODE_TSC_OUT_OF_MEMORY;
+    goto fail;
+  }
 
-    pSql->signature = pSql;
-    pSql->param = pSql;
-    pSql->pTscObj = pObj;
-    pSql->maxRetry = TSDB_MAX_REPLICA_NUM;
-    pSql->fp = asyncCallback;
+  pSql = calloc(1, sizeof(SSqlObj));
+  if (pSql == NULL) {
+    line = __LINE__;
+    code = TSDB_CODE_TSC_OUT_OF_MEMORY;
+    goto fail;
+  }
 
-    int code = tscAllocPayload(pCmd, TSDB_DEFAULT_PAYLOAD_SIZE);
-    if (code != TSDB_CODE_SUCCESS) {
-      THROW(code);
-    }
-    CLEANUP_PUSH_FREE(true, pCmd->payload);
+  pSql->signature = pSql;
+  pSql->pTscObj = pObj;
+  pSql->pSubscription = pSub;
+  pSub->pSql = pSql;
 
-    pRes->qhandle = 0;
-    pRes->numOfRows = 1;
+  SSqlCmd* pCmd = &pSql->cmd;
+  SSqlRes* pRes = &pSql->res;
+  if (tsem_init(&pSql->rspSem, 0, 0) == -1) {
+    line = __LINE__;
+    code = TAOS_SYSTEM_ERROR(errno);
+    goto fail;
+  }
 
-    pSql->sqlstr = strdup_throw(sql);
-    CLEANUP_PUSH_FREE(true, pSql->sqlstr);
-    strtolower(pSql->sqlstr, pSql->sqlstr);
+  pSql->param = pSub;
+  pSql->maxRetry = TSDB_MAX_REPLICA;
+  pSql->fp = asyncCallback;
+  pSql->fetchFp = asyncCallback;
+  pSql->sqlstr = strdup(sql);
+  if (pSql->sqlstr == NULL) {
+    line = __LINE__;
+    code = TSDB_CODE_TSC_OUT_OF_MEMORY;
+    goto fail;
+  }
 
-    code = tsParseSql(pSql, false);
-    if (code == TSDB_CODE_TSC_ACTION_IN_PROGRESS) {
-      // wait for the callback function to post the semaphore
-      sem_wait(&pSql->rspSem);
-      code = pSql->res.code;
-    }
-    if (code != TSDB_CODE_SUCCESS) {
-      tscError("failed to parse sql statement: %s, error: %s", pSub->topic, tstrerror(code));
-      THROW( code );
-    }
+  strtolower(pSql->sqlstr, pSql->sqlstr);
+  pRes->qhandle = 0;
+  pRes->numOfRows = 1;
 
-    if (pSql->cmd.command != TSDB_SQL_SELECT) {
-      tscError("only 'select' statement is allowed in subscription: %s", pSub->topic);
-      THROW( -1 );  // TODO
-    }
+  code = tscAllocPayload(pCmd, TSDB_DEFAULT_PAYLOAD_SIZE);
+  if (code != TSDB_CODE_SUCCESS) {
+    line = __LINE__;
+    goto fail;
+  }
 
-    pSub = calloc_throw(1, sizeof(SSub));
-    CLEANUP_PUSH_FREE(true, pSub);
-    pSql->pSubscription = pSub;
-    pSub->pSql = pSql;
-    pSub->signature = pSub;
-    strncpy(pSub->topic, topic, sizeof(pSub->topic));
-    pSub->topic[sizeof(pSub->topic) - 1] = 0;
-    pSub->progress = taosArrayInit(32, sizeof(SSubscriptionProgress));
-    if (pSub->progress == NULL) {
-      THROW(TSDB_CODE_TSC_OUT_OF_MEMORY);
-    }
+  registerSqlObj(pSql);
 
-    CLEANUP_EXECUTE();
+  code = tsParseSql(pSql, false);
+  if (code == TSDB_CODE_TSC_ACTION_IN_PROGRESS) {
+    tsem_wait(&pSub->sem);
+    code = pSql->res.code;
+  }
 
-  } CATCH( code ) {
-    tscError("failed to create subscription object: %s", tstrerror(code));
-    CLEANUP_EXECUTE();
-    pSub = NULL;
+  if (code != TSDB_CODE_SUCCESS) {
+    line = __LINE__;
+    goto fail;
+  }
 
-  } END_TRY
+  if (pSql->cmd.command != TSDB_SQL_SELECT) {
+    line = __LINE__;
+    code = TSDB_CODE_TSC_INVALID_SQL;
+    goto fail;
+  }
 
   return pSub;
+
+fail:
+  tscError("tscCreateSubscription failed at line %d, reason: %s", line, tstrerror(code));
+  if (pSql != NULL) {
+    if (pSql->self != NULL) {
+      taos_free_result(pSql);
+    } else {
+      tscFreeSqlObj(pSql);
+    }
+
+    pSql = NULL;
+  }
+
+  if (pSub != NULL) {
+    taosArrayDestroy(pSub->progress);
+    tsem_destroy(&pSub->sem);
+    free(pSub);
+    pSub = NULL;
+  }
+
+  terrno = code;
+  return NULL;
 }
 
 
@@ -179,6 +215,7 @@ static void tscProcessSubscriptionTimer(void *handle, void *tmrId) {
 
 static SArray* getTableList( SSqlObj* pSql ) {
   const char* p = strstr( pSql->sqlstr, " from " );
+  assert(p != NULL); // we are sure this is a 'select' statement
   char* sql = alloca(strlen(p) + 32);
   sprintf(sql, "select tbid(tbname)%s", p);
   
@@ -205,6 +242,19 @@ static SArray* getTableList( SSqlObj* pSql ) {
   return result;
 }
 
+static int32_t compareTidTag(const void* p1, const void* p2) {
+  const STidTags* t1 = (const STidTags*)p1;
+  const STidTags* t2 = (const STidTags*)p2;
+  
+  if (t1->vgId != t2->vgId) {
+    return (t1->vgId > t2->vgId) ? 1 : -1;
+  }
+  if (t1->tid != t2->tid) {
+    return (t1->tid > t2->tid) ? 1 : -1;
+  }
+  return 0;
+}
+
 
 static int tscUpdateSubscription(STscObj* pObj, SSub* pSub) {
   SSqlObj* pSql = pSub->pSql;
@@ -216,7 +266,7 @@ static int tscUpdateSubscription(STscObj* pObj, SSub* pSub) {
   STableMetaInfo *pTableMetaInfo = tscGetTableMetaInfoFromCmd(pCmd, pCmd->clauseIndex, 0);
   if (UTIL_TABLE_IS_NORMAL_TABLE(pTableMetaInfo)) {
     STableMeta * pTableMeta = pTableMetaInfo->pTableMeta;
-    SSubscriptionProgress target = {.uid = pTableMeta->uid, .key = 0};
+    SSubscriptionProgress target = {.uid = pTableMeta->id.uid, .key = 0};
     SSubscriptionProgress* p = taosArraySearch(pSub->progress, &target, tscCompareSubscriptionProgress);
     if (p == NULL) {
       taosArrayClear(pSub->progress);
@@ -231,11 +281,12 @@ static int tscUpdateSubscription(STscObj* pObj, SSub* pSub) {
   }
   size_t numOfTables = taosArrayGetSize(tables);
 
+  SQueryInfo* pQueryInfo = tscGetQueryInfoDetail(pCmd, 0);
   SArray* progress = taosArrayInit(numOfTables, sizeof(SSubscriptionProgress));
   for( size_t i = 0; i < numOfTables; i++ ) {
     STidTags* tt = taosArrayGet( tables, i );
     SSubscriptionProgress p = { .uid = tt->uid };
-    p.key = tscGetSubscriptionProgress(pSub, tt->uid, INT64_MIN);
+    p.key = tscGetSubscriptionProgress(pSub, tt->uid, pQueryInfo->window.skey);
     taosArrayPush(progress, &p);
   }
   taosArraySort(progress, tscCompareSubscriptionProgress);
@@ -244,7 +295,8 @@ static int tscUpdateSubscription(STscObj* pObj, SSub* pSub) {
   pSub->progress = progress;
 
   if (UTIL_TABLE_IS_SUPER_TABLE(pTableMetaInfo)) {
-    taosArraySort( tables, tscCompareTidTags );
+    taosArraySort( tables, compareTidTag );
+    tscFreeVgroupTableInfo(pTableMetaInfo->pVgroupTables);
     tscBuildVgroupTableInfo(pSql, pTableMetaInfo, tables);
   }
   taosArrayDestroy(tables);
@@ -299,7 +351,7 @@ static int tscLoadSubscriptionProgress(SSub* pSub) {
   fclose(fp);
 
   taosArraySort(progress, tscCompareSubscriptionProgress);
-  tscDebug("subscription progress loaded, %zu tables: %s", taosArrayGetSize(progress), pSub->topic);
+  tscDebug("subscription progress loaded, %" PRIzu " tables: %s", taosArrayGetSize(progress), pSub->topic);
   return 1;
 }
 
@@ -308,7 +360,7 @@ void tscSaveSubscriptionProgress(void* sub) {
 
   char path[256];
   sprintf(path, "%s/subscribe", tsDataDir);
-  if (tmkdir(path, 0777) != 0) {
+  if (taosMkDir(path, 0777) != 0) {
     tscError("failed to create subscribe dir: %s", path);
   }
 
@@ -365,16 +417,20 @@ TAOS_SUB *taos_subscribe(TAOS *taos, int restart, const char* topic, const char 
   return pSub;
 }
 
-void taos_free_result_imp(SSqlObj* pSql, int keepCmd);
-
 TAOS_RES *taos_consume(TAOS_SUB *tsub) {
   SSub *pSub = (SSub *)tsub;
   if (pSub == NULL) return NULL;
 
   tscSaveSubscriptionProgress(pSub);
 
-  SSqlObj* pSql = pSub->pSql;
+  SSqlObj *pSql = pSub->pSql;
   SSqlRes *pRes = &pSql->res;
+  SSqlCmd *pCmd = &pSql->cmd;
+  STableMetaInfo *pTableMetaInfo = tscGetTableMetaInfoFromCmd(pCmd, pCmd->clauseIndex, 0);
+  SQueryInfo *pQueryInfo = tscGetQueryInfoDetail(pCmd, 0);
+  if (taosArrayGetSize(pSub->progress) > 0) { // fix crash in single tabel subscription
+    pQueryInfo->window.skey = ((SSubscriptionProgress*)taosArrayGet(pSub->progress, 0))->key;
+  }
 
   if (pSub->pTimer == NULL) {
     int64_t duration = taosGetTimestampMs() - pSub->lastConsumeTime;
@@ -384,6 +440,9 @@ TAOS_RES *taos_consume(TAOS_SUB *tsub) {
     }
   }
 
+  size_t size = taosArrayGetSize(pSub->progress) * sizeof(STableIdInfo);
+  size += sizeof(SQueryTableMsg) + 4096;
+  tscAllocPayload(&pSql->cmd, (int)size);
   for (int retry = 0; retry < 3; retry++) {
     tscRemoveFromSqlList(pSql);
 
@@ -393,8 +452,6 @@ TAOS_RES *taos_consume(TAOS_SUB *tsub) {
       tscDebug("table synchronization completed");
     }
 
-    SQueryInfo* pQueryInfo = tscGetQueryInfoDetail(&pSql->cmd, 0);
-    
     uint32_t type = pQueryInfo->type;
     tscFreeSqlResult(pSql);
     pRes->numOfRows = 1;
@@ -402,12 +459,13 @@ TAOS_RES *taos_consume(TAOS_SUB *tsub) {
     pSql->cmd.command = TSDB_SQL_SELECT;
     pQueryInfo->type = type;
 
-    tscGetTableMetaInfoFromCmd(&pSql->cmd, 0, 0)->vgroupIndex = 0;
+    pTableMetaInfo->vgroupIndex = 0;
 
     pSql->fp = asyncCallback;
-    pSql->param = pSql;
+    pSql->fetchFp = asyncCallback;
+    pSql->param = pSub;
     tscDoQuery(pSql);
-    sem_wait(&pSql->rspSem);
+    tsem_wait(&pSub->sem);
 
     if (pRes->code != TSDB_CODE_SUCCESS) {
       continue;
@@ -437,7 +495,9 @@ void taos_unsubscribe(TAOS_SUB *tsub, int keepProgress) {
   }
 
   if (keepProgress) {
-    tscSaveSubscriptionProgress(pSub);
+    if (pSub->progress != NULL) {
+      tscSaveSubscriptionProgress(pSub);
+    }
   } else {
     char path[256];
     sprintf(path, "%s/subscribe/%s", tsDataDir, pSub->topic);
@@ -446,8 +506,13 @@ void taos_unsubscribe(TAOS_SUB *tsub, int keepProgress) {
     }
   }
 
+  if (pSub->pSql != NULL) {
+    taos_free_result(pSub->pSql);
+  }
+
   tscFreeSqlObj(pSub->pSql);
   taosArrayDestroy(pSub->progress);
+  tsem_destroy(&pSub->sem);
   memset(pSub, 0, sizeof(*pSub));
   free(pSub);
 }
