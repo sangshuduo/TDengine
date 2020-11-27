@@ -108,7 +108,7 @@ void tVariantCreateFromBinary(tVariant *pVar, const char *pz, size_t len, uint32
       break;
     }
     case TSDB_DATA_TYPE_BINARY: {  // todo refactor, extract a method
-      pVar->pz = calloc(len, sizeof(char));
+      pVar->pz = calloc(len + 1, sizeof(char));
       memcpy(pVar->pz, pz, len);
       pVar->nLen = (int32_t)len;
       break;
@@ -125,7 +125,7 @@ void tVariantDestroy(tVariant *pVar) {
   if (pVar == NULL) return;
   
   if (pVar->nType == TSDB_DATA_TYPE_BINARY || pVar->nType == TSDB_DATA_TYPE_NCHAR) {
-    taosTFree(pVar->pz);
+    tfree(pVar->pz);
     pVar->nLen = 0;
   }
 
@@ -171,7 +171,9 @@ void tVariantAssign(tVariant *pDst, const tVariant *pSrc) {
     }
   }
 
-  pDst->nLen = tDataTypeDesc[pDst->nType].nSize;
+  if (pDst->nType != TSDB_DATA_TYPE_ARRAY) {
+    pDst->nLen = tDataTypeDesc[pDst->nType].nSize;
+  }
 }
 
 int32_t tVariantCompare(const tVariant* p1, const tVariant* p2) {
