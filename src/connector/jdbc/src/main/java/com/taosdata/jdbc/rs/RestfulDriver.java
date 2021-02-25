@@ -2,7 +2,7 @@ package com.taosdata.jdbc.rs;
 
 import com.alibaba.fastjson.JSON;
 import com.alibaba.fastjson.JSONObject;
-import com.taosdata.jdbc.AbstractTaosDriver;
+import com.taosdata.jdbc.AbstractDriver;
 import com.taosdata.jdbc.TSDBConstants;
 import com.taosdata.jdbc.TSDBDriver;
 import com.taosdata.jdbc.rs.util.HttpClientPoolUtil;
@@ -11,7 +11,7 @@ import java.sql.*;
 import java.util.Properties;
 import java.util.logging.Logger;
 
-public class RestfulDriver extends AbstractTaosDriver {
+public class RestfulDriver extends AbstractDriver {
 
     private static final String URL_PREFIX = "jdbc:TAOS-RS://";
 
@@ -33,7 +33,7 @@ public class RestfulDriver extends AbstractTaosDriver {
             return null;
 
         Properties props = parseURL(url, info);
-        String host = props.getProperty(TSDBDriver.PROPERTY_KEY_HOST, "localhost");
+        String host = props.getProperty(TSDBDriver.PROPERTY_KEY_HOST);
         String port = props.getProperty(TSDBDriver.PROPERTY_KEY_PORT, "6041");
         String database = props.containsKey(TSDBDriver.PROPERTY_KEY_DBNAME) ? props.getProperty(TSDBDriver.PROPERTY_KEY_DBNAME) : null;
 
@@ -44,6 +44,8 @@ public class RestfulDriver extends AbstractTaosDriver {
         String result = HttpClientPoolUtil.execute(loginUrl);
         JSONObject jsonResult = JSON.parseObject(result);
         String status = jsonResult.getString("status");
+        String token = jsonResult.getString("desc");
+        HttpClientPoolUtil.token = token;
         if (!status.equals("succ")) {
             throw new SQLException(jsonResult.getString("desc"));
         }

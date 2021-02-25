@@ -17,6 +17,7 @@
 #include "os.h"
 #include "tulog.h"
 #include "tlog.h"
+#include "tnote.h"
 #include "tutil.h"
 
 #define MAX_LOGLINE_SIZE              (1000)
@@ -63,10 +64,10 @@ typedef struct {
 } SLogObj;
 
 int32_t tsLogKeepDays = 0;
-int32_t tsAsyncLog = 1;
+int8_t  tsAsyncLog = 1;
 float   tsTotalLogDirGB = 0;
 float   tsAvailLogDirGB = 0;
-float   tsMinimalLogDirGB = 0.1f;
+float   tsMinimalLogDirGB = 1.0f;
 #ifdef _TD_POWER_
 char    tsLogDir[TSDB_FILENAME_LEN] = "/var/log/power";
 #else
@@ -170,7 +171,9 @@ static void *taosThreadToOpenNewFile(void *param) {
 
   int32_t fd = open(name, O_WRONLY | O_CREAT | O_TRUNC, S_IRWXU | S_IRWXG | S_IRWXO);
   if (fd < 0) {
-    uError("open new log file fail! fd:%d reason:%s", fd, strerror(errno));
+    tsLogObj.openInProgress = 0;
+    tsLogObj.lines = tsLogObj.maxLines - 1000;
+    uError("open new log file fail! fd:%d reason:%s, reuse lastlog", fd, strerror(errno));
     return NULL;
   }
 
@@ -287,7 +290,6 @@ static int32_t taosOpenLogFile(char *fn, int32_t maxLines, int32_t maxFileNum) {
   tsLogObj.fileNum = maxFileNum;
   taosGetLogFileName(fn);
 
-
   if (strlen(fn) < LOG_FILE_NAME_LEN + 50 - 2) {
     strcpy(name, fn);
     strcat(name, ".0");
@@ -364,7 +366,7 @@ void taosPrintLog(const char *flags, int32_t dflag, const char *format, ...) {
   ptm = localtime_r(&curTime, &Tm);
 
   len = sprintf(buffer, "%02d/%02d %02d:%02d:%02d.%06d 0x%08" PRIx64 " ", ptm->tm_mon + 1, ptm->tm_mday, ptm->tm_hour,
-                ptm->tm_min, ptm->tm_sec, (int32_t)timeSecs.tv_usec, taosGetPthreadId());
+                ptm->tm_min, ptm->tm_sec, (int32_t)timeSecs.tv_usec, taosGetSelfPthreadId());
   len += sprintf(buffer + len, "%s", flags);
 
   va_start(argpointer, format);
@@ -401,6 +403,7 @@ void taosPrintLog(const char *flags, int32_t dflag, const char *format, ...) {
   }
 
   if (dflag & DEBUG_SCREEN) taosWrite(1, buffer, (uint32_t)len);
+  if (dflag == 255) nInfo(buffer, len);
 }
 
 void taosDumpData(unsigned char *msg, int32_t len) {
@@ -449,7 +452,7 @@ void taosPrintLongString(const char *flags, int32_t dflag, const char *format, .
   ptm = localtime_r(&curTime, &Tm);
 
   len = sprintf(buffer, "%02d/%02d %02d:%02d:%02d.%06d 0x%08" PRIx64 " ", ptm->tm_mon + 1, ptm->tm_mday, ptm->tm_hour,
-                ptm->tm_min, ptm->tm_sec, (int32_t)timeSecs.tv_usec, taosGetPthreadId());
+                ptm->tm_min, ptm->tm_sec, (int32_t)timeSecs.tv_usec, taosGetSelfPthreadId());
   len += sprintf(buffer + len, "%s", flags);
 
   va_start(argpointer, format);

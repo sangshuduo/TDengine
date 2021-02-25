@@ -32,21 +32,21 @@
 /**************** Global variables ****************/
 #ifdef _TD_POWER_
 char      CLIENT_VERSION[] = "Welcome to the PowerDB shell from %s, Client Version:%s\n"
-                             "Copyright (c) 2017 by PowerDB, Inc. All rights reserved.\n\n";
+                             "Copyright (c) 2020 by PowerDB, Inc. All rights reserved.\n\n";
 char      PROMPT_HEADER[] = "power> ";
 
 char      CONTINUE_PROMPT[] = "    -> ";
 int       prompt_size = 7;
 #else
 char      CLIENT_VERSION[] = "Welcome to the TDengine shell from %s, Client Version:%s\n"
-                             "Copyright (c) 2017 by TAOS Data, Inc. All rights reserved.\n\n";
+                             "Copyright (c) 2020 by TAOS Data, Inc. All rights reserved.\n\n";
 char      PROMPT_HEADER[] = "taos> ";
 
 char      CONTINUE_PROMPT[] = "   -> ";
 int       prompt_size = 6;
 #endif
 
-TAOS_RES *result = NULL;
+int64_t result = 0;
 SShellHistory   history;
 
 #define DEFAULT_MAX_BINARY_DISPLAY_WIDTH 30
@@ -76,7 +76,11 @@ TAOS *shellInit(SShellArguments *args) {
     args->user = TSDB_DEFAULT_USER;
   }
 
-  taos_init();
+  if (taos_init()) {
+    printf("failed to init taos\n");
+    fflush(stdout);
+    return NULL;
+  }
 
   // Connect to the database.
   TAOS *con = NULL;
@@ -260,6 +264,14 @@ int32_t shellRunCommand(TAOS* con, char* command) {
 }
 
 
+void freeResultWithRid(int64_t rid) {
+  SSqlObj* pSql = taosAcquireRef(tscObjRef, rid);
+  if(pSql){
+    taos_free_result(pSql);
+    taosReleaseRef(tscObjRef, rid);
+  }
+}
+
 void shellRunCommandOnServer(TAOS *con, char command[]) {
   int64_t   st, et;
   wordexp_t full_path;
@@ -300,12 +312,14 @@ void shellRunCommandOnServer(TAOS *con, char command[]) {
     return;
   }
 
+  int64_t oresult = atomic_load_64(&result);
+
   if (regex_match(command, "^\\s*use\\s+[a-zA-Z0-9_]+\\s*;\\s*$", REG_EXTENDED | REG_ICASE)) {
     fprintf(stdout, "Database changed.\n\n");
     fflush(stdout);
 
-    atomic_store_ptr(&result, 0);
-    taos_free_result(pSql);
+    atomic_store_64(&result, 0);
+    freeResultWithRid(oresult);
     return;
   }
 
@@ -313,8 +327,8 @@ void shellRunCommandOnServer(TAOS *con, char command[]) {
     int error_no = 0;
     int numOfRows = shellDumpResult(pSql, fname, &error_no, printMode);
     if (numOfRows < 0) {
-      atomic_store_ptr(&result, 0);
-      taos_free_result(pSql);
+      atomic_store_64(&result, 0);
+      freeResultWithRid(oresult);
       return;
     }
 
@@ -327,7 +341,7 @@ void shellRunCommandOnServer(TAOS *con, char command[]) {
   } else {
     int num_rows_affacted = taos_affected_rows(pSql);
     et = taosGetTimestampUs();
-    printf("Query OK, %d row(s) affected (%.6fs)\n", num_rows_affacted, (et - st) / 1E6);
+    printf("Query OK, %d of %d row(s) in database (%.6fs)\n", num_rows_affacted, num_rows_affacted, (et - st) / 1E6);
   }
 
   printf("\n");
@@ -336,8 +350,8 @@ void shellRunCommandOnServer(TAOS *con, char command[]) {
     wordfree(&full_path);
   }
 
-  atomic_store_ptr(&result, 0);
-  taos_free_result(pSql);
+  atomic_store_64(&result, 0);
+  freeResultWithRid(oresult);
 }
 
 /* Function to do regular expression check */
@@ -377,10 +391,13 @@ static char* formatTimestamp(char* buf, int64_t val, int precision) {
   }
 
   time_t tt;
+  int32_t ms = 0;
   if (precision == TSDB_TIME_PRECISION_MICRO) {
     tt = (time_t)(val / 1000000);
+    ms = val % 1000000;
   } else {
     tt = (time_t)(val / 1000);
+    ms = val % 1000;
   }
 
 /* comment out as it make testcases like select_with_tags.sim fail.
@@ -394,14 +411,22 @@ static char* formatTimestamp(char* buf, int64_t val, int precision) {
 #ifdef WINDOWS
   if (tt < 0) tt = 0;
 #endif
+  if (tt < 0 && ms != 0) {
+    tt--;
+    if (precision == TSDB_TIME_PRECISION_MICRO) {
+      ms += 1000000;
+    } else {
+      ms += 1000;
+    }
+  }
 
   struct tm* ptm = localtime(&tt);
   size_t pos = strftime(buf, 32, "%Y-%m-%d %H:%M:%S", ptm);
 
   if (precision == TSDB_TIME_PRECISION_MICRO) {
-    sprintf(buf + pos, ".%06d", (int)(val % 1000000));
+    sprintf(buf + pos, ".%06d", ms);
   } else {
-    sprintf(buf + pos, ".%03d", (int)(val % 1000));
+    sprintf(buf + pos, ".%03d", ms);
   }
 
   return buf;
@@ -460,7 +485,7 @@ static int dumpResultToFile(const char* fname, TAOS_RES* tres) {
 
   wordexp_t full_path;
 
-  if (wordexp(fname, &full_path, 0) != 0) {
+  if (wordexp((char *)fname, &full_path, 0) != 0) {
     fprintf(stderr, "ERROR: invalid file name: %s\n", fname);
     return -1;
   }
@@ -501,7 +526,7 @@ static int dumpResultToFile(const char* fname, TAOS_RES* tres) {
     row = taos_fetch_row(tres);
   } while( row != NULL);
 
-  result = NULL;
+  result = 0;
   fclose(fp);
 
   return numOfRows;
@@ -509,7 +534,9 @@ static int dumpResultToFile(const char* fname, TAOS_RES* tres) {
 
 
 static void shellPrintNChar(const char *str, int length, int width) {
-  int pos = 0, cols = 0;
+  wchar_t tail[3];
+  int pos = 0, cols = 0, totalCols = 0, tailLen = 0;
+
   while (pos < length) {
     wchar_t wc;
     int bytes = mbtowc(&wc, str + pos, MB_CUR_MAX);
@@ -526,13 +553,42 @@ static void shellPrintNChar(const char *str, int length, int width) {
 #else
     int w = wcwidth(wc);
 #endif
-    if (w > 0) {
-      if (width > 0 && cols + w > width) {
-        break;
-      }
+    if (w <= 0) {
+      continue;
+    }
+
+    if (width <= 0) {
+      printf("%lc", wc);
+      continue;
+    }
+
+    totalCols += w;
+    if (totalCols > width) {
+      break;
+    }
+    if (totalCols <= (width - 3)) {
       printf("%lc", wc);
       cols += w;
+    } else {
+      tail[tailLen] = wc;
+      tailLen++;
     }
+  }
+
+  if (totalCols > width) {
+    // width could be 1 or 2, so printf("...") cannot be used
+    for (int i = 0; i < 3; i++) {
+      if (cols >= width) {
+        break;
+      }
+      putchar('.');
+      ++cols;
+    }
+  } else {
+    for (int i = 0; i < tailLen; i++) {
+      printf("%lc", tail[i]);
+    }
+    cols = totalCols;
   }
 
   for (; cols < width; cols++) {
@@ -562,14 +618,26 @@ static void printField(const char* val, TAOS_FIELD* field, int width, int32_t le
     case TSDB_DATA_TYPE_TINYINT:
       printf("%*d", width, *((int8_t *)val));
       break;
+    case TSDB_DATA_TYPE_UTINYINT:
+      printf("%*u", width, *((uint8_t *)val));
+      break;
     case TSDB_DATA_TYPE_SMALLINT:
       printf("%*d", width, *((int16_t *)val));
+      break;
+    case TSDB_DATA_TYPE_USMALLINT:
+      printf("%*u", width, *((uint16_t *)val));
       break;
     case TSDB_DATA_TYPE_INT:
       printf("%*d", width, *((int32_t *)val));
       break;
+    case TSDB_DATA_TYPE_UINT:
+      printf("%*u", width, *((uint32_t *)val));
+      break;
     case TSDB_DATA_TYPE_BIGINT:
       printf("%*" PRId64, width, *((int64_t *)val));
+      break;
+    case TSDB_DATA_TYPE_UBIGINT:
+      printf("%*" PRIu64, width, *((uint64_t *)val));
       break;
     case TSDB_DATA_TYPE_FLOAT:
       printf("%*.5f", width, GET_FLOAT_VAL(val));
@@ -638,15 +706,19 @@ static int calcColWidth(TAOS_FIELD* field, int precision) {
       return MAX(5, width); // 'false'
 
     case TSDB_DATA_TYPE_TINYINT:
+    case TSDB_DATA_TYPE_UTINYINT:
       return MAX(4, width); // '-127'
 
     case TSDB_DATA_TYPE_SMALLINT:
+    case TSDB_DATA_TYPE_USMALLINT:
       return MAX(6, width); // '-32767'
 
     case TSDB_DATA_TYPE_INT:
+    case TSDB_DATA_TYPE_UINT:
       return MAX(11, width); // '-2147483648'
 
     case TSDB_DATA_TYPE_BIGINT:
+    case TSDB_DATA_TYPE_UBIGINT:
       return MAX(21, width); // '-9223372036854775807'
 
     case TSDB_DATA_TYPE_FLOAT:
@@ -656,12 +728,20 @@ static int calcColWidth(TAOS_FIELD* field, int precision) {
       return MAX(25, width);
 
     case TSDB_DATA_TYPE_BINARY:
-    case TSDB_DATA_TYPE_NCHAR:
       if (field->bytes > tsMaxBinaryDisplayWidth) {
         return MAX(tsMaxBinaryDisplayWidth, width);
       } else {
         return MAX(field->bytes, width);
       }
+
+    case TSDB_DATA_TYPE_NCHAR: {
+      int16_t bytes = field->bytes * TSDB_NCHAR_SIZE;
+      if (bytes > tsMaxBinaryDisplayWidth) {
+        return MAX(tsMaxBinaryDisplayWidth, width);
+      } else {
+        return MAX(bytes, width);
+      }
+    }
 
     case TSDB_DATA_TYPE_TIMESTAMP:
       if (args.is_raw_time) {

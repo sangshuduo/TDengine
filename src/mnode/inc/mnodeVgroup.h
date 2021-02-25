@@ -34,6 +34,7 @@ void    mnodeDropAllDnodeVgroups(SDnodeObj *pDropDnode);
 //void  mnodeUpdateAllDbVgroups(SDbObj *pAlterDb);
 
 void *  mnodeGetNextVgroup(void *pIter, SVgObj **pVgroup);
+void    mnodeCancelGetNextVgroup(void *pIter);
 void    mnodeUpdateVgroup(SVgObj *pVgroup);
 void    mnodeUpdateVgroupStatus(SVgObj *pVgroup, SDnodeObj *pDnode, SVnodeLoad *pVload);
 void    mnodeCheckUnCreatedVgroup(SDnodeObj *pDnode, SVnodeLoad *pVloads, int32_t openVnodes);
@@ -51,6 +52,9 @@ void    mnodeSendAlterVgroupMsg(SVgObj *pVgroup);
 
 SRpcEpSet mnodeGetEpSetFromVgroup(SVgObj *pVgroup);
 SRpcEpSet mnodeGetEpSetFromIp(char *ep);
+
+int32_t mnodeGetVgidVer(int8_t *vver);
+void    mnodeSetVgidVer(int8_t *cver, uint64_t iver);
 
 #ifdef __cplusplus
 }

@@ -313,7 +313,7 @@ tFilePage* getNewDataBuf(SDiskbasedResultBuf* pResultBuf, int32_t groupId, int32
 
   // allocate buf
   if (availablePage == NULL) {
-    pi->pData = calloc(1, pResultBuf->pageSize + POINTER_BYTES);
+    pi->pData = calloc(1, pResultBuf->pageSize + POINTER_BYTES + 2);  // add extract bytes in case of zipped buffer increased.
   } else {
     pi->pData = availablePage;
   }
@@ -423,9 +423,8 @@ void destroyResultBuf(SDiskbasedResultBuf* pResultBuf) {
   unlink(pResultBuf->path);
   tfree(pResultBuf->path);
 
-  SHashMutableIterator* iter = taosHashCreateIter(pResultBuf->groupSet);
-  while(taosHashIterNext(iter)) {
-    SArray** p = (SArray**) taosHashIterGet(iter);
+  SArray** p = taosHashIterate(pResultBuf->groupSet, NULL);
+  while(p) {
     size_t n = taosArrayGetSize(*p);
     for(int32_t i = 0; i < n; ++i) {
       SPageInfo* pi = taosArrayGetP(*p, i);
@@ -434,9 +433,8 @@ void destroyResultBuf(SDiskbasedResultBuf* pResultBuf) {
     }
 
     taosArrayDestroy(*p);
+    p = taosHashIterate(pResultBuf->groupSet, p);
   }
-
-  taosHashDestroyIter(iter);
 
   tdListFree(pResultBuf->lruList);
   taosArrayDestroy(pResultBuf->emptyDummyIdList);
