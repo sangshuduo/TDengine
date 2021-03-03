@@ -25,7 +25,7 @@ class TDengineCursor(object):
     """
 
     def __init__(self, connection=None):
-        self._description = None
+        self._description = []
         self._rowcount = -1
         self._connection = None
         self._result = None
@@ -42,12 +42,12 @@ class TDengineCursor(object):
     def __iter__(self):
         return self
 
-    def next(self):
+    def __next__(self):
         if self._result is None or self._fields is None:
             raise OperationalError("Invalid use of fetch iterator")
 
         if self._block_rows <= self._block_iter:
-            block, self._block_rows = CTaosInterface.fetchBlock(
+            block, self._block_rows = CTaosInterface.fetchRow(
                 self._result, self._fields)
             if self._block_rows == 0:
                 raise StopIteration
@@ -128,8 +128,8 @@ class TDengineCursor(object):
         if errno == 0:
             if CTaosInterface.fieldsCount(self._result) == 0:
                 self._affected_rows += CTaosInterface.affectedRows(
-                    self._result )
-                return CTaosInterface.affectedRows(self._result )
+                    self._result)
+                return CTaosInterface.affectedRows(self._result)
             else:
                 self._fields = CTaosInterface.useResult(
                     self._result)
@@ -137,7 +137,7 @@ class TDengineCursor(object):
         else:
             raise ProgrammingError(
                 CTaosInterface.errStr(
-                    self._result ), errno)
+                    self._result), errno)
 
     def executemany(self, operation, seq_of_parameters):
         """Prepare a database operation (query or command) and then execute it against all parameter sequences or mappings found in the sequence seq_of_parameters.
@@ -149,6 +149,9 @@ class TDengineCursor(object):
         """
         pass
 
+    def fetchmany(self):
+        pass
+
     def istype(self, col, dataType):
         if (dataType.upper() == "BOOL"):
             if (self._description[col][1] == FieldType.C_BOOL):
@@ -156,11 +159,26 @@ class TDengineCursor(object):
         if (dataType.upper() == "TINYINT"):
             if (self._description[col][1] == FieldType.C_TINYINT):
                 return True
+        if (dataType.upper() == "TINYINT UNSIGNED"):
+            if (self._description[col][1] == FieldType.C_TINYINT_UNSIGNED):
+                return True
+        if (dataType.upper() == "SMALLINT"):
+            if (self._description[col][1] == FieldType.C_SMALLINT):
+                return True
+        if (dataType.upper() == "SMALLINT UNSIGNED"):
+            if (self._description[col][1] == FieldType.C_SMALLINT_UNSIGNED):
+                return True
         if (dataType.upper() == "INT"):
             if (self._description[col][1] == FieldType.C_INT):
                 return True
+        if (dataType.upper() == "INT UNSIGNED"):
+            if (self._description[col][1] == FieldType.C_INT_UNSIGNED):
+                return True
         if (dataType.upper() == "BIGINT"):
-            if (self._description[col][1] == FieldType.C_INT):
+            if (self._description[col][1] == FieldType.C_BIGINT):
+                return True
+        if (dataType.upper() == "BIGINT UNSIGNED"):
+            if (self._description[col][1] == FieldType.C_BIGINT_UNSIGNED):
                 return True
         if (dataType.upper() == "FLOAT"):
             if (self._description[col][1] == FieldType.C_FLOAT):
@@ -180,10 +198,7 @@ class TDengineCursor(object):
 
         return False
 
-    def fetchmany(self):
-        pass
-
-    def fetchall(self):
+    def fetchall_row(self):
         """Fetch all (remaining) rows of a query result, returning them as a sequence of sequences (e.g. a list of tuples). Note that the cursor's arraysize attribute can affect the performance of this operation.
         """
         if self._result is None or self._fields is None:
@@ -192,17 +207,39 @@ class TDengineCursor(object):
         buffer = [[] for i in range(len(self._fields))]
         self._rowcount = 0
         while True:
-            block, num_of_fields = CTaosInterface.fetchBlock(self._result, self._fields)
+            block, num_of_fields = CTaosInterface.fetchRow(
+                self._result, self._fields)
             errno = CTaosInterface.libtaos.taos_errno(self._result)
             if errno != 0:
-                raise ProgrammingError(CTaosInterface.errStr(self._result), errno)
+                raise ProgrammingError(
+                    CTaosInterface.errStr(
+                        self._result), errno)
             if num_of_fields == 0:
                 break
             self._rowcount += num_of_fields
             for i in range(len(self._fields)):
                 buffer[i].extend(block[i])
+        return list(map(tuple, zip(*buffer)))
 
+    def fetchall(self):
+        if self._result is None or self._fields is None:
+            raise OperationalError("Invalid use of fetchall")
 
+        buffer = [[] for i in range(len(self._fields))]
+        self._rowcount = 0
+        while True:
+            block, num_of_fields = CTaosInterface.fetchBlock(
+                self._result, self._fields)
+            errno = CTaosInterface.libtaos.taos_errno(self._result)
+            if errno != 0:
+                raise ProgrammingError(
+                    CTaosInterface.errStr(
+                        self._result), errno)
+            if num_of_fields == 0:
+                break
+            self._rowcount += num_of_fields
+            for i in range(len(self._fields)):
+                buffer[i].extend(block[i])
         return list(map(tuple, zip(*buffer)))
 
     def nextset(self):
@@ -219,7 +256,7 @@ class TDengineCursor(object):
     def _reset_result(self):
         """Reset the result to unused version.
         """
-        self._description = None
+        self._description = []
         self._rowcount = -1
         if self._result is not None:
             CTaosInterface.freeResult(self._result)

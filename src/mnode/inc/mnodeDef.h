@@ -89,7 +89,7 @@ typedef struct STableObj {
   int8_t type;
 } STableObj;
 
-typedef struct SSuperTableObj {
+typedef struct SSTableObj {
   STableObj  info; 
   int8_t     reserved0[9]; // for fill struct STableObj to 4byte align
   int16_t    nextColId;
@@ -104,7 +104,7 @@ typedef struct SSuperTableObj {
   int32_t    numOfTables;
   SSchema *  schema;
   void *     vgHash;
-} SSuperTableObj;
+} SSTableObj;
 
 typedef struct {
   STableObj  info;  
@@ -122,14 +122,14 @@ typedef struct {
   int32_t    refCount;
   char*      sql;          //used by normal table
   SSchema*   schema;       //used by normal table
-  SSuperTableObj *superTable;
-} SChildTableObj;
+  SSTableObj*superTable;
+} SCTableObj;
 
 typedef struct {
   int32_t    dnodeId;
   int8_t     role;
-  int8_t     reserved[3];
-  SDnodeObj* pDnode;
+  int8_t     vver[3];  // To ensure compatibility, 3 bits are used to represent the remainder of 64 bit version
+  SDnodeObj *pDnode;
 } SVnodeGid;
 
 typedef struct SVgObj {
@@ -138,13 +138,14 @@ typedef struct SVgObj {
   int64_t        createdTime;
   int32_t        lbDnodeId;
   int32_t        lbTime;
-  char           dbName[TSDB_ACCT_LEN + TSDB_DB_NAME_LEN];
+  char           dbName[TSDB_ACCT_ID_LEN + TSDB_DB_NAME_LEN];
   int8_t         inUse;
   int8_t         accessState;
   int8_t         status;
   int8_t         reserved0[4];
   SVnodeGid      vnodeGid[TSDB_MAX_REPLICA];
-  int8_t         reserved1[12];
+  int32_t        vgCfgVersion;
+  int8_t         reserved1[8];
   int8_t         updateEnd[4];
   int32_t        refCount;
   int32_t        numOfTables;
@@ -172,15 +173,17 @@ typedef struct {
   int8_t  walLevel;
   int8_t  replications;
   int8_t  quorum;
-  int8_t  reserved[12];
+  int8_t  update;
+  int8_t  cacheLastRow;
+  int8_t  reserved[10];
 } SDbCfg;
 
 typedef struct SDbObj {
-  char    name[TSDB_ACCT_LEN + TSDB_DB_NAME_LEN];
+  char    name[TSDB_ACCT_ID_LEN + TSDB_DB_NAME_LEN];
   int8_t  reserved0[4];
   char    acct[TSDB_USER_LEN];
   int64_t createdTime;
-  int32_t cfgVersion;
+  int32_t dbCfgVersion;
   SDbCfg  cfg;
   int8_t  status;
   int8_t  reserved1[11];
@@ -256,7 +259,7 @@ typedef struct {
   int16_t  bytes[TSDB_MAX_COLUMNS];
   int32_t  numOfReads;
   int8_t   maxReplica;
-  int8_t   reserved0[0];
+  int8_t   reserved0[1];
   uint16_t payloadLen;
   char     payload[];
 } SShowObj;

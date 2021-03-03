@@ -35,33 +35,37 @@ typedef struct {
 } SMnodeRsp;
 
 typedef struct SMnodeMsg {
-  SRpcMsg   rpcMsg;
-  SMnodeRsp rpcRsp;
-  int8_t    received;
-  int8_t    successed;
-  int8_t    expected;
-  int8_t    retry;
-  int32_t   code;
-  void *    pObj;
   struct SAcctObj * pAcct;
   struct SDnodeObj *pDnode;
   struct SUserObj * pUser;
   struct SDbObj *   pDb;
   struct SVgObj *   pVgroup;
   struct STableObj *pTable;
-  struct SSuperTableObj *pSTable;
+  struct SSTableObj*pSTable;
+  struct SMnodeMsg *pBatchMasterMsg;
+  SMnodeRsp rpcRsp;
+  int16_t   received;
+  int16_t   successed;
+  int16_t   expected;
+  int16_t   retry;
+  int32_t   incomingTs;
+  int32_t   code;
+  void *    pObj;
+  SRpcMsg   rpcMsg;
+  char      pCont[];
 } SMnodeMsg;
 
-void    mnodeCreateMsg(SMnodeMsg *pMsg, SRpcMsg *rpcMsg);
+void *  mnodeCreateMsg(SRpcMsg *pRpcMsg);
 int32_t mnodeInitMsg(SMnodeMsg *pMsg);
 void    mnodeCleanupMsg(SMnodeMsg *pMsg);
+void    mnodeDestroySubMsg(SMnodeMsg *pSubMsg);
 
 int32_t mnodeInitSystem();
 int32_t mnodeStartSystem();
 void    mnodeCleanupSystem();
 void    mnodeStopSystem();
 void    sdbUpdateAsync();
-void    sdbUpdateSync(void *pMnodes);
+int32_t sdbUpdateSync(void *pMnodes);
 bool    mnodeIsRunning();
 int32_t mnodeProcessRead(SMnodeMsg *pMsg);
 int32_t mnodeProcessWrite(SMnodeMsg *pMsg);

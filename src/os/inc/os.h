@@ -52,9 +52,9 @@ extern "C" {
 #include "osWindows.h"
 #endif
 
+#include "osDef.h"
 #include "osAtomic.h"
 #include "osCommon.h"
-#include "osDef.h"
 #include "osDir.h"
 #include "osFile.h"
 #include "osLz4.h"
@@ -62,6 +62,7 @@ extern "C" {
 #include "osMemory.h"
 #include "osRand.h"
 #include "osSemphone.h"
+#include "osSignal.h"
 #include "osSocket.h"
 #include "osString.h"
 #include "osSysinfo.h"

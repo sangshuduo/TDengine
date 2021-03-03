@@ -2,15 +2,22 @@ import threading
 import random
 import logging
 import os
+import sys
+
+import taos
 
 
-class CrashGenError(Exception):
-    def __init__(self, msg=None, errno=None):
-        self.msg = msg
-        self.errno = errno
+class CrashGenError(taos.error.ProgrammingError):
+    INVALID_EMPTY_RESULT    = 0x991
+    INVALID_MULTIPLE_RESULT = 0x992
+    DB_CONNECTION_NOT_OPEN  = 0x993
+    # def __init__(self, msg=None, errno=None):
+    #     self.msg = msg
+    #     self.errno = errno
 
-    def __str__(self):
-        return self.msg
+    # def __str__(self):
+    #     return self.msg
+    pass
 
 
 class LoggingFilter(logging.Filter):
@@ -27,7 +34,7 @@ class LoggingFilter(logging.Filter):
 
 class MyLoggingAdapter(logging.LoggerAdapter):
     def process(self, msg, kwargs):
-        return "[{}] {}".format(threading.get_ident() % 10000, msg), kwargs
+        return "[{:04d}] {}".format(threading.get_ident() % 10000, msg), kwargs
         # return '[%s] %s' % (self.extra['connid'], msg), kwargs
 
 
@@ -47,11 +54,11 @@ class Logging:
         # global misc.logger
         _logger = logging.getLogger('CrashGen')  # real logger
         _logger.addFilter(LoggingFilter())
-        ch = logging.StreamHandler()
+        ch = logging.StreamHandler(sys.stdout) # Ref: https://stackoverflow.com/questions/14058453/making-python-loggers-output-all-messages-to-stdout-in-addition-to-log-file
         _logger.addHandler(ch)
 
         # Logging adapter, to be used as a logger
-        print("setting logger variable")
+        # print("setting logger variable")
         # global logger
         cls.logger = MyLoggingAdapter(_logger, [])
 
@@ -163,11 +170,24 @@ class Progress:
     BEGIN_THREAD_STEP = 1
     END_THREAD_STEP   = 2
     SERVICE_HEART_BEAT= 3
+    SERVICE_RECONNECT_START     = 4
+    SERVICE_RECONNECT_SUCCESS   = 5
+    SERVICE_RECONNECT_FAILURE   = 6
+    SERVICE_START_NAP           = 7
+    CREATE_TABLE_ATTEMPT        = 8
+    QUERY_GROUP_BY              = 9
+
     tokens = {
         STEP_BOUNDARY:      '.',
         BEGIN_THREAD_STEP:  '[',
         END_THREAD_STEP:    '] ',
-        SERVICE_HEART_BEAT: '.Y.'
+        SERVICE_HEART_BEAT: '.Y.',
+        SERVICE_RECONNECT_START:    '<r.',
+        SERVICE_RECONNECT_SUCCESS:  '.r>',
+        SERVICE_RECONNECT_FAILURE:  '.xr>',
+        SERVICE_START_NAP:           '_zz',
+        CREATE_TABLE_ATTEMPT:       'c',
+        QUERY_GROUP_BY:             'g',
     }
 
     @classmethod

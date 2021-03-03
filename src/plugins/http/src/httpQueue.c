@@ -25,6 +25,7 @@
 #include "httpResp.h"
 #include "httpAuth.h"
 #include "httpSession.h"
+#include "httpQueue.h"
 
 typedef struct {
   pthread_t thread;
@@ -37,42 +38,45 @@ typedef struct {
 } SHttpWorkerPool;
 
 typedef struct {
-  void *param;
-  void *result;
-  int32_t numOfRows;
-  void (*fp)(void *param, void *result, int32_t numOfRows);
+  void *        param;
+  void *        result;
+  int32_t       code;
+  int32_t       rows;
+  FHttpResultFp fp;
 } SHttpResult;
 
 static SHttpWorkerPool tsHttpPool;
-static taos_qset tsHttpQset;
-static taos_queue tsHttpQueue;
+static taos_qset       tsHttpQset;
+static taos_queue      tsHttpQueue;
 
-void httpDispatchToResultQueue(void *param, TAOS_RES *result, int32_t numOfRows, void (*fp)(void *param, void *result, int32_t numOfRows)) {
+void httpDispatchToResultQueue(void *param, TAOS_RES *result, int32_t code, int32_t rows, FHttpResultFp fp) {
   if (tsHttpQueue != NULL) {
-    SHttpResult *pMsg = (SHttpResult *)taosAllocateQitem(sizeof(SHttpResult));
+    SHttpResult *pMsg = taosAllocateQitem(sizeof(SHttpResult));
     pMsg->param = param;
     pMsg->result = result;
-    pMsg->numOfRows = numOfRows;
+    pMsg->code = code;
+    pMsg->rows = rows;
     pMsg->fp = fp;
     taosWriteQitem(tsHttpQueue, TAOS_QTYPE_RPC, pMsg);
   } else {
-    (*fp)(param, result, numOfRows);
+    (*fp)(param, result, code, rows);
   }
 }
 
 static void *httpProcessResultQueue(void *param) {
   SHttpResult *pMsg;
-  int32_t type;
-  void *unUsed;
-  
+  int32_t      type;
+  void *       unUsed;
+
   while (1) {
     if (taosReadQitemFromQset(tsHttpQset, &type, (void **)&pMsg, &unUsed) == 0) {
       httpDebug("qset:%p, http queue got no message from qset, exiting", tsHttpQset);
       break;
     }
 
-    httpTrace("context:%p, res:%p will be processed in result queue", pMsg->param, pMsg->result);    
-    (*pMsg->fp)(pMsg->param, pMsg->result, pMsg->numOfRows);  
+    httpTrace("context:%p, res:%p will be processed in result queue, code:%d rows:%d", pMsg->param, pMsg->result,
+              pMsg->code, pMsg->rows);
+    (*pMsg->fp)(pMsg->param, pMsg->result, pMsg->code, pMsg->rows);
     taosFreeQitem(pMsg);
   }
 
@@ -101,7 +105,7 @@ static bool httpAllocateResultQueue() {
     httpDebug("http result worker:%d is launched, total:%d", pWorker->workerId, tsHttpPool.num);
   }
 
-   httpInfo("http result queue is opened");
+  httpInfo("http result queue is opened");
   return true;
 }
 
@@ -130,14 +134,14 @@ void httpCleanupResultQueue() {
 
   for (int32_t i = 0; i < tsHttpPool.num; ++i) {
     SHttpWorker *pWorker = tsHttpPool.httpWorker + i;
-    if (pWorker->thread) {
+    if (taosCheckPthreadValid(pWorker->thread)) {
       taosQsetThreadResume(tsHttpQset);
     }
   }
 
   for (int32_t i = 0; i < tsHttpPool.num; ++i) {
     SHttpWorker *pWorker = tsHttpPool.httpWorker + i;
-    if (pWorker->thread) {
+    if (taosCheckPthreadValid(pWorker->thread)) {
       pthread_join(pWorker->thread, NULL);
     }
   }

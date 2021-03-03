@@ -13,8 +13,7 @@
  * along with this program. If not, see <http://www.gnu.org/licenses/>.
  */
 
-#include "tsdb.h"
-#include "tsdbMain.h"
+#include "tsdbint.h"
 
 #define POOL_IS_EMPTY(b) (listNEles((b)->bufBlockList) == 0)
 
@@ -110,7 +109,7 @@ void tsdbCloseBufPool(STsdbRepo *pRepo) {
     }
   }
 
-  tsdbDebug("vgId:%d buffer pool is closed", REPO_ID(pRepo));
+  tsdbDebug("vgId:%d, buffer pool is closed", REPO_ID(pRepo));
 }
 
 SListNode *tsdbAllocBufBlockFromPool(STsdbRepo *pRepo) {
@@ -134,7 +133,7 @@ SListNode *tsdbAllocBufBlockFromPool(STsdbRepo *pRepo) {
   pBufBlock->offset = 0;
   pBufBlock->remain = pBufPool->bufBlockSize;
 
-  tsdbDebug("vgId:%d buffer block is allocated, blockId:%" PRId64, REPO_ID(pRepo), pBufBlock->blockId);
+  tsdbDebug("vgId:%d, buffer block is allocated, blockId:%" PRId64, REPO_ID(pRepo), pBufBlock->blockId);
   return pNode;
 }
 
@@ -157,4 +156,4 @@ _err:
   return NULL;
 }
 
-static void tsdbFreeBufBlock(STsdbBufBlock *pBufBlock) { taosTFree(pBufBlock); }
+static void tsdbFreeBufBlock(STsdbBufBlock *pBufBlock) { tfree(pBufBlock); }

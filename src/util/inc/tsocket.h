@@ -20,21 +20,25 @@
 extern "C" {
 #endif
 
-int taosReadn(SOCKET sock, char *buffer, int len);
-int taosWriteMsg(SOCKET fd, void *ptr, int nbytes);
-int taosReadMsg(SOCKET fd, void *ptr, int nbytes);
-int taosNonblockwrite(SOCKET fd, char *ptr, int nbytes);
-int taosCopyFds(SOCKET sfd, SOCKET dfd, int64_t len);
-int taosSetNonblocking(SOCKET sock, int on);
+#ifdef WINDOWS
+#include "wepoll.h"
+#endif
 
-SOCKET taosOpenUdpSocket(uint32_t localIp, uint16_t localPort);
-SOCKET taosOpenTcpClientSocket(uint32_t ip, uint16_t port, uint32_t localIp);
-SOCKET taosOpenTcpServerSocket(uint32_t ip, uint16_t port);
-int  taosKeepTcpAlive(SOCKET sockFd);
+int32_t taosReadn(SOCKET sock, char *buffer, int32_t len);
+int32_t taosWriteMsg(SOCKET fd, void *ptr, int32_t nbytes);
+int32_t taosReadMsg(SOCKET fd, void *ptr, int32_t nbytes);
+int32_t taosNonblockwrite(SOCKET fd, char *ptr, int32_t nbytes);
+int32_t taosCopyFds(SOCKET sfd, int32_t dfd, int64_t len);
+int32_t taosSetNonblocking(SOCKET sock, int32_t on);
 
-int      taosGetFqdn(char *);
-uint32_t taosGetIpFromFqdn(const char *);
-void     tinet_ntoa(char *ipstr, unsigned int ip);
+SOCKET  taosOpenUdpSocket(uint32_t localIp, uint16_t localPort);
+SOCKET  taosOpenTcpClientSocket(uint32_t ip, uint16_t port, uint32_t localIp);
+SOCKET  taosOpenTcpServerSocket(uint32_t ip, uint16_t port);
+int32_t taosKeepTcpAlive(SOCKET sockFd);
+
+int32_t  taosGetFqdn(char *);
+uint32_t taosGetIpv4FromFqdn(const char *);
+void     tinet_ntoa(char *ipstr, uint32_t ip);
 uint32_t ip2uint(const char *const ip_addr);
 
 #ifdef __cplusplus

@@ -89,12 +89,17 @@ int taosInitTimer(void (*callback)(int), int ms) {
   if (code != 0) {
     uError("failed to create timer thread");
     return -1;
+  } else {
+    uDebug("timer thread:0x%08" PRIx64 " is created", taosGetPthreadId(timerThread));
   }
+
   return 0;
 }
 
 void taosUninitTimer() {
   stopTimer = true;
+
+  uDebug("join timer thread:0x%08" PRIx64, taosGetPthreadId(timerThread));
   pthread_join(timerThread, NULL);
 }
 
@@ -111,6 +116,12 @@ void taosUninitTimer() {
   pthread_sigmask(SIG_BLOCK, &set, NULL);
 */
 void taosMsleep(int mseconds) {
+#ifdef __APPLE__
+  taos_block_sigalrm();
+#endif // __APPLE__
+#if 1
+  usleep(mseconds * 1000);
+#else
   struct timeval timeout;
   int            seconds, useconds;
 
@@ -126,7 +137,9 @@ void taosMsleep(int mseconds) {
 
   select(0, NULL, NULL, NULL, &timeout);
 
-  /* pthread_sigmask(SIG_UNBLOCK, &set, NULL); */
+/* pthread_sigmask(SIG_UNBLOCK, &set, NULL); */
+#endif
+
 }
 
 #endif

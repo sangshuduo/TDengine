@@ -1,4 +1,5 @@
 const taos = require('td2.0-connector');
+//const taos = require('../../../src/connector/nodejs/');
 
 
 var host = null;
@@ -42,8 +43,8 @@ function executeQuery(sql){
 	var start = new Date().getTime();
 	var promise = cursor.query(sql, true);
 	var end = new Date().getTime();
-	printSql(sql, promise != null,(end - start));
 	promise.then(function(result){
+		printSql(sql, result != null,(end - start));
 		result.pretty();
 	});
 }
