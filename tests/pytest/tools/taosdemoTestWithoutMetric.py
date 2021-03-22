@@ -23,9 +23,9 @@ class TDTestCase:
     def init(self, conn, logSql):
         tdLog.debug("start to execute %s" % __file__)
         tdSql.init(conn.cursor(), logSql)
-        
-        self.numberOfTables = 10000
-        self.numberOfRecords = 100
+
+        self.numberOfTables = 100
+        self.numberOfRecords = 1000
 
     def getBuildPath(self):
         selfPath = os.path.dirname(os.path.realpath(__file__))
@@ -39,23 +39,29 @@ class TDTestCase:
             if ("taosd" in files):
                 rootRealPath = os.path.dirname(os.path.realpath(root))
                 if ("packaging" not in rootRealPath):
-                    buildPath = root[:len(root)-len("/build/bin")]
+                    buildPath = root[:len(root) - len("/build/bin")]
                     break
         return buildPath
-        
+
     def run(self):
-        tdSql.prepare()
         buildPath = self.getBuildPath()
         if (buildPath == ""):
             tdLog.exit("taosd not found!")
         else:
             tdLog.info("taosd found in %s" % buildPath)
-        binPath = buildPath+ "/build/bin/"
-        os.system("yes | %staosdemo -f tools/insert.json" % binPath)
+        binPath = buildPath + "/build/bin/"
+        os.system("%staosdemo -y -t %d -n %d -x" %
+                  (binPath, self.numberOfTables, self.numberOfRecords))
 
-        tdSql.execute("use db01")
-        tdSql.query("select count(*) from stb01")
-        tdSql.checkData(0, 0, 100000)
+        tdSql.query("show databases")
+        for i in range(18):
+            print(tdSql.getData(0, i) )
+        tdSql.checkData(0, 2, self.numberOfTables)
+
+        tdSql.execute("use test")
+        tdSql.query(
+            "select count(*) from test.t%d" % (self.numberOfTables -1))
+        tdSql.checkData(0, 0, self.numberOfRecords)
 
     def stop(self):
         tdSql.close()
