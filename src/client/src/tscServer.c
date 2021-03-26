@@ -350,8 +350,8 @@ void tscProcessMsgFromServer(SRpcMsg *rpcMsg, SRpcEpSet *pEpSet) {
         taosMsleep(duration);
       }
 
+      pSql->retryReason = rpcMsg->code;
       rpcMsg->code = tscRenewTableMeta(pSql, 0);
-
       // if there is an error occurring, proceed to the following error handling procedure.
       if (rpcMsg->code == TSDB_CODE_TSC_ACTION_IN_PROGRESS) {
         taosReleaseRef(tscObjRef, handle);
@@ -613,7 +613,7 @@ static int32_t tscEstimateQueryMsgSize(SSqlObj *pSql, int32_t clauseIndex) {
          tableSerialize + sqlLen + 4096 + pQueryInfo->bufLen;
 }
 
-static char *doSerializeTableInfo(SQueryTableMsg* pQueryMsg, SSqlObj *pSql, char *pMsg) {
+static char *doSerializeTableInfo(SQueryTableMsg* pQueryMsg, SSqlObj *pSql, char *pMsg, int32_t *succeed) {
   STableMetaInfo *pTableMetaInfo = tscGetTableMetaInfoFromCmd(&pSql->cmd, pSql->cmd.clauseIndex, 0);
   TSKEY dfltKey = htobe64(pQueryMsg->window.skey);
 
@@ -626,9 +626,14 @@ static char *doSerializeTableInfo(SQueryTableMsg* pQueryMsg, SSqlObj *pSql, char
       assert(index >= 0);
 
       SVgroupInfo* pVgroupInfo = NULL;
-      if (pTableMetaInfo->vgroupList->numOfVgroups > 0) {
+      if (pTableMetaInfo->vgroupList && pTableMetaInfo->vgroupList->numOfVgroups > 0) {
         assert(index < pTableMetaInfo->vgroupList->numOfVgroups);
         pVgroupInfo = &pTableMetaInfo->vgroupList->vgroups[index];
+      } else {
+        tscError("%p No vgroup info found", pSql);
+        
+        *succeed = 0;
+        return pMsg;
       }
 
       vgId = pVgroupInfo->vgId;
@@ -948,8 +953,13 @@ int tscBuildQueryMsg(SSqlObj *pSql, SSqlInfo *pInfo) {
     pQueryMsg->secondStageOutput = 0;
   }
 
+  int32_t succeed = 1;
+  
   // serialize the table info (sid, uid, tags)
-  pMsg = doSerializeTableInfo(pQueryMsg, pSql, pMsg);
+  pMsg = doSerializeTableInfo(pQueryMsg, pSql, pMsg, &succeed);
+  if (succeed == 0) {
+    return TSDB_CODE_TSC_APP_ERROR;
+  }
   
   SSqlGroupbyExpr *pGroupbyExpr = &pQueryInfo->groupbyExpr;
   if (pGroupbyExpr->numOfGroupCols > 0) {
@@ -1280,6 +1290,23 @@ int32_t tscBuildUseDbMsg(SSqlObj *pSql, SSqlInfo *pInfo) {
   STableMetaInfo *pTableMetaInfo = tscGetTableMetaInfoFromCmd(pCmd, pCmd->clauseIndex, 0);
   tNameExtractFullName(&pTableMetaInfo->name, pUseDbMsg->db);
   pCmd->msgType = TSDB_MSG_TYPE_CM_USE_DB;
+
+  return TSDB_CODE_SUCCESS;
+}
+
+int32_t tscBuildSyncDbReplicaMsg(SSqlObj* pSql, SSqlInfo *pInfo) {
+  SSqlCmd *pCmd = &pSql->cmd;
+  pCmd->payloadLen = sizeof(SSyncDbMsg);
+
+  if (TSDB_CODE_SUCCESS != tscAllocPayload(pCmd, pCmd->payloadLen)) {
+    tscError("%p failed to malloc for query msg", pSql);
+    return TSDB_CODE_TSC_OUT_OF_MEMORY;
+  }
+
+  SSyncDbMsg *pSyncMsg = (SSyncDbMsg *)pCmd->payload;
+  STableMetaInfo *pTableMetaInfo = tscGetTableMetaInfoFromCmd(pCmd, pCmd->clauseIndex, 0);
+  tNameExtractFullName(&pTableMetaInfo->name, pSyncMsg->db);
+  pCmd->msgType = TSDB_MSG_TYPE_CM_SYNC_DB;
 
   return TSDB_CODE_SUCCESS;
 }
@@ -2064,19 +2091,24 @@ int tscProcessSTableVgroupRsp(SSqlObj *pSql) {
     assert(pInfo->vgroupList != NULL);
 
     pInfo->vgroupList->numOfVgroups = pVgroupMsg->numOfVgroups;
-    for (int32_t j = 0; j < pInfo->vgroupList->numOfVgroups; ++j) {
-      //just init, no need to lock
-      SVgroupInfo *pVgroups = &pInfo->vgroupList->vgroups[j];
+    if (pInfo->vgroupList->numOfVgroups <= 0) {
+      //tfree(pInfo->vgroupList);
+      tscError("%p empty vgroup info", pSql);
+    } else {
+      for (int32_t j = 0; j < pInfo->vgroupList->numOfVgroups; ++j) {
+        //just init, no need to lock
+        SVgroupInfo *pVgroups = &pInfo->vgroupList->vgroups[j];
 
-      SVgroupMsg *vmsg = &pVgroupMsg->vgroups[j];
-      pVgroups->vgId = htonl(vmsg->vgId);
-      pVgroups->numOfEps = vmsg->numOfEps;
+        SVgroupMsg *vmsg = &pVgroupMsg->vgroups[j];
+        pVgroups->vgId = htonl(vmsg->vgId);
+        pVgroups->numOfEps = vmsg->numOfEps;
 
-      assert(pVgroups->numOfEps >= 1 && pVgroups->vgId >= 1);
+        assert(pVgroups->numOfEps >= 1 && pVgroups->vgId >= 1);
 
-      for (int32_t k = 0; k < pVgroups->numOfEps; ++k) {
-        pVgroups->epAddr[k].port = htons(vmsg->epAddr[k].port);
-        pVgroups->epAddr[k].fqdn = strndup(vmsg->epAddr[k].fqdn, tListLen(vmsg->epAddr[k].fqdn));
+        for (int32_t k = 0; k < pVgroups->numOfEps; ++k) {
+          pVgroups->epAddr[k].port = htons(vmsg->epAddr[k].port);
+          pVgroups->epAddr[k].fqdn = strndup(vmsg->epAddr[k].fqdn, tListLen(vmsg->epAddr[k].fqdn));
+        }
       }
     }
 
@@ -2559,6 +2591,7 @@ void tscInitMsgsFp() {
   tscBuildMsg[TSDB_SQL_DROP_USER] = tscBuildDropUserAcctMsg;
   tscBuildMsg[TSDB_SQL_DROP_ACCT] = tscBuildDropUserAcctMsg;
   tscBuildMsg[TSDB_SQL_DROP_DB] = tscBuildDropDbMsg;
+  tscBuildMsg[TSDB_SQL_SYNC_DB_REPLICA] = tscBuildSyncDbReplicaMsg;
   tscBuildMsg[TSDB_SQL_DROP_TABLE] = tscBuildDropTableMsg;
   tscBuildMsg[TSDB_SQL_ALTER_USER] = tscBuildUserMsg;
   tscBuildMsg[TSDB_SQL_CREATE_DNODE] = tscBuildCreateDnodeMsg;
