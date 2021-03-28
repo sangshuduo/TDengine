@@ -25,6 +25,8 @@
 #include "tdataformat.h"
 #include "tname.h"
 #include "hash.h"
+#include "tlockfree.h"
+#include "tlist.h"
 
 #ifdef __cplusplus
 extern "C" {
@@ -172,10 +174,32 @@ typedef struct STsdbQueryCond {
   int32_t      type;              // data block load type:
 } STsdbQueryCond;
 
+typedef struct STableData STableData;
+typedef struct {
+  T_REF_DECLARE()
+  SRWLatch     latch;
+  TSKEY        keyFirst;
+  TSKEY        keyLast;
+  int64_t      numOfRows;
+  int32_t      maxTables;
+  STableData **tData;
+  SList *      actList;
+  SList *      extraBuffList;
+  SList *      bufBlockList;
+  int64_t      pointsAdd;   // TODO
+  int64_t      storageAdd;  // TODO
+} SMemTable;
+
+typedef struct {
+  SMemTable* mem;
+  SMemTable* imem;
+  SMemTable  mtable;
+  SMemTable* omem;
+} SMemSnapshot;
+
 typedef struct SMemRef {
-  int32_t ref;
-  void *  mem;
-  void *  imem;
+  int32_t      ref;
+  SMemSnapshot snapshot;
 } SMemRef;
 
 typedef struct SDataBlockInfo {
@@ -221,7 +245,7 @@ typedef struct {
  * @param qinfo      query info handle from query processor
  * @return
  */
-TsdbQueryHandleT *tsdbQueryTables(STsdbRepo *tsdb, STsdbQueryCond *pCond, STableGroupInfo *tableInfoGroup, void *qinfo,
+TsdbQueryHandleT *tsdbQueryTables(STsdbRepo *tsdb, STsdbQueryCond *pCond, STableGroupInfo *tableInfoGroup, uint64_t qId,
                                   SMemRef *pRef);
 
 /**
@@ -234,7 +258,7 @@ TsdbQueryHandleT *tsdbQueryTables(STsdbRepo *tsdb, STsdbQueryCond *pCond, STable
  * @param tableInfo  table list.
  * @return
  */
-TsdbQueryHandleT tsdbQueryLastRow(STsdbRepo *tsdb, STsdbQueryCond *pCond, STableGroupInfo *tableInfo, void *qinfo,
+TsdbQueryHandleT tsdbQueryLastRow(STsdbRepo *tsdb, STsdbQueryCond *pCond, STableGroupInfo *tableInfo, uint64_t qId,
                                   SMemRef *pRef);
 
 /**
@@ -253,7 +277,7 @@ SArray *tsdbGetQueriedTableList(TsdbQueryHandleT *pHandle);
  * @return
  */
 TsdbQueryHandleT tsdbQueryRowsInExternalWindow(STsdbRepo *tsdb, STsdbQueryCond *pCond, STableGroupInfo *groupList,
-                                               void *qinfo, SMemRef *pRef);
+                                               uint64_t qId, SMemRef *pRef);
 
 
 /**
