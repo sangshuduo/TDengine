@@ -19,50 +19,72 @@
 #ifdef __cplusplus
 extern "C" {
 #endif
-
-typedef enum _VN_STATUS {
-  TAOS_VN_STATUS_INIT,
-  TAOS_VN_STATUS_READY,
-  TAOS_VN_STATUS_CLOSING,
-  TAOS_VN_STATUS_UPDATING,
-  TAOS_VN_STATUS_RESET,
-} EVnStatus;
+#include "trpc.h"
+#include "twal.h"
 
 typedef struct {
-  int   len;
-  void *rsp;
-  void *qhandle; //used by query and retrieve msg
+  int32_t len;
+  void *  rsp;
+  void *  qhandle;  // used by query and retrieve msg
 } SRspRet;
 
 typedef struct {
-  SRspRet  rspRet;
-  void    *pCont;
-  int32_t  contLen;
-  SRpcMsg  rpcMsg;
-} SReadMsg;
+  int32_t code;
+  int32_t contLen;
+  void *  rpcHandle;
+  void *  rpcAhandle;
+  void *  qhandle;
+  void *  pVnode;
+  int8_t  qtype;
+  int8_t  msgType;
+  SRspRet rspRet;
+  char    pCont[];
+} SVReadMsg;
 
-int32_t vnodeCreate(SMDCreateVnodeMsg *pVnodeCfg);
+typedef struct {
+  int32_t  code;
+  int32_t  processedCount;
+  int32_t  qtype;
+  void *   pVnode;
+  SRpcMsg  rpcMsg;
+  SRspRet  rspRet;
+  char     reserveForSync[24];
+  SWalHead pHead;
+} SVWriteMsg;
+
+// vnodeStatus
+extern char *vnodeStatus[];
+
+// vnodeMain
+int32_t vnodeCreate(SCreateVnodeMsg *pVnodeCfg);
 int32_t vnodeDrop(int32_t vgId);
-int32_t vnodeOpen(int32_t vgId, char *rootDir);
-int32_t vnodeAlter(void *pVnode, SMDCreateVnodeMsg *pVnodeCfg);
+int32_t vnodeOpen(int32_t vgId);
+int32_t vnodeAlter(void *pVnode, SCreateVnodeMsg *pVnodeCfg);
+int32_t vnodeSync(int32_t vgId);
 int32_t vnodeClose(int32_t vgId);
 
-void*   vnodeAcquire(int32_t vgId);        // add refcount
-void*   vnodeAcquireRqueue(int32_t vgId);  // add refCount, get read queue 
-void*   vnodeAcquireWqueue(int32_t vgId);  // add recCount, get write queue
-void    vnodeRelease(void *pVnode);        // dec refCount
+// vnodeMgmt
+int32_t vnodeInitMgmt();
+void    vnodeCleanupMgmt();
+void*   vnodeAcquire(int32_t vgId);
+void    vnodeRelease(void *pVnode);
 void*   vnodeGetWal(void *pVnode);
-
-int32_t vnodeProcessWrite(void *pVnode, int qtype, void *pHead, void *item);
 int32_t vnodeGetVnodeList(int32_t vnodeList[], int32_t *numOfVnodes);
-void    vnodeBuildStatusMsg(void *param);
-void    vnodeConfirmForward(void *param, uint64_t version, int32_t code);
-void    vnodeSetAccess(SDMVgroupAccess *pAccess, int32_t numOfVnodes);
+void    vnodeBuildStatusMsg(void *pStatus);
+void    vnodeSetAccess(SVgroupAccess *pAccess, int32_t numOfVnodes);
 
-int32_t vnodeInitResources();
-void    vnodeCleanupResources();
+// vnodeWrite
+int32_t vnodeWriteToWQueue(void *pVnode, void *pHead, int32_t qtype, void *pRpcMsg);
+void    vnodeFreeFromWQueue(void *pVnode, SVWriteMsg *pWrite);
+int32_t vnodeProcessWrite(void *pVnode, void *pHead, int32_t qtype, void *pRspRet);
 
-int32_t vnodeProcessRead(void *pVnode, SReadMsg *pReadMsg);
+// vnodeSync
+void    vnodeConfirmForward(void *pVnode, uint64_t version, int32_t code, bool force);
+
+// vnodeRead
+int32_t vnodeWriteToRQueue(void *pVnode, void *pCont, int32_t contLen, int8_t qtype, void *rparam);
+void    vnodeFreeFromRQueue(void *pVnode, SVReadMsg *pRead);
+int32_t vnodeProcessRead(void *pVnode, SVReadMsg *pRead);
 
 #ifdef __cplusplus
 }

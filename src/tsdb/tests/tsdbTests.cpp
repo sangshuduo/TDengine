@@ -12,7 +12,7 @@ static double getCurTime() {
 }
 
 typedef struct {
-  TSDB_REPO_T *pRepo;
+  STsdbRepo *pRepo;
   bool       isAscend;
   int        tid;
   uint64_t   uid;
@@ -80,7 +80,7 @@ static int insertData(SInsertInfo *pInfo) {
     pMsg->numOfBlocks = htonl(pMsg->numOfBlocks);
 
     if (tsdbInsertData(pInfo->pRepo, pMsg, NULL) < 0) {
-      taosTFree(pMsg);
+      tfree(pMsg);
       return -1;
     }
   }
@@ -88,7 +88,7 @@ static int insertData(SInsertInfo *pInfo) {
   double etime = getCurTime();
 
   printf("Spent %f seconds to write %d records\n", etime - stime, pInfo->totalRows);
-  taosTFree(pMsg);
+  tfree(pMsg);
   return 0;
 }
 
@@ -143,7 +143,7 @@ TEST(TsdbTest, testInsertSpeed) {
   // Create and open repository
   tsdbSetCfg(&tsdbCfg, 1, 16, 4, -1, -1, -1, -1, -1, -1, -1);
   tsdbCreateRepo(rootDir, &tsdbCfg);
-  TSDB_REPO_T *repo = tsdbOpenRepo(rootDir, NULL);
+  STsdbRepo *repo = tsdbOpenRepo(rootDir, NULL);
   ASSERT_NE(repo, nullptr);
 
   // Create table

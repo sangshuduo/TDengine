@@ -19,12 +19,13 @@
 #ifdef __cplusplus
 extern "C" {
 #endif
+#include "dnodeInt.h"
 
-int32_t dnodeInitMnodeWrite();
-void    dnodeCleanupMnodeWrite();
-int32_t dnodeAllocateMnodeWqueue();
-void    dnodeFreeMnodeWqueue();
-void    dnodeDispatchToMnodeWriteQueue(SRpcMsg *pMsg);
+int32_t dnodeInitMWrite();
+void    dnodeCleanupMWrite();
+int32_t dnodeAllocMWritequeue();
+void    dnodeFreeMWritequeue();
+void    dnodeDispatchToMWriteQueue(SRpcMsg *pMsg);
 
 #ifdef __cplusplus
 }

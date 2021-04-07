@@ -16,6 +16,7 @@
 import sys
 import getopt
 import subprocess
+import time
 from distutils.log import warn as printf
 
 from util.log import *
@@ -33,7 +34,8 @@ if __name__ == "__main__":
     valgrind = 0
     logSql = True
     stop = 0
-    opts, args = getopt.gnu_getopt(sys.argv[1:], 'f:p:m:l:scgh', [
+    restart = False
+    opts, args = getopt.gnu_getopt(sys.argv[1:], 'f:p:m:l:scghr', [
         'file=', 'path=', 'master', 'logSql', 'stop', 'cluster', 'valgrind', 'help'])
     for key, value in opts:
         if key in ['-h', '--help']:
@@ -46,7 +48,11 @@ if __name__ == "__main__":
             tdLog.printNoPrefix('-s stop All dnodes')
             tdLog.printNoPrefix('-c Test Cluster Flag')
             tdLog.printNoPrefix('-g valgrind Test Flag')
+            tdLog.printNoPrefix('-r taosd restart test')
             sys.exit(0)
+
+        if key in ['-r', '--restart']: 
+            restart = True
 
         if key in ['-f', '--file']:
             fileName = value
@@ -105,13 +111,28 @@ if __name__ == "__main__":
 
         tdLog.info('stop All dnodes')
         sys.exit(0)
-
+    
     tdDnodes.init(deployPath)
     tdDnodes.setTestCluster(testCluster)
     tdDnodes.setValgrind(valgrind)
-
     tdDnodes.stopAll()
-    tdDnodes.deploy(1)
+    is_test_framework = 0
+    key_word = 'tdCases.addLinux'
+    try:
+        if key_word in open(fileName).read():
+            is_test_framework = 1
+    except:
+        pass
+    if is_test_framework:
+        moduleName = fileName.replace(".py", "").replace("/", ".")
+        uModule = importlib.import_module(moduleName)
+        try:
+            ucase = uModule.TDTestCase()
+            tdDnodes.deploy(1,ucase.updatecfgDict)
+        except :
+            tdDnodes.deploy(1,{})
+    else:
+        tdDnodes.deploy(1,{})
     tdDnodes.start(1)
 
     if masterIp == "":
@@ -138,5 +159,19 @@ if __name__ == "__main__":
             tdCases.runAllLinux(conn)
         else:
             tdCases.runOneLinux(conn, fileName)
-
+    if restart:
+        if fileName == "all":
+            tdLog.info("not need to query ")
+        else:    
+            sp = fileName.rsplit(".", 1)
+            if len(sp) == 2 and sp[1] == "py":
+                tdDnodes.stopAll()
+                tdDnodes.start(1)
+                time.sleep(1)            
+                conn = taos.connect( host, config=tdDnodes.getSimCfgPath())
+                tdLog.info("Procedures for tdengine deployed in %s" % (host))
+                tdLog.info("query test after taosd restart")
+                tdCases.runOneLinux(conn, sp[0] + "_" + "restart.py")
+            else:
+                tdLog.info("not need to query")
     conn.close()

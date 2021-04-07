@@ -20,14 +20,16 @@
 extern "C" {
 #endif
 
-#ifndef STDERR_FILENO
-#define STDERR_FILENO (2)
+#ifndef WINDOWS
+  #ifndef O_BINARY
+    #define O_BINARY 0
+  #endif
 #endif
 
 #define FD_VALID(x) ((x) > STDERR_FILENO)
 #define FD_INITIALIZER  ((int32_t)-1)
 
-#define WCHAR wchar_t
+// #define WCHAR wchar_t
 
 #define POINTER_SHIFT(p, b) ((void *)((char *)(p) + (b)))
 #define POINTER_DISTANCE(p1, p2) ((char *)(p1) - (char *)(p2)) 
@@ -81,6 +83,20 @@ extern "C" {
     }                            \
   } while (0)
 
+#define DEFAULT_DOUBLE_COMP(x, y)           \
+  do {                                      \
+    if (isnan(x) && isnan(y)) { return 0; } \
+    if (isnan(x)) { return -1; }            \
+    if (isnan(y)) { return 1; }             \
+    if ((x) == (y)) {                       \
+      return 0;                             \
+    } else {                                \
+      return (x) < (y) ? -1 : 1;            \
+    }                                       \
+  } while (0)
+
+#define DEFAULT_FLOAT_COMP(x, y) DEFAULT_DOUBLE_COMP(x, y)
+
 #define ALIGN_NUM(n, align) (((n) + ((align)-1)) & (~((align)-1)))
 
 // align to 8bytes
@@ -90,11 +106,11 @@ extern "C" {
 #ifdef _ISOC11_SOURCE
   #define threadlocal _Thread_local
 #elif defined(__APPLE__)
-  #define threadlocal
+  #define threadlocal __thread
 #elif defined(__GNUC__) && !defined(threadlocal)
   #define threadlocal __thread
 #else
-  #define threadlocal
+  #define threadlocal __declspec( thread )
 #endif
 
 #ifdef __cplusplus

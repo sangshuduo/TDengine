@@ -21,11 +21,11 @@
 #include "httpHandle.h"
 
 bool httpDecodeRequest(HttpContext* pContext) {
-  if (pContext->decodeMethod->decodeFp == NULL) {
+  if (pContext->decodeMethod->fpDecode == NULL) {
     return false;
   }
 
-  return (*pContext->decodeMethod->decodeFp)(pContext);
+  return (*pContext->decodeMethod->fpDecode)(pContext);
 }
 
 /**
@@ -48,7 +48,7 @@ bool httpProcessData(HttpContext* pContext) {
       /*
        * httpCloseContextByApp has been called when parsing the error
        */
-      //httpCloseContextByApp(pContext);
+      // httpCloseContextByApp(pContext);
     } else {
       httpProcessRequest(pContext);
     }

@@ -23,6 +23,8 @@ extern "C" {
 
 typedef struct {
   char     user[TSDB_USER_LEN];
+  char     appName[TSDB_APPNAME_LEN];  // app name that invokes taosc
+  uint32_t pid;                        // pid of app that invokes taosc
   int8_t   killed;
   uint16_t port;
   uint32_t ip;
@@ -40,10 +42,10 @@ typedef struct {
 int32_t mnodeInitProfile();
 void    mnodeCleanupProfile();
 
-SConnObj *mnodeCreateConn(char *user, uint32_t ip, uint16_t port);
+SConnObj *mnodeCreateConn(char *user, uint32_t ip, uint16_t port, int32_t pid, const char* app);
 SConnObj *mnodeAccquireConn(int32_t connId, char *user, uint32_t ip, uint16_t port);
 void      mnodeReleaseConn(SConnObj *pConn);
-int32_t   mnodeSaveQueryStreamList(SConnObj *pConn, SCMHeartBeatMsg *pHBMsg);
+int32_t   mnodeSaveQueryStreamList(SConnObj *pConn, SHeartBeatMsg *pHBMsg);
 
 #ifdef __cplusplus
 }

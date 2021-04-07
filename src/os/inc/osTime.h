@@ -38,14 +38,14 @@ int32_t taosGetTimestampSec();
 static FORCE_INLINE int64_t taosGetTimestampMs() {
   struct timeval systemTime;
   gettimeofday(&systemTime, NULL);
-  return (int64_t)systemTime.tv_sec * 1000L + (uint64_t)systemTime.tv_usec / 1000;
+  return (int64_t)systemTime.tv_sec * 1000L + (int64_t)systemTime.tv_usec / 1000;
 }
 
 //@return timestamp in microsecond
 static FORCE_INLINE int64_t taosGetTimestampUs() {
   struct timeval systemTime;
   gettimeofday(&systemTime, NULL);
-  return (int64_t)systemTime.tv_sec * 1000000L + (uint64_t)systemTime.tv_usec;
+  return (int64_t)systemTime.tv_sec * 1000000L + (int64_t)systemTime.tv_usec;
 }
 
 /*
@@ -71,6 +71,11 @@ typedef struct SInterval {
   int64_t sliding;
   int64_t offset;
 } SInterval;
+
+typedef struct SSessionWindow {
+  int64_t gap;             // gap between two session window(in microseconds)
+  int32_t primaryColId;    // primary timestamp column
+} SSessionWindow;
 
 int64_t taosTimeAdd(int64_t t, int64_t duration, char unit, int32_t precision);
 int64_t taosTimeTruncate(int64_t t, const SInterval* pInterval, int32_t precision);

@@ -1,4 +1,4 @@
-sleep 3000
+sleep 100
 sql connect
 
 $dbPrefix = first_db
@@ -37,6 +37,7 @@ if $data02 != 0 then
 endi 
 print data03 = $data03
 if $data03 != 0.00000 then
+  print expect 0.00000, actual: $data03
   return -1  
 endi    
 if $data04 != 0.000000000 then
@@ -267,3 +268,5 @@ if $data14 != @test2@ then
   print expect test2 , actual: $data14
   return -1
 endi
+
+sql drop table stest

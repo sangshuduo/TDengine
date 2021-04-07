@@ -31,8 +31,42 @@ int tsem_wait(tsem_t* sem) {
 #ifndef TAOS_OS_FUNC_SEMPHONE_PTHREAD
 
 bool    taosCheckPthreadValid(pthread_t thread) { return thread != 0; }
-int64_t taosGetPthreadId() { return (int64_t)pthread_self(); }
+
+int64_t taosGetSelfPthreadId() {
+  static __thread int id = 0;
+  if (id != 0) return id;
+  id = syscall(SYS_gettid);
+  return id;
+}
+
+int64_t taosGetPthreadId(pthread_t thread) { return (int64_t)thread; }
 void    taosResetPthread(pthread_t *thread) { *thread = 0; }
 bool    taosComparePthread(pthread_t first, pthread_t second) { return first == second; }
+int32_t taosGetPId() { return getpid(); }
+
+int32_t taosGetCurrentAPPName(char *name, int32_t* len) {
+  const char* self = "/proc/self/exe";
+  char path[PATH_MAX] = {0};
+
+  if (readlink(self, path, PATH_MAX) <= 0) {
+    return -1;
+  }
+
+  path[PATH_MAX - 1] = 0;
+  char* end = strrchr(path, '/');
+  if (end == NULL) {
+    return -1;
+  }
+
+  ++end;
+
+  strcpy(name, end);
+
+  if (len != NULL) {
+    *len = strlen(name);
+  }
+
+  return 0;
+}
 
 #endif

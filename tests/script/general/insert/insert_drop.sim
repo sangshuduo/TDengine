@@ -4,7 +4,7 @@ system sh/deploy.sh -n dnode1 -i 1
 system sh/cfg.sh -n dnode1 -c walLevel -v 1
 system sh/exec.sh -n dnode1 -s start
 
-sleep 3000
+sleep 2000
 sql connect
 
 $tbNum = 10
@@ -43,7 +43,7 @@ print ====== tables created
 
 print ================== restart server to commit data into disk
 system sh/exec.sh -n dnode1 -s stop -x SIGINT
-sleep 5000
+sleep 3000
 system sh/exec.sh -n dnode1 -s start
 print ================== server restart completed
 
@@ -52,10 +52,10 @@ sleep 1000
 
 sql use $db
 sql drop table tb5
-
+$i = 0
 while $i < 4
-  $tbId = $i + $halfNum
-  $tb = $tbPrefix . $i
+  
+  $tb = tb . $i
   $x = 0
   while $x < $rowNum
     $xs = $x * $delta
@@ -69,7 +69,7 @@ endw
 
 print ================== restart server to commit data into disk
 system sh/exec.sh -n dnode1 -s stop -x SIGINT
-sleep 5000
+sleep 3000
 system sh/exec.sh -n dnode1 -s start
 print ================== server restart completed
 

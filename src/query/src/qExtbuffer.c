@@ -12,13 +12,13 @@
  * You should have received a copy of the GNU Affero General Public License
  * along with this program. If not, see <http://www.gnu.org/licenses/>.
  */
-#include "os.h"
 #include "qExtbuffer.h"
+#include "os.h"
+#include "qAggMain.h"
 #include "queryLog.h"
 #include "taos.h"
 #include "taosdef.h"
 #include "taosmsg.h"
-#include "tsqlfunction.h"
 #include "tulog.h"
 
 #define COLMODEL_GET_VAL(data, schema, allrow, rowId, colId) \
@@ -64,7 +64,7 @@ void* destoryExtMemBuffer(tExtMemBuffer *pMemBuffer) {
   // release flush out info link
   SExtFileInfo *pFileMeta = &pMemBuffer->fileMeta;
   if (pFileMeta->flushoutData.nAllocSize != 0 && pFileMeta->flushoutData.pFlushoutInfo != NULL) {
-    taosTFree(pFileMeta->flushoutData.pFlushoutInfo);
+    tfree(pFileMeta->flushoutData.pFlushoutInfo);
   }
 
   // release all in-memory buffer pages
@@ -72,7 +72,7 @@ void* destoryExtMemBuffer(tExtMemBuffer *pMemBuffer) {
   while (pFilePages != NULL) {
     tFilePagesItem *pTmp = pFilePages;
     pFilePages = pFilePages->pNext;
-    taosTFree(pTmp);
+    tfree(pTmp);
   }
 
   // close temp file
@@ -87,8 +87,8 @@ void* destoryExtMemBuffer(tExtMemBuffer *pMemBuffer) {
 
   destroyColumnModel(pMemBuffer->pColumnModel);
 
-  taosTFree(pMemBuffer->path);
-  taosTFree(pMemBuffer);
+  tfree(pMemBuffer->path);
+  tfree(pMemBuffer);
   
   return NULL;
 }
@@ -275,7 +275,7 @@ int32_t tExtMemBufferFlush(tExtMemBuffer *pMemBuffer) {
     tFilePagesItem *ptmp = first;
     first = first->pNext;
 
-    taosTFree(ptmp);  // release all data in memory buffer
+    tfree(ptmp);  // release all data in memory buffer
   }
 
   fflush(pMemBuffer->file);  // flush to disk
@@ -300,7 +300,7 @@ void tExtMemBufferClear(tExtMemBuffer *pMemBuffer) {
   while (first != NULL) {
     tFilePagesItem *ptmp = first;
     first = first->pNext;
-    taosTFree(ptmp);
+    tfree(ptmp);
   }
 
   pMemBuffer->fileMeta.numOfElemsInFile = 0;
@@ -343,8 +343,8 @@ static FORCE_INLINE int32_t primaryKeyComparator(int64_t f1, int64_t f2, int32_t
   if (f1 == f2) {
     return 0;
   }
-  
-  if (colIdx == 0 && tsOrder == TSDB_ORDER_DESC) {  // primary column desc order
+
+  if (tsOrder == TSDB_ORDER_DESC) {  // primary column desc order
     return (f1 < f2) ? 1 : -1;
   } else {  // asc
     return (f1 < f2) ? -1 : 1;
@@ -362,20 +362,10 @@ static FORCE_INLINE int32_t columnValueAscendingComparator(char *f1, char *f2, i
       return (first < second) ? -1 : 1;
     };
     case TSDB_DATA_TYPE_DOUBLE: {
-      double first  = GET_DOUBLE_VAL(f1);
-      double second = GET_DOUBLE_VAL(f2);
-      if (first == second) {
-        return 0;
-      }
-      return (first < second) ? -1 : 1;
+      DEFAULT_DOUBLE_COMP(GET_DOUBLE_VAL(f1), GET_DOUBLE_VAL(f2));
     };
     case TSDB_DATA_TYPE_FLOAT: {
-      float first  = GET_FLOAT_VAL(f1);
-      float second = GET_FLOAT_VAL(f2);
-      if (first == second) {
-        return 0;
-      }
-      return (first < second) ? -1 : 1;
+      DEFAULT_FLOAT_COMP(GET_FLOAT_VAL(f1), GET_FLOAT_VAL(f2));
     };
     case TSDB_DATA_TYPE_BIGINT: {
       int64_t first = *(int64_t *)f1;
@@ -435,7 +425,7 @@ int32_t compare_a(tOrderDescriptor *pDescriptor, int32_t numOfRows1, int32_t s1,
 
   int32_t cmpCnt = pDescriptor->orderInfo.numOfCols;
   for (int32_t i = 0; i < cmpCnt; ++i) {
-    int32_t colIdx = pDescriptor->orderInfo.pData[i];
+    int32_t colIdx = pDescriptor->orderInfo.colIndex[i];
 
     char *f1 = COLMODEL_GET_VAL(data1, pDescriptor->pColumnModel, numOfRows1, s1, colIdx);
     char *f2 = COLMODEL_GET_VAL(data2, pDescriptor->pColumnModel, numOfRows2, s2, colIdx);
@@ -467,7 +457,7 @@ int32_t compare_d(tOrderDescriptor *pDescriptor, int32_t numOfRows1, int32_t s1,
 
   int32_t cmpCnt = pDescriptor->orderInfo.numOfCols;
   for (int32_t i = 0; i < cmpCnt; ++i) {
-    int32_t colIdx = pDescriptor->orderInfo.pData[i];
+    int32_t colIdx = pDescriptor->orderInfo.colIndex[i];
 
     char *f1 = COLMODEL_GET_VAL(data1, pDescriptor->pColumnModel, numOfRows1, s1, colIdx);
     char *f2 = COLMODEL_GET_VAL(data2, pDescriptor->pColumnModel, numOfRows2, s2, colIdx);
@@ -557,13 +547,13 @@ static void median(tOrderDescriptor *pDescriptor, int32_t numOfRows, int32_t sta
   int32_t midIdx = ((end - start) >> 1) + start;
 
 #if defined(_DEBUG_VIEW)
-  int32_t f = pDescriptor->orderInfo.pData[0];
+  int32_t f = pDescriptor->orderInfo.colIndex[0];
 
   char *midx = COLMODEL_GET_VAL(data, pDescriptor->pColumnModel, numOfRows, midIdx, f);
   char *startx = COLMODEL_GET_VAL(data, pDescriptor->pColumnModel, numOfRows, start, f);
   char *endx = COLMODEL_GET_VAL(data, pDescriptor->pColumnModel, numOfRows, end, f);
 
-  int32_t colIdx = pDescriptor->orderInfo.pData[0];
+  int32_t colIdx = pDescriptor->orderInfo.colIndex[0];
   tSortDataPrint(pDescriptor->pColumnModel->pFields[colIdx].field.type, "before", startx, midx, endx);
 #endif
 
@@ -591,7 +581,7 @@ static void median(tOrderDescriptor *pDescriptor, int32_t numOfRows, int32_t sta
 }
 
 static UNUSED_FUNC void tRowModelDisplay(tOrderDescriptor *pDescriptor, int32_t numOfRows, char *d, int32_t len) {
-  int32_t colIdx = pDescriptor->orderInfo.pData[0];
+  int32_t colIdx = pDescriptor->orderInfo.colIndex[0];
 
   for (int32_t i = 0; i < len; ++i) {
     char *startx = COLMODEL_GET_VAL(d, pDescriptor->pColumnModel, numOfRows, i, colIdx);
@@ -802,7 +792,7 @@ void destroyColumnModel(SColumnModel *pModel) {
     return;
   }
 
-  taosTFree(pModel);
+  tfree(pModel);
 }
 
 static void printBinaryData(char *data, int32_t len) {
@@ -1075,7 +1065,7 @@ tOrderDescriptor *tOrderDesCreate(const int32_t *orderColIdx, int32_t numOfOrder
 
   desc->orderInfo.numOfCols = numOfOrderCols;
   for (int32_t i = 0; i < numOfOrderCols; ++i) {
-    desc->orderInfo.pData[i] = orderColIdx[i];
+    desc->orderInfo.colIndex[i] = orderColIdx[i];
   }
 
   return desc;
@@ -1087,5 +1077,5 @@ void tOrderDescDestroy(tOrderDescriptor *pDesc) {
   }
 
   destroyColumnModel(pDesc->pColumnModel);
-  taosTFree(pDesc);
+  tfree(pDesc);
 }
