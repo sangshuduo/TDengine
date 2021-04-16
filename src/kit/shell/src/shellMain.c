@@ -15,30 +15,35 @@
 
 #include "os.h"
 #include "shell.h"
-#include "tsclient.h"
-#include "tutil.h"
+#include "tconfig.h"
+#include "tnettest.h"
 
-TAOS*     con;
 pthread_t pid;
-int32_t   TIMESTAMP_OUTPUT_LENGTH = 22;
+static tsem_t cancelSem;
 
-// TODO: IMPLEMENT INTERRUPT HANDLER.
-void interruptHandler(int signum) {
+void shellQueryInterruptHandler(int32_t signum, void *sigInfo, void *context) {
+  tsem_post(&cancelSem);
+}
+
+void *cancelHandler(void *arg) {
+  while(1) {
+    if (tsem_wait(&cancelSem) != 0) {
+      taosMsleep(10);
+      continue;
+    }
+
 #ifdef LINUX
-  TAOS_RES* res = taos_use_result(con);
-  taos_stop_query(res);
-  if (res != NULL) {
-    /*
-     * we need to free result in async model, in order to avoid free
-     * results while the master thread is waiting for server response.
-     */
-    tscQueueAsyncFreeResult(res);
-  }
-  result = NULL;
+    int64_t rid = atomic_val_compare_exchange_64(&result, result, 0);
+    SSqlObj* pSql = taosAcquireRef(tscObjRef, rid);
+    taos_stop_query(pSql);
+    taosReleaseRef(tscObjRef, rid);
 #else
-  printf("\nReceive ctrl+c or other signal, quit shell.\n");
-  exit(0);
+    printf("\nReceive ctrl+c or other signal, quit shell.\n");
+    exit(0);
 #endif
+  }
+  
+  return NULL;
 }
 
 int checkVersion() {
@@ -62,7 +67,7 @@ int checkVersion() {
 }
 
 // Global configurations
-struct arguments args = {
+SShellArguments args = {
   .host = NULL,
   .password = NULL,
   .user = NULL,
@@ -70,10 +75,13 @@ struct arguments args = {
   .timezone = NULL,
   .is_raw_time = false,
   .is_use_passwd = false,
+  .dump_config = false,
   .file = "\0",
   .dir = "\0",
   .threadNum = 5,
-  .commands = NULL
+  .commands = NULL,
+  .pktLen = 1000,
+  .netTestRole = NULL
 };
 
 /*
@@ -88,18 +96,47 @@ int main(int argc, char* argv[]) {
 
   shellParseArgument(argc, argv, &args);
 
+  if (args.dump_config) {
+    taosInitGlobalCfg();
+    taosReadGlobalLogCfg();
+
+    if (!taosReadGlobalCfg()) {
+      printf("TDengine read global config failed");
+      exit(EXIT_FAILURE);
+    }
+
+    taosDumpGlobalCfg();
+    exit(0);
+  }
+
+  if (args.netTestRole && args.netTestRole[0] != 0) {
+    if (taos_init()) {
+      printf("Failed to init taos");
+      exit(EXIT_FAILURE);
+    }
+    taosNetTest(args.netTestRole, args.host, args.port, args.pktLen);
+    exit(0);
+  }
+
   /* Initialize the shell */
-  con = shellInit(&args);
+  TAOS* con = shellInit(&args);
   if (con == NULL) {
-    taos_error(con);
     exit(EXIT_FAILURE);
   }
 
-  /* Interupt handler. */
-  struct sigaction act;
-  act.sa_handler = interruptHandler;
-  sigaction(SIGTERM, &act, NULL);
-  sigaction(SIGINT, &act, NULL);
+  if (tsem_init(&cancelSem, 0, 0) != 0) {
+    printf("failed to create cancel semphore\n");
+    exit(EXIT_FAILURE);
+  }
+
+  pthread_t spid;
+  pthread_create(&spid, NULL, cancelHandler, NULL);
+
+  /* Interrupt handler. */
+  taosSetSignal(SIGTERM, shellQueryInterruptHandler);
+  taosSetSignal(SIGINT, shellQueryInterruptHandler);
+  taosSetSignal(SIGHUP, shellQueryInterruptHandler);
+  taosSetSignal(SIGABRT, shellQueryInterruptHandler);
 
   /* Get grant information */
   shellGetGrantInfo(con);
@@ -109,5 +146,4 @@ int main(int argc, char* argv[]) {
     pthread_create(&pid, NULL, shellLoopQuery, con);
     pthread_join(pid, NULL);
   }
-  return 0;
 }

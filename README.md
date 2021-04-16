@@ -1,4 +1,12 @@
+[![Build Status](https://travis-ci.org/taosdata/TDengine.svg?branch=master)](https://travis-ci.org/taosdata/TDengine)
+[![Build status](https://ci.appveyor.com/api/projects/status/kf3pwh2or5afsgl9/branch/master?svg=true)](https://ci.appveyor.com/project/sangshuduo/tdengine-2n8ge/branch/master)
+[![Coverage Status](https://coveralls.io/repos/github/taosdata/TDengine/badge.svg?branch=develop)](https://coveralls.io/github/taosdata/TDengine?branch=develop)
+[![CII Best Practices](https://bestpractices.coreinfrastructure.org/projects/4201/badge)](https://bestpractices.coreinfrastructure.org/projects/4201)
+[![tdengine](https://snapcraft.io//tdengine/badge.svg)](https://snapcraft.io/tdengine)
+
 [![TDengine](TDenginelogo.png)](https://www.taosdata.com)
+
+English | [简体中文](./README-CN.md) 
 
 # What is TDengine？
 
@@ -17,70 +25,178 @@ TDengine is an open-sourced big data platform under [GNU AGPL v3.0](http://www.g
 - **Zero Management, No Learning Curve**: It takes only seconds to download, install, and run it successfully; there are no other dependencies. Automatic partitioning on tables or DBs. Standard SQL is used, with C/C++, Python, JDBC, Go and RESTful connectors.
 
 # Documentation
-For user manual, system design and architecture, engineering blogs, refer to [TDengine Documentation](https://www.taosdata.com/en/documentation/)
+For user manual, system design and architecture, engineering blogs, refer to [TDengine Documentation](https://www.taosdata.com/en/documentation/)(中文版请点击[这里](https://www.taosdata.com/cn/documentation20/))
  for details. The documentation from our website can also be downloaded locally from *documentation/tdenginedocs-en* or *documentation/tdenginedocs-cn*.
 
 # Building
 At the moment, TDengine only supports building and running on Linux systems. You can choose to [install from packages](https://www.taosdata.com/en/getting-started/#Install-from-Package) or from the source code. This quick guide is for installation from the source only.
 
-To build TDengine, use [CMake](https://cmake.org/) 2.8 or higher versions in the project directory. Install CMake for example on Ubuntu:
+To build TDengine, use [CMake](https://cmake.org/) 2.8.12.x or higher versions in the project directory. 
+
+## Install tools
+
+### Ubuntu 16.04 and above & Debian:
+```bash
+sudo apt-get install -y gcc cmake build-essential git
 ```
-sudo apt-get install -y cmake build-essential
+
+### Ubuntu 14.04:
+```bash
+sudo apt-get install -y gcc cmake3 build-essential git binutils-2.26
+export PATH=/usr/lib/binutils-2.26/bin:$PATH
 ```
 
 To compile and package the JDBC driver source code, you should have a Java jdk-8 or higher and Apache Maven 2.7 or higher installed. 
-To install openjdk-8 on Ubuntu:
-```
-sudo apt-get install openjdk-8-jdk
-```
-To install Apache Maven on Ubuntu:
-```
-sudo apt-get install maven
+To install openjdk-8:
+```bash
+sudo apt-get install -y openjdk-8-jdk
 ```
 
-Build TDengine:
-
+To install Apache Maven:
+```bash
+sudo apt-get install -y  maven
 ```
-mkdir build && cd build
+
+### Centos 7:
+```bash
+sudo yum install -y gcc gcc-c++ make cmake git
+```
+
+To install openjdk-8:
+```bash
+sudo yum install -y java-1.8.0-openjdk
+```
+
+To install Apache Maven:
+```bash
+sudo yum install -y maven
+```
+
+### Centos 8 & Fedora:
+```bash
+sudo dnf install -y gcc gcc-c++ make cmake epel-release git
+```
+
+To install openjdk-8:
+```bash
+sudo dnf install -y java-1.8.0-openjdk
+```
+
+To install Apache Maven:
+```bash
+sudo dnf install -y maven
+```
+
+## Get the source codes
+
+First of all, you may clone the source codes from github:
+```bash
+git clone https://github.com/taosdata/TDengine.git
+cd TDengine
+```
+
+The connectors for go & grafana have been moved to separated repositories,
+so you should run this command in the TDengine directory to install them:
+```bash
+git submodule update --init --recursive
+```
+
+## Build TDengine
+
+### On Linux platform
+
+```bash
+mkdir debug && cd debug
 cmake .. && cmake --build .
 ```
 
-if compiling on an aarch64 processor, you need add one parameter:
+TDengine build script can detect the host machine's architecture on X86-64, X86, arm64 and arm32 platform.
+You can also specify CPUTYPE option like aarch64 or aarch32 too if the detection result is not correct:
 
-```cmd
+aarch64:
+```bash
 cmake .. -DCPUTYPE=aarch64 && cmake --build .
 ```
 
-# Quick Run
-To quickly start a TDengine server after building, run the command below in terminal:
+aarch32:
+```bash
+cmake .. -DCPUTYPE=aarch32 && cmake --build .
+```
+
+### On Windows platform
+
+If you use the Visual Studio 2013, please open a command window by executing "cmd.exe".
+Please specify "x86_amd64" for 64 bits Windows or specify "x86" is for 32 bits Windows when you execute vcvarsall.bat.
 ```cmd
-./build/bin/taosd -c test/cfg
+mkdir debug && cd debug
+"C:\Program Files (x86)\Microsoft Visual Studio 12.0\VC\vcvarsall.bat" < x86_amd64 | x86 >
+cmake .. -G "NMake Makefiles"
+nmake
 ```
-In another terminal, use the TDengine shell to connect the server:
+
+If you use the Visual Studio 2019 or 2017:
+
+please open a command window by executing "cmd.exe".
+Please specify "x64" for 64 bits Windows or specify "x86" is for 32 bits Windows when you execute vcvarsall.bat.
+
+```cmd
+mkdir debug && cd debug
+"c:\Program Files (x86)\Microsoft Visual Studio\2019\Community\VC\Auxiliary\Build\vcvarsall.bat" < x64 | x86 >
+cmake .. -G "NMake Makefiles"
+nmake
 ```
-./build/bin/taos -c test/cfg
+
+Or, you can simply open a command window by clicking Windows Start -> "Visual Studio < 2019 | 2017 >" folder -> "x64 Native Tools Command Prompt for VS < 2019 | 2017 >" or "x86 Native Tools Command Prompt for VS < 2019 | 2017 >" depends what architecture your Windows is, then execute commands as follows:
+```cmd
+mkdir debug && cd debug
+cmake .. -G "NMake Makefiles"
+nmake
 ```
-option "-c test/cfg" specifies the system configuration file directory. 
+
+### On Mac OS X platform
+
+Please install XCode command line tools and cmake. Verified with XCode 11.4+ on Catalina and Big Sur.
+
+```shell
+mkdir debug && cd debug
+cmake .. && cmake --build .
+```
 
 # Installing
+
 After building successfully, TDengine can be installed by:
-```cmd
-make install
+```bash
+sudo make install
 ```
-Users can find more information about directories installed on the system in the [directory and files](https://www.taosdata.com/en/documentation/administrator/#Directory-and-Files) section. It should be noted that installing from source code does not configure service management for TDengine.
+
+Users can find more information about directories installed on the system in the [directory and files](https://www.taosdata.com/en/documentation/administrator/#Directory-and-Files) section. Since version 2.0, installing from source code will also configure service management for TDengine.
 Users can also choose to [install from packages](https://www.taosdata.com/en/getting-started/#Install-from-Package) for it.
 
 To start the service after installation, in a terminal, use:
-```cmd
-taosd
+```bash
+sudo systemctl start taosd
 ```
 
 Then users can use the [TDengine shell](https://www.taosdata.com/en/getting-started/#TDengine-Shell) to connect the TDengine server. In a terminal, use:
-```cmd
+```bash
 taos
 ```
 
 If TDengine shell connects the server successfully, welcome messages and version info are printed. Otherwise, an error message is shown.
+
+## Quick Run
+
+If you don't want to run TDengine as a service, you can run it in current shell. For example, to quickly start a TDengine server after building, run the command below in terminal:
+```bash
+./build/bin/taosd -c test/cfg
+```
+
+In another terminal, use the TDengine shell to connect the server:
+```bash
+./build/bin/taos -c test/cfg
+```
+
+option "-c test/cfg" specifies the system configuration file directory. 
 
 # Try TDengine
 It is easy to run SQL commands from TDengine shell which is the same as other SQL databases.
@@ -112,6 +228,11 @@ The TDengine community has also kindly built some of their own connectors! Follo
 
 - [Rust Connector](https://github.com/taosdata/TDengine/tree/master/tests/examples/rust)
 - [.Net Core Connector](https://github.com/maikebing/Maikebing.EntityFrameworkCore.Taos)
+- [Lua Connector](https://github.com/taosdata/TDengine/tree/develop/tests/examples/lua)
+
+# How to run the test cases and how to add a new test case?
+  TDengine's test framework and all test cases are fully open source.
+  Please refer to [this document](tests/How-To-Run-Test-And-How-To-Add-New-Test-Case.md) for how to run test and develop new test case.
 
 # TDengine Roadmap
 - Support event-driven stream computing
@@ -124,3 +245,11 @@ The TDengine community has also kindly built some of their own connectors! Follo
 # Contribute to TDengine
 
 Please follow the [contribution guidelines](CONTRIBUTING.md) to contribute to the project.
+
+# Join TDengine WeChat Group
+
+Add WeChat “tdengine” to join the group，you can communicate with other users.
+
+# [User List](https://github.com/taosdata/TDengine/issues/2432)
+
+If you are using TDengine and feel it helps or you'd like to do some contributions, please add your company to [user list](https://github.com/taosdata/TDengine/issues/2432) and let us know your needs.

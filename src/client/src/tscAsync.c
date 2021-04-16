@@ -14,102 +14,102 @@
  */
 
 #include "os.h"
-
-#include "tlog.h"
-#include "trpc.h"
-#include "tscProfile.h"
-#include "tscSecondaryMerge.h"
-#include "tscUtil.h"
-#include "tsclient.h"
-#include "tsocket.h"
-#include "tscSQLParser.h"
 #include "tutil.h"
+
 #include "tnote.h"
+#include "trpc.h"
+#include "tscLog.h"
+#include "tscSubquery.h"
+#include "tscUtil.h"
+#include "tsched.h"
+#include "tschemautil.h"
+#include "tsclient.h"
 
-void tscProcessFetchRow(SSchedMsg *pMsg);
-void tscProcessAsyncRetrieve(void *param, TAOS_RES *tres, int numOfRows);
-static void tscProcessAsyncRetrieveNextVnode(void *param, TAOS_RES *tres, int numOfRows);
-static void tscProcessAsyncContinueRetrieve(void *param, TAOS_RES *tres, int numOfRows);
-
-static void tscProcessAsyncRetrieveImpl(void *param, TAOS_RES *tres, int numOfRows, void (*fp)());
+static void tscAsyncQueryRowsForNextVnode(void *param, TAOS_RES *tres, int numOfRows);
 
 /*
- * proxy function to perform sequentially query&retrieve operation.
- * If sql queries upon metric and two-stage merge procedure is not needed,
- * it will sequentially query&retrieve data for all vnodes in pCmd->pMetricMeta
+ * Proxy function to perform sequentially query&retrieve operation.
+ * If sql queries upon a super table and two-stage merge procedure is not involved (when employ the projection
+ * query), it will sequentially query&retrieve data for all vnodes
  */
-static void tscProcessAsyncFetchRowsProxy(void *param, TAOS_RES *tres, int numOfRows);
+static void tscAsyncFetchRowsProxy(void *param, TAOS_RES *tres, int numOfRows);
 
-// TODO return the correct error code to client in tscQueueAsyncError
-void taos_query_a(TAOS *taos, const char *sqlstr, void (*fp)(void *, TAOS_RES *, int), void *param) {
-  STscObj *pObj = (STscObj *)taos;
-  if (pObj == NULL || pObj->signature != pObj) {
-    tscError("bug!!! pObj:%p", pObj);
-    globalCode = TSDB_CODE_DISCONNECTED;
-    tscQueueAsyncError(fp, param);
-    return;
-  }
-
-  int32_t sqlLen = strlen(sqlstr);
-  if (sqlLen > tsMaxSQLStringLen) {
-    tscError("sql string too long");
-    tscQueueAsyncError(fp, param);
-    return;
-  }
-
-  taosNotePrintTsc(sqlstr);
-
-  SSqlObj *pSql = (SSqlObj *)calloc(1, sizeof(SSqlObj));
-  if (pSql == NULL) {
-    tscError("failed to malloc sqlObj");
-    tscQueueAsyncError(fp, param);
-    return;
-  }
-
-  SSqlCmd *pCmd = &pSql->cmd;
-  SSqlRes *pRes = &pSql->res;
+void doAsyncQuery(STscObj* pObj, SSqlObj* pSql, __async_cb_func_t fp, void* param, const char* sqlstr, size_t sqlLen) {
+  SSqlCmd* pCmd = &pSql->cmd;
 
   pSql->signature = pSql;
-  pSql->pTscObj = pObj;
-  pSql->fp = fp;
-  pSql->param = param;
+  pSql->param     = param;
+  pSql->pTscObj   = pObj;
+  pSql->parseRetry= 0;
+  pSql->maxRetry  = TSDB_MAX_REPLICA;
+  pSql->fp        = fp;
+  pSql->fetchFp   = fp;
 
-  if (TSDB_CODE_SUCCESS != tscAllocPayload(pCmd, TSDB_DEFAULT_PAYLOAD_SIZE)) {
-    tscError("failed to malloc payload");
-    tfree(pSql);
-    tscQueueAsyncError(fp, param);
-    return;
-  }
+  registerSqlObj(pSql);
 
-
-  pSql->sqlstr = malloc(sqlLen + 1);
+  pSql->sqlstr = calloc(1, sqlLen + 1);
   if (pSql->sqlstr == NULL) {
     tscError("%p failed to malloc sql string buffer", pSql);
-    tscQueueAsyncError(fp, param);
-    free(pCmd->payload);
-    free(pSql);
+    pSql->res.code = TSDB_CODE_TSC_OUT_OF_MEMORY;
+    tscAsyncResultOnError(pSql);
     return;
   }
 
-  pRes->qhandle = 0;
-  pRes->numOfRows = 1;
+  strntolower(pSql->sqlstr, sqlstr, (int32_t)sqlLen);
 
-  strtolower(pSql->sqlstr, sqlstr);
-  tscDump("%p pObj:%p, Async SQL: %s", pSql, pObj, pSql->sqlstr);
+  tscDebugL("%p SQL: %s", pSql, pSql->sqlstr);
+  pCmd->curSql = pSql->sqlstr;
 
-  int32_t code = tsParseSql(pSql, pObj->acctId, pObj->db, true);
-  if (code == TSDB_CODE_ACTION_IN_PROGRESS) return;
-
+  int32_t code = tsParseSql(pSql, true);
+  if (code == TSDB_CODE_TSC_ACTION_IN_PROGRESS) return;
+  
   if (code != TSDB_CODE_SUCCESS) {
-    pSql->res.code = (uint8_t)code;
-    tscQueueAsyncRes(pSql);
+    pSql->res.code = code;
+    tscAsyncResultOnError(pSql);
     return;
   }
 
   tscDoQuery(pSql);
 }
 
-static void tscProcessAsyncFetchRowsProxy(void *param, TAOS_RES *tres, int numOfRows) {
+// TODO return the correct error code to client in tscQueueAsyncError
+void taos_query_a(TAOS *taos, const char *sqlstr, __async_cb_func_t fp, void *param) {
+  taos_query_ra(taos, sqlstr, fp, param);
+}
+
+TAOS_RES * taos_query_ra(TAOS *taos, const char *sqlstr, __async_cb_func_t fp, void *param) {
+  STscObj *pObj = (STscObj *)taos;
+  if (pObj == NULL || pObj->signature != pObj) {
+    tscError("bug!!! pObj:%p", pObj);
+    terrno = TSDB_CODE_TSC_DISCONNECTED;
+    tscQueueAsyncError(fp, param, TSDB_CODE_TSC_DISCONNECTED);
+    return NULL;
+  }
+  
+  int32_t sqlLen = (int32_t)strlen(sqlstr);
+  if (sqlLen > tsMaxSQLStringLen) {
+    tscError("sql string exceeds max length:%d", tsMaxSQLStringLen);
+    terrno = TSDB_CODE_TSC_EXCEED_SQL_LIMIT;
+    tscQueueAsyncError(fp, param, terrno);
+    return NULL;
+  }
+  
+  nPrintTsc("%s", sqlstr);
+  
+  SSqlObj *pSql = (SSqlObj *)calloc(1, sizeof(SSqlObj));
+  if (pSql == NULL) {
+    tscError("failed to malloc sqlObj");
+    tscQueueAsyncError(fp, param, TSDB_CODE_TSC_OUT_OF_MEMORY);
+    return NULL;
+  }
+  
+  doAsyncQuery(pObj, pSql, fp, param, sqlstr, sqlLen);
+
+  return pSql;
+}
+
+
+static void tscAsyncFetchRowsProxy(void *param, TAOS_RES *tres, int numOfRows) {
   if (tres == NULL) {
     return;
   }
@@ -118,43 +118,39 @@ static void tscProcessAsyncFetchRowsProxy(void *param, TAOS_RES *tres, int numOf
   SSqlRes *pRes = &pSql->res;
   SSqlCmd *pCmd = &pSql->cmd;
 
-  // sequentially retrieve data from remain vnodes first, query vnode specified by vnodeIdx
-  if (numOfRows == 0 && tscProjectionQueryOnMetric(pCmd)) {
-    // vnode is denoted by vnodeIdx, continue to query vnode specified by vnodeIdx
-    SMeterMetaInfo* pMeterMetaInfo = tscGetMeterMetaInfo(pCmd, 0);
-    assert(pMeterMetaInfo->vnodeIndex >= 0);
+  if (numOfRows == 0) {
+    if (hasMoreVnodesToTry(pSql)) { // sequentially retrieve data from remain vnodes.
+      tscTryQueryNextVnode(pSql, tscAsyncQueryRowsForNextVnode);
+    } else {
+      /*
+       * all available virtual node has been checked already, now we need to check
+       * for the next subclause queries
+       */
+      if (pCmd->clauseIndex < pCmd->numOfClause - 1) {
+        tscTryQueryNextClause(pSql, tscAsyncQueryRowsForNextVnode);
+        return;
+      }
 
-    /* reach the maximum number of output rows, abort */
-    if (pCmd->globalLimit > 0 && pRes->numOfTotal >= pCmd->globalLimit) {
-      (*pSql->fetchFp)(param, tres, 0);
-      return;
+      /*
+       * 1. has reach the limitation
+       * 2. no remain virtual nodes to be retrieved anymore
+       */
+      (*pSql->fetchFp)(param, pSql, 0);
     }
-
-    /* update the limit value according to current retrieval results */
-    pCmd->limit.limit = pCmd->globalLimit - pRes->numOfTotal;
-    pCmd->limit.offset = pRes->offset;
-
-    if ((++(pMeterMetaInfo->vnodeIndex)) < pMeterMetaInfo->pMetricMeta->numOfVnodes) {
-      tscTrace("%p retrieve data from next vnode:%d", pSql, pMeterMetaInfo->vnodeIndex);
-
-      pSql->cmd.command = TSDB_SQL_SELECT;  // reset flag to launch query first.
-
-      tscResetForNextRetrieve(pRes);
-      pSql->fp = tscProcessAsyncRetrieveNextVnode;
-      tscProcessSql(pSql);
-      return;
-    }
-  } else { // localreducer has handle this situation
-    if (pCmd->command != TSDB_SQL_RETRIEVE_METRIC) {
-      pRes->numOfTotal += pRes->numOfRows;
-    }
+    
+    return;
+  }
+  
+  // local merge has handle this situation during super table non-projection query.
+  if (pCmd->command != TSDB_SQL_RETRIEVE_LOCALMERGE) {
+    pRes->numOfClauseTotal += pRes->numOfRows;
   }
 
   (*pSql->fetchFp)(param, tres, numOfRows);
 }
 
 // actual continue retrieve function with user-specified callback function
-static void tscProcessAsyncRetrieveImpl(void *param, TAOS_RES *tres, int numOfRows, void (*fp)()) {
+static void tscProcessAsyncRetrieveImpl(void *param, TAOS_RES *tres, int numOfRows, __async_cb_func_t fp) {
   SSqlObj *pSql = (SSqlObj *)tres;
   if (pSql == NULL) {  // error
     tscError("sql object is NULL");
@@ -164,399 +160,352 @@ static void tscProcessAsyncRetrieveImpl(void *param, TAOS_RES *tres, int numOfRo
   SSqlCmd *pCmd = &pSql->cmd;
   SSqlRes *pRes = &pSql->res;
 
-  if (pRes->qhandle == 0 || numOfRows != 0) {
-    if (pRes->qhandle == 0) {
+  if ((pRes->qId == 0 || numOfRows != 0) && pCmd->command < TSDB_SQL_LOCAL) {
+    if (pRes->qId == 0 && numOfRows != 0) {
       tscError("qhandle is NULL");
     } else {
       pRes->code = numOfRows;
     }
 
-    tscQueueAsyncError(pSql->fetchFp, param);
+    tscAsyncResultOnError(pSql);
     return;
   }
 
   pSql->fp = fp;
-  if (pCmd->command != TSDB_SQL_RETRIEVE_METRIC && pCmd->command < TSDB_SQL_LOCAL) {
+  if (pCmd->command != TSDB_SQL_RETRIEVE_LOCALMERGE && pCmd->command < TSDB_SQL_LOCAL) {
     pCmd->command = (pCmd->command > TSDB_SQL_MGMT) ? TSDB_SQL_RETRIEVE : TSDB_SQL_FETCH;
   }
-  tscProcessSql(pSql);
+
+  if (pCmd->command == TSDB_SQL_TABLE_JOIN_RETRIEVE) {
+    tscFetchDatablockForSubquery(pSql);
+  } else {
+    tscProcessSql(pSql);
+  }
 }
 
 /*
- * retrieve callback for fetch rows proxy. It serves as the callback function of querying vnode
+ * retrieve callback for fetch rows proxy.
+ * The below two functions both serve as the callback function of query virtual node.
+ * query callback first, and then followed by retrieve callback
  */
-static void tscProcessAsyncRetrieveNextVnode(void *param, TAOS_RES *tres, int numOfRows) {
-  tscProcessAsyncRetrieveImpl(param, tres, numOfRows, tscProcessAsyncFetchRowsProxy);
+static void tscAsyncQueryRowsForNextVnode(void *param, TAOS_RES *tres, int numOfRows) {
+  // query completed, continue to retrieve
+  tscProcessAsyncRetrieveImpl(param, tres, numOfRows, tscAsyncFetchRowsProxy);
 }
 
-static void tscProcessAsyncContinueRetrieve(void *param, TAOS_RES *tres, int numOfRows) {
-  tscProcessAsyncRetrieveImpl(param, tres, numOfRows, tscProcessAsyncRetrieve);
-}
-
-void taos_fetch_rows_a(TAOS_RES *taosa, void (*fp)(void *, TAOS_RES *, int), void *param) {
+void taos_fetch_rows_a(TAOS_RES *taosa, __async_cb_func_t fp, void *param) {
   SSqlObj *pSql = (SSqlObj *)taosa;
   if (pSql == NULL || pSql->signature != pSql) {
     tscError("sql object is NULL");
-    globalCode = TSDB_CODE_DISCONNECTED;
-    tscQueueAsyncError(fp, param);
+    tscQueueAsyncError(fp, param, TSDB_CODE_TSC_DISCONNECTED);
     return;
   }
 
   SSqlRes *pRes = &pSql->res;
   SSqlCmd *pCmd = &pSql->cmd;
-
-  if (pRes->qhandle == 0) {
-    tscError("qhandle is NULL");
-    tscQueueAsyncError(fp, param);
-    return;
-  }
 
   // user-defined callback function is stored in fetchFp
   pSql->fetchFp = fp;
-  pSql->fp = tscProcessAsyncFetchRowsProxy;
+  pSql->fp = tscAsyncFetchRowsProxy;
+
+  if (pRes->qId == 0) {
+    tscError("qhandle is NULL");
+    pRes->code = TSDB_CODE_TSC_INVALID_QHANDLE;
+    pSql->param = param;
+
+    tscAsyncResultOnError(pSql);
+    return;
+  }
 
   pSql->param = param;
   tscResetForNextRetrieve(pRes);
+  
+  // handle the sub queries of join query
+  if (pCmd->command == TSDB_SQL_TABLE_JOIN_RETRIEVE) {
+    tscFetchDatablockForSubquery(pSql);
+  } else if (pRes->completed) {
+    if(pCmd->command == TSDB_SQL_FETCH || (pCmd->command >= TSDB_SQL_SERV_STATUS && pCmd->command <= TSDB_SQL_CURRENT_USER)) {
+      if (hasMoreVnodesToTry(pSql)) {  // sequentially retrieve data from remain vnodes.
+        tscTryQueryNextVnode(pSql, tscAsyncQueryRowsForNextVnode);
+      } else {
+        /*
+         * all available virtual nodes in current clause has been checked already, now try the
+         * next one in the following union subclause
+         */
+        if (pCmd->clauseIndex < pCmd->numOfClause - 1) {
+          tscTryQueryNextClause(pSql, tscAsyncQueryRowsForNextVnode);
+          return;
+        }
 
-  if (pCmd->command != TSDB_SQL_RETRIEVE_METRIC && pCmd->command < TSDB_SQL_LOCAL) {
-    pCmd->command = (pCmd->command > TSDB_SQL_MGMT) ? TSDB_SQL_RETRIEVE : TSDB_SQL_FETCH;
-  }
-
-  tscProcessSql(pSql);
-}
-
-void taos_fetch_row_a(TAOS_RES *taosa, void (*fp)(void *, TAOS_RES *, TAOS_ROW), void *param) {
-  SSqlObj *pSql = (SSqlObj *)taosa;
-  if (pSql == NULL || pSql->signature != pSql) {
-    tscError("sql object is NULL");
-    globalCode = TSDB_CODE_DISCONNECTED;
-    tscQueueAsyncError(fp, param);
-    return;
-  }
-
-  SSqlRes *pRes = &pSql->res;
-  SSqlCmd *pCmd = &pSql->cmd;
-
-  if (pRes->qhandle == 0) {
-    tscError("qhandle is NULL");
-    tscQueueAsyncError(fp, param);
-    return;
-  }
-
-  pSql->fetchFp = fp;
-  pSql->param = param;
-
-  if (pRes->row >= pRes->numOfRows) {
-    tscResetForNextRetrieve(pRes);
-    pSql->fp = tscProcessAsyncRetrieve;
-    pCmd->command = (pCmd->command > TSDB_SQL_MGMT) ? TSDB_SQL_RETRIEVE : TSDB_SQL_FETCH;
-    tscProcessSql(pSql);
-  } else {
-    SSchedMsg schedMsg;
-    schedMsg.fp = tscProcessFetchRow;
-    schedMsg.ahandle = pSql;
-    schedMsg.thandle = pRes->tsrow;
-    schedMsg.msg = NULL;
-    taosScheduleTask(tscQhandle, &schedMsg);
-  }
-}
-
-void tscProcessAsyncRetrieve(void *param, TAOS_RES *tres, int numOfRows) {
-  SSqlObj *pSql = (SSqlObj *)tres;
-  SSqlRes *pRes = &pSql->res;
-  SSqlCmd *pCmd = &pSql->cmd;
-
-  if (numOfRows == 0) {
-    // sequentially retrieve data from remain vnodes.
-    if (tscProjectionQueryOnMetric(pCmd)) {
-      /*
-       * vnode is denoted by vnodeIdx, continue to query vnode specified by vnodeIdx till all vnode have been retrieved
-       */
-      SMeterMetaInfo* pMeterMetaInfo = tscGetMeterMetaInfo(pCmd, 0);
-      assert(pMeterMetaInfo->vnodeIndex >= 0);
-
-      /* reach the maximum number of output rows, abort */
-      if (pCmd->globalLimit > 0 && pRes->numOfTotal >= pCmd->globalLimit) {
-        (*pSql->fetchFp)(pSql->param, pSql, NULL);
-        return;
+        /*
+         * 1. has reach the limitation
+         * 2. no remain virtual nodes to be retrieved anymore
+         */
+        (*pSql->fetchFp)(param, pSql, 0);
       }
 
-      /* update the limit value according to current retrieval results */
-      pCmd->limit.limit = pCmd->globalLimit - pRes->numOfTotal;
-
-      if ((++pMeterMetaInfo->vnodeIndex) <= pMeterMetaInfo->pMetricMeta->numOfVnodes) {
-        pSql->cmd.command = TSDB_SQL_SELECT;  // reset flag to launch query first.
-
-        tscResetForNextRetrieve(pRes);
-        pSql->fp = tscProcessAsyncContinueRetrieve;
-        tscProcessSql(pSql);
-        return;
-      }
+      return;
+    } else if (pCmd->command == TSDB_SQL_RETRIEVE || pCmd->command == TSDB_SQL_RETRIEVE_LOCALMERGE) {
+      // in case of show command, return no data
+      (*pSql->fetchFp)(param, pSql, 0);
     } else {
-      (*pSql->fetchFp)(pSql->param, pSql, NULL);
+      assert(0);
     }
-  } else {
-    for (int i = 0; i < pCmd->numOfCols; ++i)
-      pRes->tsrow[i] = TSC_GET_RESPTR_BASE(pRes, pCmd, i, pCmd->order) + pRes->bytes[i] * pRes->row;
-    pRes->row++;
-
-    (*pSql->fetchFp)(pSql->param, pSql, pSql->res.tsrow);
+  } else { // current query is not completed, continue retrieve from node
+    if (pCmd->command != TSDB_SQL_RETRIEVE_LOCALMERGE && pCmd->command < TSDB_SQL_LOCAL) {
+      pCmd->command = (pCmd->command > TSDB_SQL_MGMT) ? TSDB_SQL_RETRIEVE : TSDB_SQL_FETCH;
+    }
+  
+    tscProcessSql(pSql);
   }
 }
 
-void tscProcessFetchRow(SSchedMsg *pMsg) {
-  SSqlObj *pSql = (SSqlObj *)pMsg->ahandle;
-  SSqlRes *pRes = &pSql->res;
-  SSqlCmd *pCmd = &pSql->cmd;
-
-  for (int i = 0; i < pCmd->numOfCols; ++i)
-    pRes->tsrow[i] = TSC_GET_RESPTR_BASE(pRes, pCmd, i, pCmd->order) + pRes->bytes[i] * pRes->row;
-  pRes->row++;
-
-  (*pSql->fetchFp)(pSql->param, pSql, pRes->tsrow);
-}
-
-void tscProcessAsyncRes(SSchedMsg *pMsg) {
-  SSqlObj *pSql = (SSqlObj *)pMsg->ahandle;
-  STscObj *pTscObj = pSql->pTscObj;
-  SSqlCmd *pCmd = &pSql->cmd;
-  SSqlRes *pRes = &pSql->res;
-
-  void *taosres = pSql;
-
-  // pCmd may be released, so cache pCmd->command
-  int cmd = pCmd->command;
-  int code = pRes->code ? -pRes->code : pRes->numOfRows;
-
-  if ((tscKeepConn[cmd] == 0 || (code != TSDB_CODE_SUCCESS && code != TSDB_CODE_ACTION_IN_PROGRESS)) &&
-      pSql->pStream == NULL) {
-    if (pSql->thandle) taosAddConnIntoCache(tscConnCache, pSql->thandle, pSql->ip, pSql->vnode, pTscObj->user);
-
-    pSql->thandle = NULL;
-  }
-
-  // in case of async insert, restore the user specified callback function
-  bool shouldFree = tscShouldFreeAsyncSqlObj(pSql);
-
-  if (cmd == TSDB_SQL_INSERT) {
-    assert(pSql->fp != NULL);
-    pSql->fp = pSql->fetchFp;
-  }
-
-  (*pSql->fp)(pSql->param, taosres, code);
-
-  if (shouldFree) {
-    tscFreeSqlObj(pSql);
-    tscTrace("%p Async sql is automatically freed in async res", pSql);
-  }
-}
-
-void tscProcessAsyncError(SSchedMsg *pMsg) {
+// this function will be executed by queue task threads, so the terrno is not valid
+static void tscProcessAsyncError(SSchedMsg *pMsg) {
   void (*fp)() = pMsg->ahandle;
-
-  (*fp)(pMsg->thandle, NULL, -1);
+  terrno = *(int32_t*) pMsg->msg;
+  tfree(pMsg->msg);
+  (*fp)(pMsg->thandle, NULL, terrno);
 }
 
-void tscQueueAsyncError(void(*fp), void *param) {
-  SSchedMsg schedMsg;
+void tscQueueAsyncError(void(*fp), void *param, int32_t code) {
+  int32_t* c = malloc(sizeof(int32_t));
+  *c = code;
+  
+  SSchedMsg schedMsg = {0};
   schedMsg.fp = tscProcessAsyncError;
   schedMsg.ahandle = fp;
   schedMsg.thandle = param;
-  schedMsg.msg = NULL;
+  schedMsg.msg = c;
   taosScheduleTask(tscQhandle, &schedMsg);
 }
 
-void tscQueueAsyncRes(SSqlObj *pSql) {
+static void tscAsyncResultCallback(SSchedMsg *pMsg) {
+  SSqlObj* pSql = (SSqlObj*)taosAcquireRef(tscObjRef, (int64_t)pMsg->ahandle);
   if (pSql == NULL || pSql->signature != pSql) {
-    tscTrace("%p SqlObj is freed, not add into queue async res", pSql);
+    tscDebug("%p SqlObj is freed, not add into queue async res", pSql);
     return;
-  } else {
-    tscTrace("%p add into queued async res, code:%d", pSql, pSql->res.code);
   }
 
-  SSchedMsg schedMsg;
-  schedMsg.fp = tscProcessAsyncRes;
-  schedMsg.ahandle = pSql;
-  schedMsg.thandle = (void *)1;
-  schedMsg.msg = NULL;
-  taosScheduleTask(tscQhandle, &schedMsg);
-}
+  assert(pSql->res.code != TSDB_CODE_SUCCESS);
+  tscError("%p invoke user specified function due to error occurred, code:%s", pSql, tstrerror(pSql->res.code));
 
-void tscProcessAsyncFree(SSchedMsg *pMsg) {
-  SSqlObj *pSql = (SSqlObj *)pMsg->ahandle;
-  tscTrace("%p sql is freed", pSql);
-  taos_free_result(pSql);
-}
-
-void tscQueueAsyncFreeResult(SSqlObj *pSql) {
-  tscTrace("%p sqlObj put in queue to async free", pSql);
-
-  SSchedMsg schedMsg;
-  schedMsg.fp = tscProcessAsyncFree;
-  schedMsg.ahandle = pSql;
-  schedMsg.thandle = (void *)1;
-  schedMsg.msg = NULL;
-  taosScheduleTask(tscQhandle, &schedMsg);
-}
-
-void tscAsyncInsertMultiVnodesProxy(void *param, TAOS_RES *tres, int numOfRows) {
-  SSqlObj *pSql = (SSqlObj *)param;
-  SSqlCmd *pCmd = &pSql->cmd;
-  int32_t  code = TSDB_CODE_SUCCESS;
-
-  assert(!pCmd->isInsertFromFile && pSql->signature == pSql);
-  
-  SMeterMetaInfo* pMeterMetaInfo = tscGetMeterMetaInfo(pCmd, 0);
-  assert(pCmd->numOfTables == 1);
-  
-  SDataBlockList *pDataBlocks = pCmd->pDataBlocks;
-  if (pDataBlocks == NULL || pMeterMetaInfo->vnodeIndex >= pDataBlocks->nSize) {
-    // restore user defined fp
-    pSql->fp = pSql->fetchFp;
-    tscTrace("%p Async insertion completed, destroy data block list", pSql);
-
-    // release data block data
-    pCmd->pDataBlocks = tscDestroyBlockArrayList(pCmd->pDataBlocks);
-
-    // all data has been sent to vnode, call user function
-    (*pSql->fp)(pSql->param, tres, numOfRows);
-  } else {
-    do {
-      code = tscCopyDataBlockToPayload(pSql, pDataBlocks->pData[pMeterMetaInfo->vnodeIndex++]);
-      if (code != TSDB_CODE_SUCCESS) {
-        tscTrace("%p prepare submit data block failed in async insertion, vnodeIdx:%d, total:%d, code:%d",
-                 pSql, pMeterMetaInfo->vnodeIndex - 1, pDataBlocks->nSize, code);
-      }
-
-    } while (code != TSDB_CODE_SUCCESS && pMeterMetaInfo->vnodeIndex < pDataBlocks->nSize);
-
-    // build submit msg may fail
-    if (code == TSDB_CODE_SUCCESS) {
-      tscTrace("%p async insertion, vnodeIdx:%d, total:%d", pSql, pMeterMetaInfo->vnodeIndex - 1, pDataBlocks->nSize);
-      tscProcessSql(pSql);
-    }
+  SSqlRes *pRes = &pSql->res;
+  if (pSql->fp == NULL || pSql->fetchFp == NULL){
+    taosReleaseRef(tscObjRef, pSql->self);
+    return;
   }
+
+  pSql->fp = pSql->fetchFp;
+  (*pSql->fp)(pSql->param, pSql, pRes->code);
+  taosReleaseRef(tscObjRef, pSql->self);
+}
+
+void tscAsyncResultOnError(SSqlObj* pSql) {
+  SSchedMsg schedMsg = {0};
+  schedMsg.fp = tscAsyncResultCallback;
+  schedMsg.ahandle = (void *)pSql->self;
+  schedMsg.thandle = (void *)1;
+  schedMsg.msg = 0;
+  taosScheduleTask(tscQhandle, &schedMsg);
 }
 
 int tscSendMsgToServer(SSqlObj *pSql);
 
-void tscMeterMetaCallBack(void *param, TAOS_RES *res, int code) {
-  SSqlObj *pSql = (SSqlObj *)param;
-  if (pSql == NULL || pSql->signature != pSql) return;
+static int32_t updateMetaBeforeRetryQuery(SSqlObj* pSql, STableMetaInfo* pTableMetaInfo, SQueryInfo* pQueryInfo) {
+  // handle the invalid table error code for super table.
+  // update the pExpr info, colList info, number of table columns
+  // TODO Re-parse this sql and issue the corresponding subquery as an alternative for this case.
+  if (pSql->retryReason == TSDB_CODE_TDB_INVALID_TABLE_ID) {
+    int32_t numOfExprs = (int32_t) tscSqlExprNumOfExprs(pQueryInfo);
+    int32_t numOfCols = tscGetNumOfColumns(pTableMetaInfo->pTableMeta);
+    int32_t numOfTags = tscGetNumOfTags(pTableMetaInfo->pTableMeta);
 
-  STscObj *pObj = pSql->pTscObj;
-  SSqlCmd *pCmd = &pSql->cmd;
-  SSqlRes *pRes = &pSql->res;
+    SSchema *pSchema = tscGetTableSchema(pTableMetaInfo->pTableMeta);
+    for (int32_t i = 0; i < numOfExprs; ++i) {
+      SSqlExpr *pExpr = tscSqlExprGet(pQueryInfo, i);
+      pExpr->uid = pTableMetaInfo->pTableMeta->id.uid;
 
-  if (pSql->fp == NULL) {
-    tscError("%p callBack is NULL!!!", pSql);
-    return;
-  }
+      if (pExpr->colInfo.colIndex >= 0) {
+        int32_t index = pExpr->colInfo.colIndex;
 
-  if (pSql->fp == (void *)1) {
-    pSql->fp = NULL;
+        if ((TSDB_COL_IS_NORMAL_COL(pExpr->colInfo.flag) && index >= numOfCols) ||
+            (TSDB_COL_IS_TAG(pExpr->colInfo.flag) && (index < numOfCols || index >= (numOfCols + numOfTags)))) {
+          return pSql->retryReason;
+        }
 
-    if (code != 0) {
-      code = abs(code);
-      pRes->code = code;
-      tscTrace("%p failed to renew meterMeta", pSql);
-      tsem_post(&pSql->rspSem);
-    } else {
-      tscTrace("%p renew meterMeta successfully, command:%d, code:%d, thandle:%p, retry:%d",
-          pSql, pSql->cmd.command, pSql->res.code, pSql->thandle, pSql->retry);
-
-      assert(tscGetMeterMetaInfo(&pSql->cmd, 0)->pMeterMeta == NULL);
-      tscGetMeterMeta(pSql, tscGetMeterMetaInfo(&pSql->cmd, 0)->name, 0);
-
-      code = tscSendMsgToServer(pSql);
-      if (code != 0) {
-        pRes->code = code;
-        tsem_post(&pSql->rspSem);
+        if ((pSchema[pExpr->colInfo.colIndex].colId != pExpr->colInfo.colId) &&
+            strcasecmp(pExpr->colInfo.name, pSchema[pExpr->colInfo.colIndex].name) != 0) {
+          return pSql->retryReason;
+        }
       }
     }
 
-    return;
+    // validate the table columns information
+    for (int32_t i = 0; i < taosArrayGetSize(pQueryInfo->colList); ++i) {
+      SColumn *pCol = taosArrayGetP(pQueryInfo->colList, i);
+      if (pCol->colIndex.columnIndex >= numOfCols) {
+        return pSql->retryReason;
+      }
+    }
+  } else {
+    // do nothing
   }
 
-  if (code != 0) {
-    pRes->code = (uint8_t)abs(code);
-    tscQueueAsyncRes(pSql);
-    return;
+  return TSDB_CODE_SUCCESS;
+}
+
+void tscTableMetaCallBack(void *param, TAOS_RES *res, int code) {
+  SSqlObj* pSql = (SSqlObj*)taosAcquireRef(tscObjRef, (int64_t)param);
+  if (pSql == NULL) return;
+
+  assert(pSql->signature == pSql && (int64_t)param == pSql->self);
+
+  SSqlCmd *pCmd = &pSql->cmd;
+  SSqlRes *pRes = &pSql->res;
+  pRes->code = code;
+
+  SSqlObj *sub = (SSqlObj*) res;
+  const char* msg = (sub->cmd.command == TSDB_SQL_STABLEVGROUP)? "vgroup-list":"table-meta";
+  if (code != TSDB_CODE_SUCCESS) {
+    tscError("%p get %s failed, code:%s", pSql, msg, tstrerror(code));
+    goto _error;
   }
 
+  tscDebug("%p get %s successfully", pSql, msg);
   if (pSql->pStream == NULL) {
-    // check if it is a sub-query of metric query first, if true, enter another routine
-    if ((pSql->cmd.type & TSDB_QUERY_TYPE_STABLE_SUBQUERY) == TSDB_QUERY_TYPE_STABLE_SUBQUERY) {
-      SMeterMetaInfo* pMeterMetaInfo = tscGetMeterMetaInfo(pCmd, 0);
-      assert(pMeterMetaInfo->pMeterMeta->numOfTags != 0 && pMeterMetaInfo->vnodeIndex >= 0 && pSql->param != NULL);
+    SQueryInfo* pQueryInfo = tscGetQueryInfoDetail(pCmd, pCmd->clauseIndex);
 
-      SRetrieveSupport *trs = (SRetrieveSupport *)pSql->param;
-      SSqlObj *         pParObj = trs->pParentSqlObj;
-      assert(pParObj->signature == pParObj && trs->subqueryIndex == pMeterMetaInfo->vnodeIndex &&
-          pMeterMetaInfo->pMeterMeta->numOfTags != 0);
+    // check if it is a sub-query of super table query first, if true, enter another routine
+    if (TSDB_QUERY_HAS_TYPE(pQueryInfo->type, (TSDB_QUERY_TYPE_STABLE_SUBQUERY|TSDB_QUERY_TYPE_SUBQUERY|TSDB_QUERY_TYPE_TAG_FILTER_QUERY))) {
+      tscDebug("%p update local table meta, continue to process sql and send the corresponding query", pSql);
 
-      tscTrace("%p get metricMeta during metric query successfully", pSql);
+      STableMetaInfo *pTableMetaInfo = tscGetMetaInfo(pQueryInfo, 0);
 
-      code = tscGetMeterMeta(pSql, tscGetMeterMetaInfo(&pSql->cmd, 0)->name, 0);
-      pRes->code = code;
+      code = tscGetTableMeta(pSql, pTableMetaInfo);
+      assert(code == TSDB_CODE_TSC_ACTION_IN_PROGRESS || code == TSDB_CODE_SUCCESS);
 
-      if (code == TSDB_CODE_ACTION_IN_PROGRESS) return;
+      if (code == TSDB_CODE_TSC_ACTION_IN_PROGRESS) {
+        taosReleaseRef(tscObjRef, pSql->self);
+        return;
+      }
 
-      code = tscGetMetricMeta(pSql);
-      pRes->code = code;
+      assert((tscGetNumOfTags(pTableMetaInfo->pTableMeta) != 0));
+      code = updateMetaBeforeRetryQuery(pSql, pTableMetaInfo, pQueryInfo);
+      if (code != TSDB_CODE_SUCCESS) {
+        goto _error;
+      }
 
-      if (code == TSDB_CODE_ACTION_IN_PROGRESS) return;
-    } else {  // normal async query continues
-      if (pCmd->isParseFinish) {
-        tscTrace("%p resend data to vnode in metermeta callback since sql has been parsed completed", pSql);
-        
-        SMeterMetaInfo* pMeterMetaInfo = tscGetMeterMetaInfo(pCmd, 0);
-        code = tscGetMeterMeta(pSql, pMeterMetaInfo->name, 0);
-        assert(code == TSDB_CODE_SUCCESS);
-      
-        if (pMeterMetaInfo->pMeterMeta) {
-          code = tscSendMsgToServer(pSql);
-          if (code == TSDB_CODE_SUCCESS) return;
+      // tscProcessSql can add error into async res
+      tscProcessSql(pSql);
+      taosReleaseRef(tscObjRef, pSql->self);
+      return;
+    } else {  // continue to process normal async query
+      if (pCmd->parseFinished) {
+        tscDebug("%p update local table meta, continue to process sql and send corresponding query", pSql);
+
+        STableMetaInfo* pTableMetaInfo = tscGetTableMetaInfoFromCmd(pCmd, pCmd->clauseIndex, 0);
+        code = tscGetTableMeta(pSql, pTableMetaInfo);
+
+        assert(code == TSDB_CODE_TSC_ACTION_IN_PROGRESS || code == TSDB_CODE_SUCCESS);
+        if (code == TSDB_CODE_TSC_ACTION_IN_PROGRESS) {
+          taosReleaseRef(tscObjRef, pSql->self);
+          return;
         }
+
+        assert(pCmd->command != TSDB_SQL_INSERT);
+
+        if (pCmd->command == TSDB_SQL_SELECT) {
+          tscDebug("%p redo parse sql string and proceed", pSql);
+          pCmd->parseFinished = false;
+          tscResetSqlCmd(pCmd, true);
+
+          code = tsParseSql(pSql, true);
+          if (code == TSDB_CODE_TSC_ACTION_IN_PROGRESS) {
+            taosReleaseRef(tscObjRef, pSql->self);
+            return;
+          } else if (code != TSDB_CODE_SUCCESS) {
+            goto _error;
+          }
+
+          tscProcessSql(pSql);
+        } else {  // in all other cases, simple retry
+          tscProcessSql(pSql);
+        }
+
+        taosReleaseRef(tscObjRef, pSql->self);
+        return;
       } else {
-        code = tsParseSql(pSql, pObj->acctId, pObj->db, false);
-        if (code == TSDB_CODE_ACTION_IN_PROGRESS) return;
+        tscDebug("%p continue parse sql after get table meta", pSql);
+
+        code = tsParseSql(pSql, false);
+        if (code == TSDB_CODE_TSC_ACTION_IN_PROGRESS) {
+          taosReleaseRef(tscObjRef, pSql->self);
+          return;
+        } else if (code != TSDB_CODE_SUCCESS) {
+          goto _error;
+        }
+
+        if (pCmd->insertType == TSDB_QUERY_TYPE_STMT_INSERT) {
+          STableMetaInfo* pTableMetaInfo = tscGetTableMetaInfoFromCmd(pCmd, pCmd->clauseIndex, 0);
+          code = tscGetTableMeta(pSql, pTableMetaInfo);
+          if (code == TSDB_CODE_TSC_ACTION_IN_PROGRESS) {
+            taosReleaseRef(tscObjRef, pSql->self);
+            return;
+          } else {
+            assert(code == TSDB_CODE_SUCCESS);      
+          }
+
+          (*pSql->fp)(pSql->param, pSql, code);
+          taosReleaseRef(tscObjRef, pSql->self);
+          return;
+        }
+
+        // proceed to invoke the tscDoQuery();
       }
     }
 
   } else {  // stream computing
-    SMeterMetaInfo *pMeterMetaInfo = tscGetMeterMetaInfo(pCmd, 0);
-    code = tscGetMeterMeta(pSql, pMeterMetaInfo->name, 0);
-    pRes->code = code;
+    STableMetaInfo *pTableMetaInfo = tscGetTableMetaInfoFromCmd(pCmd, pCmd->clauseIndex, 0);
 
-    if (code == TSDB_CODE_ACTION_IN_PROGRESS) return;
-
-    pMeterMetaInfo = tscGetMeterMetaInfo(pCmd, 0);
-    if (code == TSDB_CODE_SUCCESS && UTIL_METER_IS_METRIC(pMeterMetaInfo)) {
-      code = tscGetMetricMeta(pSql);
-      pRes->code = code;
-
-      if (code == TSDB_CODE_ACTION_IN_PROGRESS) return;
+    code = tscGetTableMeta(pSql, pTableMetaInfo);
+    if (code == TSDB_CODE_TSC_ACTION_IN_PROGRESS) {
+      taosReleaseRef(tscObjRef, pSql->self);
+      return;
+    } else if (code != TSDB_CODE_SUCCESS) {
+      goto _error;
     }
-  }
 
-  if (code != 0) {
-    tscQueueAsyncRes(pSql);
+    if (UTIL_TABLE_IS_SUPER_TABLE(pTableMetaInfo)) {
+      code = tscGetSTableVgroupInfo(pSql, pCmd->clauseIndex);
+      if (code == TSDB_CODE_TSC_ACTION_IN_PROGRESS) {
+        taosReleaseRef(tscObjRef, pSql->self);
+        return;
+      } else if (code != TSDB_CODE_SUCCESS) {
+        goto _error;
+      }
+    }
+
+    tscDebug("%p stream:%p meta is updated, start new query, command:%d", pSql, pSql->pStream, pSql->cmd.command);
+    if (!pSql->cmd.parseFinished) {
+      tsParseSql(pSql, false);
+    }
+
+    (*pSql->fp)(pSql->param, pSql, code);
+    
+    taosReleaseRef(tscObjRef, pSql->self);
+
     return;
   }
 
-  if (pSql->pStream) {
-    tscTrace("%p stream:%p meta is updated, start new query, command:%d", pSql, pSql->pStream, pSql->cmd.command);
-    /*
-     * NOTE:
-     * transfer the sql function for metric query before get meter/metric meta,
-     * since in callback functions, only tscProcessSql(pStream->pSql) is executed!
-     */
-    tscTansformSQLFunctionForMetricQuery(&pSql->cmd);
-    tscIncStreamExecutionCount(pSql->pStream);
-  } else {
-    tscTrace("%p get meterMeta/metricMeta successfully", pSql);
-  }
-
   tscDoQuery(pSql);
+
+  taosReleaseRef(tscObjRef, pSql->self);
+  
+  return;
+
+  _error:
+  pRes->code = code;
+  tscAsyncResultOnError(pSql);
+  taosReleaseRef(tscObjRef, pSql->self);
 }

@@ -1,10 +1,12 @@
-# from .cursor import TDengineCursor
 from .cursor import TDengineCursor
+from .subscription import TDengineSubscription
 from .cinterface import CTaosInterface
+
 
 class TDengineConnection(object):
     """ TDengine connection object
     """
+
     def __init__(self, *args, **kwargs):
         self._conn = None
         self._host = None
@@ -29,7 +31,7 @@ class TDengineConnection(object):
         # password
         if 'password' in kwargs:
             self._password = kwargs['password']
-        
+
         # database
         if 'database' in kwargs:
             self._database = kwargs['database']
@@ -43,12 +45,26 @@ class TDengineConnection(object):
             self._config = kwargs['config']
 
         self._chandle = CTaosInterface(self._config)
-        self._conn = self._chandle.connect(self._host, self._user, self._password, self._database, self._port)
+        self._conn = self._chandle.connect(
+            self._host,
+            self._user,
+            self._password,
+            self._database,
+            self._port)
 
     def close(self):
         """Close current connection.
         """
         return CTaosInterface.close(self._conn)
+
+    def subscribe(self, restart, topic, sql, interval):
+        """Create a subscription.
+        """
+        if self._conn is None:
+            return None
+        sub = CTaosInterface.subscribe(
+            self._conn, restart, topic, sql, interval)
+        return TDengineSubscription(sub)
 
     def cursor(self):
         """Return a new Cursor object using the connection.
@@ -70,9 +86,8 @@ class TDengineConnection(object):
     def clear_result_set(self):
         """Clear unused result set on this connection.
         """
-        result = self._chandle.useResult(self._conn)[0]
-        if result:
-            self._chandle.freeResult(result)
+        pass
+
 
 if __name__ == "__main__":
     conn = TDengineConnection(host='192.168.1.107')

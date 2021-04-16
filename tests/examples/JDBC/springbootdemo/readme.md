@@ -14,7 +14,7 @@ spring.datasource.druid.max-active=5
 # max wait time for get connection, ms
 spring.datasource.druid.max-wait=60000
 
-spring.datasource.druid.validation-query=describe log.dn
+spring.datasource.druid.validation-query=select server_status();
 spring.datasource.druid.validation-query-timeout=5000
 spring.datasource.druid.test-on-borrow=false
 spring.datasource.druid.test-on-return=false
@@ -47,7 +47,7 @@ logging.level.com.taosdata.jdbc.springbootdemo.dao=debug
 * 插入单条记录
 ```xml
 <!-- weatherMapper.xml -->
-    <insert id="insert" parameterType="com.taosdata.jdbc.springbootdemo.domain.Weather" >
+    <insert id="insert" parameterType="Weather" >
         insert into test.weather (ts, temperature, humidity) values (now, #{temperature,jdbcType=INTEGER}, #{humidity,jdbcType=FLOAT})
     </insert>
 ```
@@ -67,9 +67,9 @@ logging.level.com.taosdata.jdbc.springbootdemo.dao=debug
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE mapper PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN" "http://mybatis.org/dtd/mybatis-3-mapper.dtd">
 
-<mapper namespace="com.taosdata.jdbc.springbootdemo.dao.WeatherMapper">
+<mapper namespace="WeatherMapper">
 
-    <resultMap id="BaseResultMap" type="com.taosdata.jdbc.springbootdemo.domain.Weather">
+    <resultMap id="BaseResultMap" type="Weather">
         <id column="ts" jdbcType="TIMESTAMP" property="ts" />
         <result column="temperature" jdbcType="INTEGER" property="temperature" />
         <result column="humidity" jdbcType="FLOAT" property="humidity" />

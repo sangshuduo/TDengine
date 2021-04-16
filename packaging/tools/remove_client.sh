@@ -15,7 +15,12 @@ log_link_dir="/usr/local/taos/log"
 cfg_link_dir="/usr/local/taos/cfg"
 bin_link_dir="/usr/bin"
 lib_link_dir="/usr/lib"
+lib64_link_dir="/usr/lib64"
 inc_link_dir="/usr/include"
+
+
+# v1.5 jar dir
+#v15_java_app_dir="/usr/local/lib/taos"
 
 csudo=""
 if command -v sudo > /dev/null; then
@@ -32,13 +37,17 @@ function kill_client() {
 function clean_bin() {
     # Remove link
     ${csudo} rm -f ${bin_link_dir}/taos      || :
-    ${csudo} rm -f ${bin_link_dir}/taosump  || :
+    ${csudo} rm -f ${bin_link_dir}/taosdemo  || :
+    ${csudo} rm -f ${bin_link_dir}/taosdump  || :
     ${csudo} rm -f ${bin_link_dir}/rmtaos    || :
+    ${csudo} rm -f ${bin_link_dir}/set_core  || :
 }
 
 function clean_lib() {
     # Remove link
     ${csudo} rm -f ${lib_link_dir}/libtaos.*      || :
+    ${csudo} rm -f ${lib64_link_dir}/libtaos.*    || :
+    #${csudo} rm -rf ${v15_java_app_dir}           || :
 }
 
 function clean_header() {
@@ -73,3 +82,4 @@ clean_config
 ${csudo} rm -rf ${install_main_dir}
 
 echo -e "${GREEN}TDengine client is removed successfully!${NC}"
+echo 

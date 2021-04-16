@@ -9,26 +9,38 @@
 *
 * ****************************************************************/
 
-#include "shell.h"
 #include <assert.h>
 #include <regex.h>
 #include <stdio.h>
+#include "os.h"
+#include "shell.h"
+#include "taos.h"
 #include "shellCommand.h"
+
+extern char configDir[];
+
+void printVersion() {
+  printf("version: %s\n", version);
+}
 
 void printHelp() {
   char indent[10] = "        ";
-  printf("taos shell is used to test the TDEngine database\n");
+  printf("taos shell is used to test the TDengine database\n");
 
   printf("%s%s\n", indent, "-h");
-  printf("%s%s%s\n", indent, indent, "TDEngine server IP address to connect. The default host is localhost.");
+  printf("%s%s%s\n", indent, indent, "TDengine server FQDN to connect. The default host is localhost.");
   printf("%s%s\n", indent, "-p");
   printf("%s%s%s\n", indent, indent, "The password to use when connecting to the server.");
   printf("%s%s\n", indent, "-P");
   printf("%s%s%s\n", indent, indent, "The TCP/IP port number to use for the connection");
   printf("%s%s\n", indent, "-u");
-  printf("%s%s%s\n", indent, indent, "The TDEngine user name to use when connecting to the server.");
+  printf("%s%s%s\n", indent, indent, "The user name to use when connecting to the server.");
+  printf("%s%s\n", indent, "-A");
+  printf("%s%s%s\n", indent, indent, "The user auth to use when connecting to the server.");
   printf("%s%s\n", indent, "-c");
   printf("%s%s%s\n", indent, indent, "Configuration directory.");
+  printf("%s%s\n", indent, "-C");
+  printf("%s%s%s\n", indent, indent, "Dump configuration.");
   printf("%s%s\n", indent, "-s");
   printf("%s%s%s\n", indent, indent, "Commands to run without enter the shell.");
   printf("%s%s\n", indent, "-r");
@@ -39,11 +51,17 @@ void printHelp() {
   printf("%s%s%s\n", indent, indent, "Database to use when connecting to the server.");
   printf("%s%s\n", indent, "-t");
   printf("%s%s%s\n", indent, indent, "Time zone of the shell, default is local.");
+  printf("%s%s\n", indent, "-n");
+  printf("%s%s%s\n", indent, indent, "Net role when network connectivity test, default is startup, options: client|server|rpc|startup|sync.");
+  printf("%s%s\n", indent, "-l");
+  printf("%s%s%s\n", indent, indent, "Packet length used for net test, default is 1000 bytes.");
+  printf("%s%s\n", indent, "-V");
+  printf("%s%s%s\n", indent, indent, "Print program version.");
 
   exit(EXIT_SUCCESS);
 }
 
-void shellParseArgument(int argc, char *argv[], struct arguments *arguments) {
+void shellParseArgument(int argc, char *argv[], SShellArguments *arguments) {
   for (int i = 1; i < argc; i++) {
     // for host
     if (strcmp(argv[i], "-h") == 0) {
@@ -57,11 +75,14 @@ void shellParseArgument(int argc, char *argv[], struct arguments *arguments) {
     // for password
     else if (strcmp(argv[i], "-p") == 0) {
       arguments->is_use_passwd = true;
+      if (i < argc - 1 && argv[i + 1][0] != '-') {
+        arguments->password = argv[++i];
+      }
     }
     // for management port
     else if (strcmp(argv[i], "-P") == 0) {
       if (i < argc - 1) {
-        tsMgmtShellPort = atoi(argv[++i]);
+        arguments->port = atoi(argv[++i]);
       } else {
         fprintf(stderr, "option -P requires an argument\n");
         exit(EXIT_FAILURE);
@@ -75,13 +96,27 @@ void shellParseArgument(int argc, char *argv[], struct arguments *arguments) {
         fprintf(stderr, "option -u requires an argument\n");
         exit(EXIT_FAILURE);
       }
-    } else if (strcmp(argv[i], "-c") == 0) {
+    } else if (strcmp(argv[i], "-A") == 0) {
       if (i < argc - 1) {
-        strcpy(configDir, argv[++i]);
+        arguments->auth = argv[++i];
+      } else {
+        fprintf(stderr, "option -A requires an argument\n");
+        exit(EXIT_FAILURE);
+      }
+    } else if (strcmp(argv[i], "-c") == 0) {
+      if (i < argc - 1) {   
+        char *tmp = argv[++i];
+        if (strlen(tmp) >= TSDB_FILENAME_LEN) {
+          fprintf(stderr, "config file path: %s overflow max len %d\n", tmp, TSDB_FILENAME_LEN - 1);
+          exit(EXIT_FAILURE);
+        }
+        strcpy(configDir, tmp);
       } else {
         fprintf(stderr, "Option -c requires an argument\n");
         exit(EXIT_FAILURE);
       }
+    } else if (strcmp(argv[i], "-C") == 0) {
+      arguments->dump_config = true;
     } else if (strcmp(argv[i], "-s") == 0) {
       if (i < argc - 1) {
         arguments->commands = argv[++i];
@@ -119,10 +154,30 @@ void shellParseArgument(int argc, char *argv[], struct arguments *arguments) {
         exit(EXIT_FAILURE);
       }
     }
+    else if (strcmp(argv[i], "-n") == 0) {
+      if (i < argc - 1) {
+        arguments->netTestRole = argv[++i];
+      } else {
+        fprintf(stderr, "option -n requires an argument\n");
+        exit(EXIT_FAILURE);
+      }
+    }
+    else if (strcmp(argv[i], "-l") == 0) {
+      if (i < argc - 1) {
+        arguments->pktLen = atoi(argv[++i]);
+      } else {
+        fprintf(stderr, "option -l requires an argument\n");
+        exit(EXIT_FAILURE);
+      }
+    }
+    else if (strcmp(argv[i], "-V") == 0) {
+      printVersion();
+      exit(EXIT_SUCCESS);
+    }
     // For temperory command TODO
     else if (strcmp(argv[i], "--help") == 0) {
       printHelp();
-      exit(EXIT_FAILURE);
+      exit(EXIT_SUCCESS);
     } else {
       fprintf(stderr, "wrong options\n");
       printHelp();
@@ -166,7 +221,7 @@ void insertChar(Command *cmd, char c) {
   cmd->command[cmd->cursorOffset++] = c;
 }
 
-void shellReadCommand(TAOS *con, char command[]) {
+int32_t shellReadCommand(TAOS *con, char command[]) {
   Command cmd;
   memset(&cmd, 0, sizeof(cmd));
   cmd.buffer = (char *)calloc(1, MAX_COMMAND_SIZE);
@@ -186,7 +241,7 @@ void shellReadCommand(TAOS *con, char command[]) {
           cmd.buffer = NULL;
           free(cmd.command);
           cmd.command = NULL;
-          return;
+          return 0;
         } else {
           shellPrintContinuePrompt();
           updateBuffer(&cmd);
@@ -196,6 +251,8 @@ void shellReadCommand(TAOS *con, char command[]) {
         insertChar(&cmd, c);
     }
   }
+
+  return 0;
 }
 
 void *shellLoopQuery(void *arg) {
@@ -203,46 +260,22 @@ void *shellLoopQuery(void *arg) {
   char *command = malloc(MAX_COMMAND_SIZE);
   if (command == NULL) return NULL;
 
-  while (1) {
+  int32_t err = 0;
+  
+  do {
     memset(command, 0, MAX_COMMAND_SIZE);
     shellPrintPrompt();
 
     // Read command from shell.
-    shellReadCommand(con, command);
-
-    // Run the command
-    shellRunCommand(con, command);
-  }
+    err = shellReadCommand(con, command);
+    if (err) {
+      break;
+    }    
+  } while (shellRunCommand(con, command) == 0);
 
   return NULL;
 }
 
-void shellPrintNChar(char *str, int width, bool printMode) {
-  int     col_left = width;
-  wchar_t wc;
-  while (col_left > 0) {
-    if (*str == '\0') break;
-    char *tstr = str;
-    int   byte_width = mbtowc(&wc, tstr, MB_CUR_MAX);
-    int   col_width = byte_width;
-    if (col_left < col_width) break;
-    printf("%lc", wc);
-    str += byte_width;
-    col_left -= col_width;
-  }
-
-  while (col_left > 0) {
-    printf(" ");
-    col_left--;
-  }
-  
-  if (!printMode) {
-    printf("|");
-  } else {
-    printf("\n");
-  }
-}
-
-void get_history_path(char *history) { sprintf(history, "%s/%s", ".", HISTORY_FILE); }
+void get_history_path(char *history) { sprintf(history, "C:/TDengine/%s", HISTORY_FILE); }
 
 void exitShell() { exit(EXIT_SUCCESS); }

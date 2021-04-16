@@ -12,18 +12,18 @@
  * You should have received a copy of the GNU Affero General Public License
  * along with this program. If not, see <http://www.gnu.org/licenses/>.
  */
+#include "os.h"
 
 #include "taos.h"
 #include "tsclient.h"
-#include "tscSQLParser.h"
 #include "tscUtil.h"
 #include "ttimer.h"
 #include "taosmsg.h"
 #include "tstrbuild.h"
+#include "tscLog.h"
+#include "tscSubquery.h"
 
-
-int tsParseInsertSql(SSqlObj *pSql, char *sql, char *acct, char *db);
-int taos_query_imp(STscObj* pObj, SSqlObj* pSql);
+int tsParseInsertSql(SSqlObj *pSql);
 
 ////////////////////////////////////////////////////////////////////////////////
 // functions for normal statement preparation
@@ -43,10 +43,6 @@ typedef struct SNormalStmt {
   tVariant*        params;
 } SNormalStmt;
 
-//typedef struct SInsertStmt {
-//
-//} SInsertStmt;
-
 typedef struct STscStmt {
   bool isInsert;
   STscObj* taos;
@@ -54,14 +50,13 @@ typedef struct STscStmt {
   SNormalStmt normal;
 } STscStmt;
 
-
 static int normalStmtAddPart(SNormalStmt* stmt, bool isParam, char* str, uint32_t len) {
   uint16_t size = stmt->numParts + 1;
   if (size > stmt->sizeParts) {
     size *= 2;
     void* tmp = realloc(stmt->parts, sizeof(SNormalStmtPart) * size);
     if (tmp == NULL) {
-      return TSDB_CODE_CLI_OUT_OF_MEMORY;
+      return TSDB_CODE_TSC_OUT_OF_MEMORY;
     }
     stmt->sizeParts = size;
     stmt->parts = (SNormalStmtPart*)tmp;
@@ -89,35 +84,35 @@ static int normalStmtBindParam(STscStmt* stmt, TAOS_BIND* bind) {
     var->nLen = 0;
     if (tb->is_null != NULL && *(tb->is_null)) {
       var->nType = TSDB_DATA_TYPE_NULL;
-      var->i64Key = 0;
+      var->i64 = 0;
       continue;
     }
 
     var->nType = tb->buffer_type;
     switch (tb->buffer_type) {
       case TSDB_DATA_TYPE_NULL:
-        var->i64Key = 0;
+        var->i64 = 0;
         break;
 
       case TSDB_DATA_TYPE_BOOL:
-        var->i64Key = (*(int8_t*)tb->buffer) ? 1 : 0;
+        var->i64 = (*(int8_t*)tb->buffer) ? 1 : 0;
         break;
 
       case TSDB_DATA_TYPE_TINYINT:
-        var->i64Key = *(int8_t*)tb->buffer;
+        var->i64 = *(int8_t*)tb->buffer;
         break;
 
       case TSDB_DATA_TYPE_SMALLINT:
-        var->i64Key = *(int16_t*)tb->buffer;
+        var->i64 = *(int16_t*)tb->buffer;
         break;
 
       case TSDB_DATA_TYPE_INT:
-        var->i64Key = *(int32_t*)tb->buffer;
+        var->i64 = *(int32_t*)tb->buffer;
         break;
 
       case TSDB_DATA_TYPE_BIGINT:
       case TSDB_DATA_TYPE_TIMESTAMP:
-        var->i64Key = *(int64_t*)tb->buffer;
+        var->i64 = *(int64_t*)tb->buffer;
         break;
 
       case TSDB_DATA_TYPE_FLOAT:
@@ -132,7 +127,7 @@ static int normalStmtBindParam(STscStmt* stmt, TAOS_BIND* bind) {
       case TSDB_DATA_TYPE_NCHAR:
         var->pz = (char*)malloc((*tb->length) + 1);
         if (var->pz == NULL) {
-          return TSDB_CODE_CLI_OUT_OF_MEMORY;
+          return TSDB_CODE_TSC_OUT_OF_MEMORY;
         }
         memcpy(var->pz, tb->buffer, (*tb->length));
         var->pz[*tb->length] = 0;
@@ -140,11 +135,11 @@ static int normalStmtBindParam(STscStmt* stmt, TAOS_BIND* bind) {
         break;
 
       default:
-        tscTrace("param %d: type mismatch or invalid", i);
-        return TSDB_CODE_INVALID_VALUE;
+        tscDebug("param %d: type mismatch or invalid", i);
+        return TSDB_CODE_TSC_INVALID_VALUE;
     }
   }
-  
+
   return TSDB_CODE_SUCCESS;
 }
 
@@ -155,7 +150,7 @@ static int normalStmtPrepare(STscStmt* stmt) {
   uint32_t i = 0, start = 0;
 
   while (sql[i] != 0) {
-    SSQLToken token = {0};
+    SStrToken token = {0};
     token.n = tSQLGetToken(sql + i, &token.type);
 
     if (token.type == TK_QUESTION) {
@@ -186,7 +181,7 @@ static int normalStmtPrepare(STscStmt* stmt) {
   if (normal->numParams > 0) {
     normal->params = calloc(normal->numParams, sizeof(tVariant));
     if (normal->params == NULL) {
-      return TSDB_CODE_CLI_OUT_OF_MEMORY;
+      return TSDB_CODE_TSC_OUT_OF_MEMORY;
     }
   }
 
@@ -195,7 +190,7 @@ static int normalStmtPrepare(STscStmt* stmt) {
 
 static char* normalStmtBuildSql(STscStmt* stmt) {
   SNormalStmt* normal = &stmt->normal;
-  SStringBuilder sb = {0};
+  SStringBuilder sb; memset(&sb, 0, sizeof(sb));
 
   if (taosStringBuilderSetJmp(&sb) != 0) {
     taosStringBuilderDestroy(&sb);
@@ -218,13 +213,13 @@ static char* normalStmtBuildSql(STscStmt* stmt) {
     case TSDB_DATA_TYPE_NULL:
       taosStringBuilderAppendNull(&sb);
       break;
-    
+
     case TSDB_DATA_TYPE_BOOL:
     case TSDB_DATA_TYPE_TINYINT:
     case TSDB_DATA_TYPE_SMALLINT:
     case TSDB_DATA_TYPE_INT:
     case TSDB_DATA_TYPE_BIGINT:
-      taosStringBuilderAppendInteger(&sb, var->i64Key);
+      taosStringBuilderAppendInteger(&sb, var->i64);
       break;
 
     case TSDB_DATA_TYPE_FLOAT:
@@ -260,15 +255,395 @@ static char* normalStmtBuildSql(STscStmt* stmt) {
 
 ////////////////////////////////////////////////////////////////////////////////
 // functions for insertion statement preparation
-
 static int doBindParam(char* data, SParamInfo* param, TAOS_BIND* bind) {
   if (bind->is_null != NULL && *(bind->is_null)) {
-    setNull(data, param->type, param->bytes);
+    setNull(data + param->offset, param->type, param->bytes);
     return TSDB_CODE_SUCCESS;
   }
 
+  if (0) {
+    // allow user bind param data with different type
+    union {
+      int8_t          v1;
+      int16_t         v2;
+      int32_t         v4;
+      int64_t         v8;
+      float           f4;
+      double          f8;
+      unsigned char   buf[32*1024];
+    } u;
+    switch (param->type) {
+      case TSDB_DATA_TYPE_BOOL: {
+        switch (bind->buffer_type) {
+          case TSDB_DATA_TYPE_BOOL: {
+            u.v1 = *(int8_t*)bind->buffer;
+            if (u.v1==0 || u.v1==1) break;
+          } break;
+          case TSDB_DATA_TYPE_TINYINT: {
+            u.v1 = *(int8_t*)bind->buffer;
+            if (u.v1==0 || u.v1==1) break;
+          } break;
+          case TSDB_DATA_TYPE_SMALLINT: {
+            u.v1 = (int8_t)*(int16_t*)bind->buffer;
+            if (u.v1==0 || u.v1==1) break;
+          } break;
+          case TSDB_DATA_TYPE_INT: {
+            u.v1 = (int8_t)*(int32_t*)bind->buffer;
+            if (u.v1==0 || u.v1==1) break;
+          } break;
+          case TSDB_DATA_TYPE_BIGINT: {
+            u.v1 = (int8_t)*(int64_t*)bind->buffer;
+            if (u.v1==0 || u.v1==1) break;
+          } break;
+          case TSDB_DATA_TYPE_BINARY:
+          case TSDB_DATA_TYPE_NCHAR: {
+            // "0", "1" convertible
+            if (strncmp((const char*)bind->buffer, "0", *bind->length)==0) {
+              u.v1 = 0;
+              break;
+            }
+            if (strncmp((const char*)bind->buffer, "1", *bind->length)==0) {
+              u.v1 = 1;
+              break;
+            }
+            return TSDB_CODE_TSC_INVALID_VALUE;
+          }
+          case TSDB_DATA_TYPE_FLOAT:
+          case TSDB_DATA_TYPE_DOUBLE:
+          case TSDB_DATA_TYPE_TIMESTAMP:
+          default: {
+            return TSDB_CODE_TSC_INVALID_VALUE;
+          }
+        }
+        memcpy(data + param->offset, &u.v1, sizeof(u.v1));
+        return TSDB_CODE_SUCCESS;
+      } break;
+      case TSDB_DATA_TYPE_TINYINT: {
+        switch (bind->buffer_type) {
+          case TSDB_DATA_TYPE_BOOL:
+          case TSDB_DATA_TYPE_TINYINT: {
+            int8_t v = *(int8_t*)bind->buffer;
+            u.v1 = v;
+            if (v >= SCHAR_MIN && v <= SCHAR_MAX) break;
+          } break;
+          case TSDB_DATA_TYPE_SMALLINT: {
+            int16_t v = *(int16_t*)bind->buffer;
+            u.v1 = (int8_t)v;
+            if (v >= SCHAR_MIN && v <= SCHAR_MAX) break;
+            return TSDB_CODE_TSC_INVALID_VALUE;
+          }
+          case TSDB_DATA_TYPE_INT: {
+            int32_t v = *(int32_t*)bind->buffer;
+            u.v1 = (int8_t)v;
+            if (v >= SCHAR_MIN && v <= SCHAR_MAX) break;
+            return TSDB_CODE_TSC_INVALID_VALUE;
+          }
+          case TSDB_DATA_TYPE_BIGINT: {
+            int64_t v = *(int64_t*)bind->buffer;
+            u.v1 = (int8_t)v;
+            if (v >= SCHAR_MIN && v <= SCHAR_MAX) break;
+            return TSDB_CODE_TSC_INVALID_VALUE;
+          }
+          case TSDB_DATA_TYPE_BINARY:
+          case TSDB_DATA_TYPE_NCHAR: {
+            int64_t v;
+            int     n, r;
+            r = sscanf((const char*)bind->buffer, "%" PRId64 "%n", &v, &n);
+            if (r == 1 && n == strlen((const char*)bind->buffer)) {
+              u.v1 = (int8_t)v;
+              if (v >= SCHAR_MIN && v <= SCHAR_MAX) break;
+            }
+            return TSDB_CODE_TSC_INVALID_VALUE;
+          }
+          case TSDB_DATA_TYPE_FLOAT:
+          case TSDB_DATA_TYPE_DOUBLE:
+          case TSDB_DATA_TYPE_TIMESTAMP:
+          default: {
+            return TSDB_CODE_TSC_INVALID_VALUE;
+          }
+        }
+        memcpy(data + param->offset, &u.v1, sizeof(u.v1));
+        return TSDB_CODE_SUCCESS;
+      }
+      case TSDB_DATA_TYPE_SMALLINT: {
+        switch (bind->buffer_type) {
+          case TSDB_DATA_TYPE_BOOL:
+          case TSDB_DATA_TYPE_TINYINT:
+          case TSDB_DATA_TYPE_SMALLINT: {
+            int v = *(int16_t*)bind->buffer;
+            u.v2 = (int16_t)v;
+          } break;
+          case TSDB_DATA_TYPE_INT: {
+            int32_t v = *(int32_t*)bind->buffer;
+            u.v2 = (int16_t)v;
+            if (v >= SHRT_MIN && v <= SHRT_MAX) break;
+            return TSDB_CODE_TSC_INVALID_VALUE;
+          }
+          case TSDB_DATA_TYPE_BIGINT: {
+            int64_t v = *(int64_t*)bind->buffer;
+            u.v2 = (int16_t)v;
+            if (v >= SHRT_MIN && v <= SHRT_MAX) break;
+            return TSDB_CODE_TSC_INVALID_VALUE;
+          }
+          case TSDB_DATA_TYPE_BINARY:
+          case TSDB_DATA_TYPE_NCHAR: {
+            int64_t v;
+            int     n, r;
+            r = sscanf((const char*)bind->buffer, "%" PRId64 "%n", &v, &n);
+            if (r == 1 && n == strlen((const char*)bind->buffer)) {
+              u.v2 = (int16_t)v;
+              if (v >= SHRT_MIN && v <= SHRT_MAX) break;
+            }
+            return TSDB_CODE_TSC_INVALID_VALUE;
+          }
+          case TSDB_DATA_TYPE_FLOAT:
+          case TSDB_DATA_TYPE_DOUBLE:
+          case TSDB_DATA_TYPE_TIMESTAMP:
+          default: {
+            return TSDB_CODE_TSC_INVALID_VALUE;
+          }
+        }
+        memcpy(data + param->offset, &u.v2, sizeof(u.v2));
+        return TSDB_CODE_SUCCESS;
+      }
+      case TSDB_DATA_TYPE_INT: {
+        switch (bind->buffer_type) {
+          case TSDB_DATA_TYPE_BOOL:
+          case TSDB_DATA_TYPE_TINYINT:
+          case TSDB_DATA_TYPE_SMALLINT:
+          case TSDB_DATA_TYPE_INT: {
+            u.v4 = *(int32_t*)bind->buffer;
+          } break;
+          case TSDB_DATA_TYPE_BIGINT: {
+            int64_t v = *(int64_t*)bind->buffer;
+            u.v4 = (int32_t)v;
+            if (v >= INT_MIN && v <= INT_MAX) break;
+            return TSDB_CODE_TSC_INVALID_VALUE;
+          } break;
+          case TSDB_DATA_TYPE_BINARY:
+          case TSDB_DATA_TYPE_NCHAR: {
+            int64_t v;
+            int n,r;
+            r = sscanf((const char*)bind->buffer, "%" PRId64 "%n", &v, &n);
+            if (r==1 && n==strlen((const char*)bind->buffer)) {
+              u.v4 = (int32_t)v;
+              if (v >= INT_MIN && v <= INT_MAX) break;
+            }
+            return TSDB_CODE_TSC_INVALID_VALUE;
+          } break;
+          case TSDB_DATA_TYPE_FLOAT:
+          case TSDB_DATA_TYPE_DOUBLE:
+          case TSDB_DATA_TYPE_TIMESTAMP:
+          default: {
+            return TSDB_CODE_TSC_INVALID_VALUE;
+          } break;
+        }
+        memcpy(data + param->offset, &u.v2, sizeof(u.v2));
+        return TSDB_CODE_SUCCESS;
+			} break;
+      case TSDB_DATA_TYPE_FLOAT: {
+        switch (bind->buffer_type) {
+          case TSDB_DATA_TYPE_BOOL:
+          case TSDB_DATA_TYPE_TINYINT: {
+            u.f4 = *(int8_t*)bind->buffer;
+          } break;
+          case TSDB_DATA_TYPE_SMALLINT: {
+            u.f4 = *(int16_t*)bind->buffer;
+          } break;
+          case TSDB_DATA_TYPE_INT: {
+            u.f4 = (float)*(int32_t*)bind->buffer;
+            // shall we check equality?
+          } break;
+          case TSDB_DATA_TYPE_BIGINT: {
+            u.f4 = (float)*(int64_t*)bind->buffer;
+            // shall we check equality?
+          } break;
+          case TSDB_DATA_TYPE_FLOAT: {
+            u.f4 = *(float*)bind->buffer;
+          } break;
+          case TSDB_DATA_TYPE_DOUBLE: {
+            u.f4 = *(float*)bind->buffer;
+            // shall we check equality?
+          } break;
+          case TSDB_DATA_TYPE_BINARY:
+          case TSDB_DATA_TYPE_NCHAR: {
+            float v;
+            int n,r;
+            r = sscanf((const char*)bind->buffer, "%f%n", &v, &n);
+            if (r==1 && n==strlen((const char*)bind->buffer)) {
+              u.f4 = v;
+              break;
+            }
+            return TSDB_CODE_TSC_INVALID_VALUE;
+          } break;
+          case TSDB_DATA_TYPE_TIMESTAMP:
+          default: {
+            return TSDB_CODE_TSC_INVALID_VALUE;
+          } break;
+        }
+        memcpy(data + param->offset, &u.f4, sizeof(u.f4));
+        return TSDB_CODE_SUCCESS;
+			} break;
+      case TSDB_DATA_TYPE_BIGINT: {
+        switch (bind->buffer_type) {
+          case TSDB_DATA_TYPE_BOOL:
+          case TSDB_DATA_TYPE_TINYINT: {
+            u.v8 = *(int8_t*)bind->buffer;
+          } break;
+          case TSDB_DATA_TYPE_SMALLINT: {
+            u.v8 = *(int16_t*)bind->buffer;
+          } break;
+          case TSDB_DATA_TYPE_INT: {
+            u.v8 = *(int32_t*)bind->buffer;
+          } break;
+          case TSDB_DATA_TYPE_BIGINT: {
+            u.v8 = *(int64_t*)bind->buffer;
+          } break;
+          case TSDB_DATA_TYPE_BINARY:
+          case TSDB_DATA_TYPE_NCHAR: {
+            int64_t v;
+            int n,r;
+            r = sscanf((const char*)bind->buffer, "%" PRId64 "%n", &v, &n);
+            if (r==1 && n==strlen((const char*)bind->buffer)) {
+              u.v8 = v;
+              break;
+            }
+            return TSDB_CODE_TSC_INVALID_VALUE;
+          }
+          case TSDB_DATA_TYPE_FLOAT:
+          case TSDB_DATA_TYPE_DOUBLE:
+          case TSDB_DATA_TYPE_TIMESTAMP:
+          default: {
+            return TSDB_CODE_TSC_INVALID_VALUE;
+          }
+        }
+        memcpy(data + param->offset, &u.v8, sizeof(u.v8));
+        return TSDB_CODE_SUCCESS;
+      }
+      case TSDB_DATA_TYPE_DOUBLE: {
+        switch (bind->buffer_type) {
+          case TSDB_DATA_TYPE_BOOL:
+          case TSDB_DATA_TYPE_TINYINT: {
+            u.f8 = *(int8_t*)bind->buffer;
+          } break;
+          case TSDB_DATA_TYPE_SMALLINT: {
+            u.f8 = *(int16_t*)bind->buffer;
+          } break;
+          case TSDB_DATA_TYPE_INT: {
+            u.f8 = *(int32_t*)bind->buffer;
+          } break;
+          case TSDB_DATA_TYPE_BIGINT: {
+            u.f8 = (double)*(int64_t*)bind->buffer;
+          } break;
+          case TSDB_DATA_TYPE_FLOAT: {
+            u.f8 = *(float*)bind->buffer;
+          } break;
+          case TSDB_DATA_TYPE_DOUBLE: {
+            u.f8 = *(double*)bind->buffer;
+          } break;
+          case TSDB_DATA_TYPE_BINARY:
+          case TSDB_DATA_TYPE_NCHAR: {
+            double v;
+            int n,r;
+            r = sscanf((const char*)bind->buffer, "%lf%n", &v, &n);
+            if (r==1 && n==strlen((const char*)bind->buffer)) {
+              u.f8 = v;
+              break;
+            }
+            return TSDB_CODE_TSC_INVALID_VALUE;
+          }
+          case TSDB_DATA_TYPE_TIMESTAMP:
+          default: {
+            return TSDB_CODE_TSC_INVALID_VALUE;
+          }
+        }
+        memcpy(data + param->offset, &u.f8, sizeof(u.f8));
+        return TSDB_CODE_SUCCESS;
+      }
+      case TSDB_DATA_TYPE_TIMESTAMP: {
+        switch (bind->buffer_type) {
+          case TSDB_DATA_TYPE_TIMESTAMP: {
+            u.v8 = *(int64_t*)bind->buffer;
+          } break;
+          case TSDB_DATA_TYPE_BINARY:
+          case TSDB_DATA_TYPE_NCHAR: {
+            // is this the correct way to call taosParseTime?
+            int32_t len = (int32_t)*bind->length;
+            if (taosParseTime(bind->buffer, &u.v8, len, 3, tsDaylight) == TSDB_CODE_SUCCESS) {
+              break;
+            }
+            return TSDB_CODE_TSC_INVALID_VALUE;
+          } break;
+          case TSDB_DATA_TYPE_BOOL:
+          case TSDB_DATA_TYPE_TINYINT:
+          case TSDB_DATA_TYPE_SMALLINT:
+          case TSDB_DATA_TYPE_INT:
+          case TSDB_DATA_TYPE_FLOAT:
+          case TSDB_DATA_TYPE_BIGINT:
+          case TSDB_DATA_TYPE_DOUBLE:
+          default: {
+            return TSDB_CODE_TSC_INVALID_VALUE;
+          } break;
+        };
+        memcpy(data + param->offset, &u.v8, sizeof(u.v8));
+        return TSDB_CODE_SUCCESS;
+			}
+      case TSDB_DATA_TYPE_BINARY: {
+        switch (bind->buffer_type) {
+          case TSDB_DATA_TYPE_BINARY: {
+            if ((*bind->length) > (uintptr_t)param->bytes) {
+              return TSDB_CODE_TSC_INVALID_VALUE;
+            }
+            short size = (short)*bind->length;
+            STR_WITH_SIZE_TO_VARSTR(data + param->offset, bind->buffer, size);
+            return TSDB_CODE_SUCCESS;
+          }
+          case TSDB_DATA_TYPE_BOOL:
+          case TSDB_DATA_TYPE_TINYINT:
+          case TSDB_DATA_TYPE_SMALLINT:
+          case TSDB_DATA_TYPE_INT:
+          case TSDB_DATA_TYPE_FLOAT:
+          case TSDB_DATA_TYPE_BIGINT:
+          case TSDB_DATA_TYPE_DOUBLE:
+          case TSDB_DATA_TYPE_TIMESTAMP:
+          case TSDB_DATA_TYPE_NCHAR:
+          default: {
+            return TSDB_CODE_TSC_INVALID_VALUE;
+          }
+        }
+      }
+      case TSDB_DATA_TYPE_NCHAR: {
+        switch (bind->buffer_type) {
+          case TSDB_DATA_TYPE_NCHAR: {
+            int32_t output = 0;
+            if (!taosMbsToUcs4(bind->buffer, *bind->length, varDataVal(data + param->offset), param->bytes - VARSTR_HEADER_SIZE, &output)) {
+              return TSDB_CODE_TSC_INVALID_VALUE;
+            }
+            varDataSetLen(data + param->offset, output);
+            return TSDB_CODE_SUCCESS;
+          }
+          case TSDB_DATA_TYPE_BOOL:
+          case TSDB_DATA_TYPE_TINYINT:
+          case TSDB_DATA_TYPE_SMALLINT:
+          case TSDB_DATA_TYPE_INT:
+          case TSDB_DATA_TYPE_FLOAT:
+          case TSDB_DATA_TYPE_BIGINT:
+          case TSDB_DATA_TYPE_DOUBLE:
+          case TSDB_DATA_TYPE_TIMESTAMP:
+          case TSDB_DATA_TYPE_BINARY:
+          default: {
+            return TSDB_CODE_TSC_INVALID_VALUE;
+          }
+        }
+      }
+      default: {
+        return TSDB_CODE_TSC_INVALID_VALUE;
+      }
+    }
+  }
+
   if (bind->buffer_type != param->type) {
-    return TSDB_CODE_INVALID_VALUE;
+    return TSDB_CODE_TSC_INVALID_VALUE;
   }
 
   short size = 0;
@@ -294,21 +669,24 @@ static int doBindParam(char* data, SParamInfo* param, TAOS_BIND* bind) {
       break;
 
     case TSDB_DATA_TYPE_BINARY:
-      if ((*bind->length) > param->bytes) {
-        return TSDB_CODE_INVALID_VALUE;
+      if ((*bind->length) > (uintptr_t)param->bytes) {
+        return TSDB_CODE_TSC_INVALID_VALUE;
       }
       size = (short)*bind->length;
-      break;
-    
-    case TSDB_DATA_TYPE_NCHAR:
-      if (!taosMbsToUcs4(bind->buffer, *bind->length, data + param->offset, param->bytes)) {
-        return TSDB_CODE_INVALID_VALUE;
-      }
+      STR_WITH_SIZE_TO_VARSTR(data + param->offset, bind->buffer, size);
       return TSDB_CODE_SUCCESS;
 
+    case TSDB_DATA_TYPE_NCHAR: {
+      int32_t output = 0;
+      if (!taosMbsToUcs4(bind->buffer, *bind->length, varDataVal(data + param->offset), param->bytes - VARSTR_HEADER_SIZE, &output)) {
+        return TSDB_CODE_TSC_INVALID_VALUE;
+      }
+      varDataSetLen(data + param->offset, output);
+      return TSDB_CODE_SUCCESS;
+    }
     default:
       assert(false);
-      return TSDB_CODE_INVALID_VALUE;
+      return TSDB_CODE_TSC_INVALID_VALUE;
   }
 
   memcpy(data + param->offset, bind->buffer, size);
@@ -318,59 +696,44 @@ static int doBindParam(char* data, SParamInfo* param, TAOS_BIND* bind) {
 static int insertStmtBindParam(STscStmt* stmt, TAOS_BIND* bind) {
   SSqlCmd* pCmd = &stmt->pSql->cmd;
 
-  int32_t alloced = 1, binded = 0;
-  if (pCmd->batchSize > 0) {
-    alloced = (pCmd->batchSize + 1) / 2;
-    binded = pCmd->batchSize / 2;
+  STableMetaInfo* pTableMetaInfo = tscGetTableMetaInfoFromCmd(pCmd, 0, 0);
+
+  STableMeta* pTableMeta = pTableMetaInfo->pTableMeta;
+  if (pCmd->pTableBlockHashList == NULL) {
+    pCmd->pTableBlockHashList = taosHashInit(16, taosGetDefaultHashFunction(TSDB_DATA_TYPE_BIGINT), true, false);
   }
 
-  for (int32_t i = 0; i < pCmd->pDataBlocks->nSize; ++i) {
-    STableDataBlocks* pBlock = pCmd->pDataBlocks->pData[i];
-    uint32_t          totalDataSize = pBlock->size - sizeof(SShellSubmitBlock);
-    uint32_t          dataSize = totalDataSize / alloced;
-    assert(dataSize * alloced == totalDataSize);
+  STableDataBlocks* pBlock = NULL;
 
-    if (alloced == binded) {
-      totalDataSize += dataSize + sizeof(SShellSubmitBlock);
-      if (totalDataSize > pBlock->nAllocSize) {
-        const double factor = 1.5;
-        void* tmp = realloc(pBlock->pData, (uint32_t)(totalDataSize * factor));
-        if (tmp == NULL) {
-          return TSDB_CODE_CLI_OUT_OF_MEMORY;
-        }
-        pBlock->pData = (char*)tmp;
-        pBlock->nAllocSize = (uint32_t)(totalDataSize * factor);
-      }
+  int32_t ret =
+      tscGetDataBlockFromList(pCmd->pTableBlockHashList, pTableMeta->id.uid, TSDB_PAYLOAD_SIZE, sizeof(SSubmitBlk),
+                              pTableMeta->tableInfo.rowSize, &pTableMetaInfo->name, pTableMeta, &pBlock, NULL);
+  if (ret != 0) {
+    // todo handle error
+  }
+
+  uint32_t totalDataSize = sizeof(SSubmitBlk) + pCmd->batchSize * pBlock->rowSize;
+  if (totalDataSize > pBlock->nAllocSize) {
+    const double factor = 1.5;
+
+    void* tmp = realloc(pBlock->pData, (uint32_t)(totalDataSize * factor));
+    if (tmp == NULL) {
+      return TSDB_CODE_TSC_OUT_OF_MEMORY;
     }
 
-    char* data = pBlock->pData + sizeof(SShellSubmitBlock) + dataSize * binded;
-    for (uint32_t j = 0; j < pBlock->numOfParams; ++j) {
-      SParamInfo* param = pBlock->params + j;
-      int code = doBindParam(data, param, bind + param->idx);
-      if (code != TSDB_CODE_SUCCESS) {
-        tscTrace("param %d: type mismatch or invalid", param->idx);
-        return code;
-      }
+    pBlock->pData = (char*)tmp;
+    pBlock->nAllocSize = (uint32_t)(totalDataSize * factor);
+  }
+
+  char* data = pBlock->pData + sizeof(SSubmitBlk) + pBlock->rowSize * pCmd->batchSize;
+  for (uint32_t j = 0; j < pBlock->numOfParams; ++j) {
+    SParamInfo* param = &pBlock->params[j];
+
+    int code = doBindParam(data, param, &bind[param->idx]);
+    if (code != TSDB_CODE_SUCCESS) {
+      tscDebug("param %d: type mismatch or invalid", param->idx);
+      return code;
     }
-  }
-
-  // actual work of all data blocks is done, update block size and numOfRows.
-  // note we don't do this block by block during the binding process, because 
-  // we cannot recover if something goes wrong.
-  pCmd->batchSize = binded * 2 + 1;
-
-  if (binded < alloced) {
-    return TSDB_CODE_SUCCESS;
-  }
-
-  for (int32_t i = 0; i < pCmd->pDataBlocks->nSize; ++i) {
-    STableDataBlocks* pBlock = pCmd->pDataBlocks->pData[i];
-
-    uint32_t totalDataSize = pBlock->size - sizeof(SShellSubmitBlock);
-    pBlock->size += totalDataSize / alloced;
-
-    SShellSubmitBlock* pSubmit = (SShellSubmitBlock*)pBlock->pData;
-    pSubmit->numOfRows += pSubmit->numOfRows / alloced;
   }
 
   return TSDB_CODE_SUCCESS;
@@ -378,87 +741,98 @@ static int insertStmtBindParam(STscStmt* stmt, TAOS_BIND* bind) {
 
 static int insertStmtAddBatch(STscStmt* stmt) {
   SSqlCmd* pCmd = &stmt->pSql->cmd;
-  if ((pCmd->batchSize % 2) == 1) {
-    ++pCmd->batchSize;
-  }
+  ++pCmd->batchSize;
   return TSDB_CODE_SUCCESS;
-}
-
-static int insertStmtPrepare(STscStmt* stmt) {
-  STscObj* taos = stmt->taos;
-  SSqlObj *pSql = stmt->pSql;
-  pSql->cmd.numOfParams = 0;
-  pSql->cmd.batchSize = 0;
-
-  return tsParseInsertSql(pSql, pSql->sqlstr, taos->acctId, taos->db);
 }
 
 static int insertStmtReset(STscStmt* pStmt) {
   SSqlCmd* pCmd = &pStmt->pSql->cmd;
   if (pCmd->batchSize > 2) {
     int32_t alloced = (pCmd->batchSize + 1) / 2;
-    for (int32_t i = 0; i < pCmd->pDataBlocks->nSize; ++i) {
-      STableDataBlocks* pBlock = pCmd->pDataBlocks->pData[i];
 
-      uint32_t totalDataSize = pBlock->size - sizeof(SShellSubmitBlock);
-      pBlock->size = sizeof(SShellSubmitBlock) + totalDataSize / alloced;
+    size_t size = taosArrayGetSize(pCmd->pDataBlocks);
+    for (int32_t i = 0; i < size; ++i) {
+      STableDataBlocks* pBlock = taosArrayGetP(pCmd->pDataBlocks, i);
 
-      SShellSubmitBlock* pSubmit = (SShellSubmitBlock*)pBlock->pData;
+      uint32_t totalDataSize = pBlock->size - sizeof(SSubmitBlk);
+      pBlock->size = sizeof(SSubmitBlk) + totalDataSize / alloced;
+
+      SSubmitBlk* pSubmit = (SSubmitBlk*)pBlock->pData;
       pSubmit->numOfRows = pSubmit->numOfRows / alloced;
     }
   }
   pCmd->batchSize = 0;
-  
-  SMeterMetaInfo* pMeterMetaInfo = tscGetMeterMetaInfo(pCmd, 0);
-  pMeterMetaInfo->vnodeIndex = 0;
+
+  STableMetaInfo* pTableMetaInfo = tscGetTableMetaInfoFromCmd(pCmd, pCmd->clauseIndex, 0);
+  pTableMetaInfo->vgroupIndex = 0;
   return TSDB_CODE_SUCCESS;
 }
 
 static int insertStmtExecute(STscStmt* stmt) {
   SSqlCmd* pCmd = &stmt->pSql->cmd;
   if (pCmd->batchSize == 0) {
-    return TSDB_CODE_INVALID_VALUE;
-  }
-  if ((pCmd->batchSize % 2) == 1) {
-    ++pCmd->batchSize;
+    return TSDB_CODE_TSC_INVALID_VALUE;
   }
 
-  SMeterMetaInfo* pMeterMetaInfo = tscGetMeterMetaInfo(pCmd, 0);
-  
-  if (pCmd->pDataBlocks->nSize > 0) {
-    // merge according to vgid
-    int code = tscMergeTableDataBlocks(stmt->pSql, pCmd->pDataBlocks);
-    if (code != TSDB_CODE_SUCCESS) {
-      return code;
-    }
-
-    STableDataBlocks *pDataBlock = pCmd->pDataBlocks->pData[0];
-    code = tscCopyDataBlockToPayload(stmt->pSql, pDataBlock);
-    if (code != TSDB_CODE_SUCCESS) {
-      return code;
-    }
-
-    // set the next sent data vnode index in data block arraylist
-    pMeterMetaInfo->vnodeIndex = 1;
-  } else {
-    pCmd->pDataBlocks = tscDestroyBlockArrayList(pCmd->pDataBlocks);
+  assert(pCmd->numOfClause == 1);
+  if (taosHashGetSize(pCmd->pTableBlockHashList) == 0) {
+    return TSDB_CODE_SUCCESS;
   }
 
-  SSqlObj *pSql = stmt->pSql;
-  SSqlRes *pRes = &pSql->res;
-  pRes->numOfRows = 0;
+  STableMetaInfo* pTableMetaInfo = tscGetTableMetaInfoFromCmd(pCmd, 0, 0);
+
+  STableMeta* pTableMeta = pTableMetaInfo->pTableMeta;
+  if (pCmd->pTableBlockHashList == NULL) {
+    pCmd->pTableBlockHashList = taosHashInit(16, taosGetDefaultHashFunction(TSDB_DATA_TYPE_BIGINT), true, false);
+  }
+
+  STableDataBlocks* pBlock = NULL;
+
+  int32_t ret =
+      tscGetDataBlockFromList(pCmd->pTableBlockHashList, pTableMeta->id.uid, TSDB_PAYLOAD_SIZE, sizeof(SSubmitBlk),
+                              pTableMeta->tableInfo.rowSize, &pTableMetaInfo->name, pTableMeta, &pBlock, NULL);
+  assert(ret == 0);
+  pBlock->size = sizeof(SSubmitBlk) + pCmd->batchSize * pBlock->rowSize;
+  SSubmitBlk* pBlk = (SSubmitBlk*) pBlock->pData;
+  pBlk->numOfRows = pCmd->batchSize;
+  pBlk->dataLen = 0;
+  pBlk->uid = pTableMeta->id.uid;
+  pBlk->tid = pTableMeta->id.tid;
+
+  int code = tscMergeTableDataBlocks(stmt->pSql, false);
+  if (code != TSDB_CODE_SUCCESS) {
+    return code;
+  }
+
+  STableDataBlocks* pDataBlock = taosArrayGetP(pCmd->pDataBlocks, 0);
+  code = tscCopyDataBlockToPayload(stmt->pSql, pDataBlock);
+  if (code != TSDB_CODE_SUCCESS) {
+    return code;
+  }
+
+  SSqlObj* pSql = stmt->pSql;
+  SSqlRes* pRes = &pSql->res;
+  pRes->numOfRows  = 0;
   pRes->numOfTotal = 0;
-  pRes->qhandle = 0;
-  pSql->thandle = NULL;
 
-  tscDoQuery(pSql);
+  tscProcessSql(pSql);
 
-  // tscTrace("%p SQL result:%d, %s pObj:%p", pSql, pRes->code, taos_errstr(taos), pObj);
-  if (pRes->code != TSDB_CODE_SUCCESS) {
-    tscFreeSqlObjPartial(pSql);
+  // wait for the callback function to post the semaphore
+  tsem_wait(&pSql->rspSem);
+
+  // data block reset
+  pCmd->batchSize = 0;
+  for(int32_t i = 0; i < pCmd->numOfTables; ++i) {
+    if (pCmd->pTableNameList && pCmd->pTableNameList[i]) {
+      tfree(pCmd->pTableNameList[i]);
+    }
   }
 
-  return pRes->code;
+  pCmd->numOfTables = 0;
+  tfree(pCmd->pTableNameList);
+  pCmd->pDataBlocks = tscDestroyBlockArrayList(pCmd->pDataBlocks);
+
+  return pSql->res.code;
 }
 
 ////////////////////////////////////////////////////////////////////////////////
@@ -467,53 +841,90 @@ static int insertStmtExecute(STscStmt* stmt) {
 TAOS_STMT* taos_stmt_init(TAOS* taos) {
   STscObj* pObj = (STscObj*)taos;
   if (pObj == NULL || pObj->signature != pObj) {
-    globalCode = TSDB_CODE_DISCONNECTED;
+    terrno = TSDB_CODE_TSC_DISCONNECTED;
     tscError("connection disconnected");
     return NULL;
   }
 
   STscStmt* pStmt = calloc(1, sizeof(STscStmt));
   if (pStmt == NULL) {
-    globalCode = TSDB_CODE_CLI_OUT_OF_MEMORY;
+    terrno = TSDB_CODE_TSC_OUT_OF_MEMORY;
     tscError("failed to allocate memory for statement");
     return NULL;
   }
+  pStmt->taos = pObj;
 
   SSqlObj* pSql = calloc(1, sizeof(SSqlObj));
   if (pSql == NULL) {
     free(pStmt);
-    globalCode = TSDB_CODE_CLI_OUT_OF_MEMORY;
+    terrno = TSDB_CODE_TSC_OUT_OF_MEMORY;
     tscError("failed to allocate memory for statement");
     return NULL;
   }
 
   tsem_init(&pSql->rspSem, 0, 0);
-  tsem_init(&pSql->emptyRspSem, 0, 1);
   pSql->signature = pSql;
-  pSql->pTscObj = pObj;
+  pSql->pTscObj   = pObj;
+  pSql->maxRetry  = TSDB_MAX_REPLICA;
+  pStmt->pSql     = pSql;
 
-  pStmt->pSql = pSql;
   return pStmt;
 }
 
 int taos_stmt_prepare(TAOS_STMT* stmt, const char* sql, unsigned long length) {
   STscStmt* pStmt = (STscStmt*)stmt;
-  if (length == 0) {
-    length = strlen(sql);
-  }
-  char* sqlstr = (char*)malloc(length + 1);
-  if (sqlstr == NULL) {
-    tscError("failed to malloc sql string buffer");
-    return TSDB_CODE_CLI_OUT_OF_MEMORY;
-  }
-  memcpy(sqlstr, sql, length);
-  sqlstr[length] = 0;
-  strtolower(sqlstr, sqlstr);
 
-  pStmt->pSql->sqlstr = sqlstr;
-  if (tscIsInsertOrImportData(sqlstr)) {
+  if (stmt == NULL || pStmt->taos == NULL || pStmt->pSql == NULL) {
+    terrno = TSDB_CODE_TSC_DISCONNECTED;
+    return TSDB_CODE_TSC_DISCONNECTED;
+  }
+
+  SSqlObj* pSql = pStmt->pSql;
+  size_t   sqlLen = strlen(sql);
+
+  SSqlCmd *pCmd    = &pSql->cmd;
+  SSqlRes *pRes    = &pSql->res;
+  pSql->param      = (void*) pSql;
+  pSql->fp         = waitForQueryRsp;
+  pSql->fetchFp    = waitForQueryRsp;
+  
+  pCmd->insertType = TSDB_QUERY_TYPE_STMT_INSERT;
+
+  if (TSDB_CODE_SUCCESS != tscAllocPayload(pCmd, TSDB_DEFAULT_PAYLOAD_SIZE)) {
+    tscError("%p failed to malloc payload buffer", pSql);
+    return TSDB_CODE_TSC_OUT_OF_MEMORY;
+  }
+
+  pSql->sqlstr = realloc(pSql->sqlstr, sqlLen + 1);
+
+  if (pSql->sqlstr == NULL) {
+    tscError("%p failed to malloc sql string buffer", pSql);
+    free(pCmd->payload);
+    return TSDB_CODE_TSC_OUT_OF_MEMORY;
+  }
+
+  pRes->qId = 0;
+  pRes->numOfRows = 1;
+
+  strtolower(pSql->sqlstr, sql);
+  tscDebugL("%p SQL: %s", pSql, pSql->sqlstr);
+
+  if (tscIsInsertData(pSql->sqlstr)) {
     pStmt->isInsert = true;
-    return insertStmtPrepare(pStmt);
+
+    pSql->cmd.numOfParams = 0;
+    pSql->cmd.batchSize   = 0;
+
+    registerSqlObj(pSql);
+
+    int32_t code = tsParseSql(pSql, true);
+    if (code == TSDB_CODE_TSC_ACTION_IN_PROGRESS) {
+      // wait for the callback function to post the semaphore
+      tsem_wait(&pSql->rspSem);
+      return pSql->res.code;
+    }
+
+    return code;
   }
 
   pStmt->isInsert = false;
@@ -534,7 +945,7 @@ int taos_stmt_close(TAOS_STMT* stmt) {
     free(normal->sql);
   }
 
-  tscFreeSqlObj(pStmt->pSql);
+  taos_free_result(pStmt->pSql);
   free(pStmt);
   return TSDB_CODE_SUCCESS;
 }
@@ -543,8 +954,9 @@ int taos_stmt_bind_param(TAOS_STMT* stmt, TAOS_BIND* bind) {
   STscStmt* pStmt = (STscStmt*)stmt;
   if (pStmt->isInsert) {
     return insertStmtBindParam(pStmt, bind);
+  } else {
+    return normalStmtBindParam(pStmt, bind);
   }
-  return normalStmtBindParam(pStmt, bind);
 }
 
 int taos_stmt_add_batch(TAOS_STMT* stmt) {
@@ -552,7 +964,7 @@ int taos_stmt_add_batch(TAOS_STMT* stmt) {
   if (pStmt->isInsert) {
     return insertStmtAddBatch(pStmt);
   }
-  return TSDB_CODE_OPS_NOT_SUPPORT;
+  return TSDB_CODE_COM_OPS_NOT_SUPPORT;
 }
 
 int taos_stmt_reset(TAOS_STMT* stmt) {
@@ -568,16 +980,21 @@ int taos_stmt_execute(TAOS_STMT* stmt) {
   STscStmt* pStmt = (STscStmt*)stmt;
   if (pStmt->isInsert) {
     ret = insertStmtExecute(pStmt);
-  } else {
+  } else { // normal stmt query
     char* sql = normalStmtBuildSql(pStmt);
     if (sql == NULL) {
-      ret = TSDB_CODE_CLI_OUT_OF_MEMORY;
+      ret = TSDB_CODE_TSC_OUT_OF_MEMORY;
     } else {
-      tfree(pStmt->pSql->sqlstr);
-      pStmt->pSql->sqlstr = sql;
-      ret = taos_query_imp(pStmt->taos, pStmt->pSql);
+      if (pStmt->pSql != NULL) {
+        taos_free_result(pStmt->pSql);
+        pStmt->pSql = NULL;
+      }
+      pStmt->pSql = taos_query((TAOS*)pStmt->taos, sql);
+      ret = taos_errno(pStmt->pSql);
+      free(sql);
     }
   }
+
   return ret;
 }
 
@@ -597,3 +1014,94 @@ TAOS_RES *taos_stmt_use_result(TAOS_STMT* stmt) {
   pStmt->pSql = NULL;
   return result;
 }
+
+int taos_stmt_is_insert(TAOS_STMT *stmt, int *insert) {
+  STscStmt* pStmt = (STscStmt*)stmt;
+
+  if (stmt == NULL || pStmt->taos == NULL || pStmt->pSql == NULL) {
+    terrno = TSDB_CODE_TSC_DISCONNECTED;
+    return TSDB_CODE_TSC_DISCONNECTED;
+  }
+
+  if (insert) *insert = pStmt->isInsert;
+
+  return TSDB_CODE_SUCCESS;
+}
+
+int taos_stmt_num_params(TAOS_STMT *stmt, int *nums) {
+  STscStmt* pStmt = (STscStmt*)stmt;
+
+  if (stmt == NULL || pStmt->taos == NULL || pStmt->pSql == NULL) {
+    terrno = TSDB_CODE_TSC_DISCONNECTED;
+    return TSDB_CODE_TSC_DISCONNECTED;
+  }
+
+  if (pStmt->isInsert) {
+    SSqlObj* pSql = pStmt->pSql;
+    SSqlCmd *pCmd    = &pSql->cmd;
+    *nums = pCmd->numOfParams;
+    return TSDB_CODE_SUCCESS;
+  } else {
+    SNormalStmt* normal = &pStmt->normal;
+    *nums = normal->numParams;
+    return TSDB_CODE_SUCCESS;
+  }
+}
+
+int taos_stmt_get_param(TAOS_STMT *stmt, int idx, int *type, int *bytes) {
+  STscStmt* pStmt = (STscStmt*)stmt;
+
+  if (stmt == NULL || pStmt->taos == NULL || pStmt->pSql == NULL) {
+    terrno = TSDB_CODE_TSC_DISCONNECTED;
+    return TSDB_CODE_TSC_DISCONNECTED;
+  }
+
+  if (pStmt->isInsert) {
+    SSqlCmd* pCmd = &pStmt->pSql->cmd;
+    STableMetaInfo* pTableMetaInfo = tscGetTableMetaInfoFromCmd(pCmd, 0, 0);
+    STableMeta* pTableMeta = pTableMetaInfo->pTableMeta;
+    if (pCmd->pTableBlockHashList == NULL) {
+      pCmd->pTableBlockHashList = taosHashInit(16, taosGetDefaultHashFunction(TSDB_DATA_TYPE_BIGINT), true, false);
+    }
+
+    STableDataBlocks* pBlock = NULL;
+
+    int32_t ret =
+      tscGetDataBlockFromList(pCmd->pTableBlockHashList, pTableMeta->id.uid, TSDB_PAYLOAD_SIZE, sizeof(SSubmitBlk),
+          pTableMeta->tableInfo.rowSize, &pTableMetaInfo->name, pTableMeta, &pBlock, NULL);
+    if (ret != 0) {
+      // todo handle error
+    }
+
+    if (idx<0 || idx>=pBlock->numOfParams) {
+      tscError("param %d: out of range", idx);
+      abort();
+    }
+
+    SParamInfo* param = &pBlock->params[idx];
+    if (type) *type = param->type;
+    if (bytes) *bytes = param->bytes;
+
+    return TSDB_CODE_SUCCESS;
+  } else {
+    return TSDB_CODE_TSC_APP_ERROR;
+  }
+}
+
+const char *taos_data_type(int type) {
+  switch (type) {
+    case TSDB_DATA_TYPE_NULL:            return "TSDB_DATA_TYPE_NULL";
+    case TSDB_DATA_TYPE_BOOL:            return "TSDB_DATA_TYPE_BOOL";
+    case TSDB_DATA_TYPE_TINYINT:         return "TSDB_DATA_TYPE_TINYINT";
+    case TSDB_DATA_TYPE_SMALLINT:        return "TSDB_DATA_TYPE_SMALLINT";
+    case TSDB_DATA_TYPE_INT:             return "TSDB_DATA_TYPE_INT";
+    case TSDB_DATA_TYPE_BIGINT:          return "TSDB_DATA_TYPE_BIGINT";
+    case TSDB_DATA_TYPE_FLOAT:           return "TSDB_DATA_TYPE_FLOAT";
+    case TSDB_DATA_TYPE_DOUBLE:          return "TSDB_DATA_TYPE_DOUBLE";
+    case TSDB_DATA_TYPE_BINARY:          return "TSDB_DATA_TYPE_BINARY";
+    case TSDB_DATA_TYPE_TIMESTAMP:       return "TSDB_DATA_TYPE_TIMESTAMP";
+    case TSDB_DATA_TYPE_NCHAR:           return "TSDB_DATA_TYPE_NCHAR";
+    default: return "UNKNOWN";
+  }
+}
+
