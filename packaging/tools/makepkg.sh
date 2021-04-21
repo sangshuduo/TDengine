@@ -144,15 +144,9 @@ fi
 cd ${release_dir} 
 
 if [ "$verMode" == "cluster" ]; then
-<<<<<<< HEAD
-  pkg_name=${install_dir}-${version}-${osType}-${cpuType}
-elif [ "$verMode" == "lite" ]; then
-  pkg_name=${install_dir}-${version}-${osType}-${cpuType}
-=======
   pkg_name=${install_dir}-${osType}-${cpuType}
 elif [ "$verMode" == "edge" ]; then
   pkg_name=${install_dir}-${osType}-${cpuType}
->>>>>>> upstream/master
 else
   echo "unknow verMode, nor cluster or edge"
   exit 1
